@@ -34,6 +34,20 @@ Deer 不替你读书；它帮你读得更好、想得更远，也享受这段旅
 
 **Deer** · 温和的 AI 阅读伙伴。轻轻读，深深懂。
 
+## 开发
+
+Deer 使用 Next.js（App Router）和 TypeScript 构建。
+
+```bash
+npm install
+npm run dev
+npm run lint
+npm test
+npm run build
+```
+
+交付遵循 GitHub DevOps 流程：需求 → PR → 评审 → 人工合并 → 独立验收 → 发布 PR → 人工合并 → Tag 与 GitHub Release。
+
 ---
 
 ## 许可证

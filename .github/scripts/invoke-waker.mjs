@@ -1,0 +1,55 @@
+const apiUrl = process.env.QW_API_URL;
+if (!apiUrl) throw new Error('Required QoderWake API secret is missing');
+const qoderPat = required('QODER_PAT');
+
+const context = parseJson(process.env.QW_CONTEXT_JSON || '{}', 'QW_CONTEXT_JSON');
+const eventType = required('QW_EVENT_TYPE');
+const flow = required('QW_FLOW');
+const role = required('QW_ROLE');
+const repository = required('GITHUB_REPOSITORY');
+const entity = process.env.QW_SESSION_ENTITY || `${eventType}:${process.env.GITHUB_RUN_ID}`;
+const workflowRunId = required('GITHUB_RUN_ID');
+
+const payload = {
+  wakeSessionUniqueId: `github:${repository}:${flow}:${role}:${eventType}:${entity}:${workflowRunId}`,
+  flow,
+  eventType,
+  role,
+  repository,
+  runId: workflowRunId,
+  deliveryId: `${workflowRunId}:${process.env.GITHUB_RUN_ATTEMPT || '1'}:${role}`,
+  context,
+};
+
+const response = await fetch(apiUrl, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${qoderPat}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify(payload),
+});
+
+const responseText = await response.text();
+if (!response.ok) {
+  const hint = response.status === 401 || response.status === 403
+    ? 'Check the QODER_PAT GitHub Secret and its validity.'
+    : 'Check the Waker API URL and QoderWake run history.';
+  throw new Error(`QoderWake rejected ${role} event: HTTP ${response.status}. ${hint}`);
+}
+
+let result = {};
+try { result = JSON.parse(responseText); } catch {}
+const invocationId = result.invocation_id || result.invocationId || result.data?.invocationId || 'accepted';
+process.stdout.write(`QoderWake ${role} event accepted (${invocationId}).\n`);
+
+function required(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+}
+
+function parseJson(value, name) {
+  try { return JSON.parse(value); }
+  catch { throw new Error(`${name} must contain valid JSON`); }
+}

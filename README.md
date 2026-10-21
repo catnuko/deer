@@ -34,6 +34,20 @@ Deer doesn't read for you; it helps you read better, think further, and enjoy th
 
 **Deer** · A gentle AI reading companion. Read gently. Understand deeply.
 
+## Development
+
+Deer is built with Next.js (App Router) and TypeScript.
+
+```bash
+npm install
+npm run dev
+npm run lint
+npm test
+npm run build
+```
+
+Delivery follows the GitHub DevOps flow: requirement → PR → review → human merge → independent verification → release PR → human merge → tag and GitHub Release.
+
 ---
 
 ## License
