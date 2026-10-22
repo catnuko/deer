@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import ThemeToggle from '@/src/components/ThemeToggle';
 import SettingsPanel from '@/src/components/SettingsPanel';
+import AIPanel from '@/src/components/AIPanel';
+import FloatingToolbar from '@/src/components/FloatingToolbar';
 import { getStoredConfig } from '@/src/lib/ai-config';
 
 type ReadState = {
@@ -32,6 +34,8 @@ export default function ReadPage() {
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hasConfig, setHasConfig] = useState(() => getStoredConfig() !== null);
+  const [selectedText, setSelectedText] = useState<string | undefined>();
+  const readingAreaRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!state) {
@@ -45,31 +49,9 @@ export default function ReadPage() {
 
   const { content, title, contentType } = state;
 
-  function renderAiPanelContent() {
-    if (!hasConfig) {
-      return (
-        <div className="ai-panel-placeholder">
-          <p>🦌 配置 AI 助手</p>
-          <p className="ai-hint">
-            请先在设置中配置 AI 模型，才能使用智能阅读助手功能。
-          </p>
-          <button
-            className="ai-config-btn"
-            onClick={() => setSettingsOpen(true)}
-            type="button"
-          >
-            打开设置
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <div className="ai-panel-placeholder">
-        <p>🦌 AI 助手即将上线</p>
-        <p className="ai-hint">选中文本即可向 Deer 提问、获取解释或生成摘要。</p>
-      </div>
-    );
+  function handleAskDeer(text: string) {
+    setSelectedText(text);
+    setAiPanelOpen(true);
   }
 
   function renderContent() {
@@ -120,17 +102,23 @@ export default function ReadPage() {
       </header>
 
       <div className="read-body">
-        <main className="reading-area" role="main" aria-label="阅读区域">
+        <main className="reading-area" role="main" aria-label="阅读区域" ref={readingAreaRef}>
           {renderContent()}
+          {hasConfig && (
+            <FloatingToolbar
+              onAskDeer={handleAskDeer}
+              containerRef={readingAreaRef}
+            />
+          )}
         </main>
 
-        <aside
-          className={`ai-panel ${aiPanelOpen ? 'open' : ''}`}
-          role="complementary"
-          aria-label="AI 助手面板"
-        >
-          {renderAiPanelContent()}
-        </aside>
+        <AIPanel
+          isOpen={aiPanelOpen}
+          onClose={() => setAiPanelOpen(false)}
+          readingContent={content}
+          selectedText={selectedText}
+          onClearSelection={() => setSelectedText(undefined)}
+        />
       </div>
 
       <SettingsPanel isOpen={settingsOpen} onClose={() => {
