@@ -91,6 +91,14 @@ describe('AI config utilities', () => {
       expect(config.modelName).toBe('claude-3-5-sonnet-20241022');
     });
 
+    it('returns DeepSeek defaults', () => {
+      const config = getDefaultConfig('deepseek');
+      expect(config.provider).toBe('deepseek');
+      expect(config.baseUrl).toBe('https://api.deepseek.com/v1');
+      expect(config.modelName).toBe('deepseek-chat');
+      expect(config.apiKey).toBe('');
+    });
+
     it('returns empty custom defaults', () => {
       const config = getDefaultConfig('custom');
       expect(config.provider).toBe('custom');
