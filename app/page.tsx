@@ -1,3 +1,5 @@
+import ReadingProgress from '@/src/components/ReadingProgress';
+
 const features = [
   {
     title: '章节总结',
@@ -24,6 +26,7 @@ const features = [
 export default function Home() {
   return (
     <main className="page">
+      <ReadingProgress />
       <section className="hero" aria-labelledby="deer-title">
         <p className="eyebrow">轻轻读，深深懂</p>
         <h1 id="deer-title">Deer</h1>
