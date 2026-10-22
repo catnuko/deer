@@ -87,6 +87,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             >
               <option value="openai">OpenAI (GPT-4o)</option>
               <option value="anthropic">Anthropic Claude</option>
+              <option value="deepseek">DeepSeek</option>
               <option value="custom">自定义</option>
             </select>
           </div>
