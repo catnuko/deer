@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readingProgress, remainingReadingMinutes } from '../src/lib/reading';
+import { readingProgress, remainingReadingMinutes, scrollProgress } from '../src/lib/reading';
 
 describe('readingProgress', () => {
   it('returns 0 at the beginning', () => {
@@ -32,5 +32,38 @@ describe('remainingReadingMinutes', () => {
   it('returns 0 for invalid input', () => {
     expect(remainingReadingMinutes(10, 0)).toBe(0);
     expect(remainingReadingMinutes(10, 20, 0)).toBe(0);
+  });
+});
+
+describe('scrollProgress', () => {
+  it('returns 0 at the top of the page', () => {
+    expect(scrollProgress(0, 2000, 800)).toBe(0);
+  });
+
+  it('returns 100 at the bottom of the page', () => {
+    expect(scrollProgress(1200, 2000, 800)).toBe(100);
+  });
+
+  it('returns the correct percentage in the middle', () => {
+    expect(scrollProgress(600, 2000, 800)).toBe(50);
+  });
+
+  it('clamps negative scroll to 0', () => {
+    expect(scrollProgress(-100, 2000, 800)).toBe(0);
+  });
+
+  it('clamps scroll beyond max to 100', () => {
+    expect(scrollProgress(5000, 2000, 800)).toBe(100);
+  });
+
+  it('returns 0 when content fits in viewport', () => {
+    expect(scrollProgress(0, 800, 800)).toBe(0);
+    expect(scrollProgress(0, 400, 800)).toBe(0);
+  });
+
+  it('returns 0 for invalid dimensions', () => {
+    expect(scrollProgress(100, 0, 800)).toBe(0);
+    expect(scrollProgress(100, 800, 0)).toBe(0);
+    expect(scrollProgress(NaN, 2000, 800)).toBe(0);
   });
 });
