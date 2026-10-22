@@ -126,3 +126,19 @@ blockquote {
     scroll-behavior: auto !important;
   }
 }
+
+.reading-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: transparent;
+  z-index: 100;
+}
+
+.reading-progress-bar {
+  height: 100%;
+  background: var(--moss);
+  transition: width 0.1s ease-out;
+}
