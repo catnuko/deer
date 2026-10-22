@@ -1,4 +1,4 @@
-export type ModelProvider = 'openai' | 'anthropic' | 'custom';
+export type ModelProvider = 'openai' | 'anthropic' | 'deepseek' | 'custom';
 
 export interface AIModelConfig {
   provider: ModelProvider;
@@ -17,6 +17,10 @@ const PROVIDER_DEFAULTS: Record<ModelProvider, { baseUrl: string; modelName: str
   anthropic: {
     baseUrl: 'https://api.anthropic.com',
     modelName: 'claude-3-5-sonnet-20241022',
+  },
+  deepseek: {
+    baseUrl: 'https://api.deepseek.com/v1',
+    modelName: 'deepseek-chat',
   },
   custom: {
     baseUrl: '',
@@ -84,7 +88,7 @@ export async function testConnection(config: AIModelConfig): Promise<{ success: 
     let headers: Record<string, string>;
     let body: string;
 
-    if (config.provider === 'openai' || config.provider === 'custom') {
+    if (config.provider === 'openai' || config.provider === 'deepseek' || config.provider === 'custom') {
       endpoint = `${baseUrl}/chat/completions`;
       headers = {
         'Content-Type': 'application/json',
