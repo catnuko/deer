@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import ThemeToggle from '@/src/components/ThemeToggle';
+import SettingsPanel from '@/src/components/SettingsPanel';
+import { getStoredConfig } from '@/src/lib/ai-config';
 
 type ReadState = {
   content: string;
@@ -28,6 +30,8 @@ export default function ReadPage() {
   const router = useRouter();
   const [state] = useState<ReadState>(() => readFromSession());
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hasConfig, setHasConfig] = useState(() => getStoredConfig() !== null);
 
   useEffect(() => {
     if (!state) {
@@ -40,6 +44,33 @@ export default function ReadPage() {
   }
 
   const { content, title, contentType } = state;
+
+  function renderAiPanelContent() {
+    if (!hasConfig) {
+      return (
+        <div className="ai-panel-placeholder">
+          <p>🦌 配置 AI 助手</p>
+          <p className="ai-hint">
+            请先在设置中配置 AI 模型，才能使用智能阅读助手功能。
+          </p>
+          <button
+            className="ai-config-btn"
+            onClick={() => setSettingsOpen(true)}
+            type="button"
+          >
+            打开设置
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="ai-panel-placeholder">
+        <p>🦌 AI 助手即将上线</p>
+        <p className="ai-hint">选中文本即可向 Deer 提问、获取解释或生成摘要。</p>
+      </div>
+    );
+  }
 
   function renderContent() {
     if (contentType === 'markdown') {
@@ -76,6 +107,14 @@ export default function ReadPage() {
           >
             🤖 AI 助手
           </button>
+          <button
+            className="settings-btn"
+            onClick={() => setSettingsOpen(true)}
+            type="button"
+            aria-label="打开 AI 模型设置"
+          >
+            ⚙️
+          </button>
           <ThemeToggle />
         </div>
       </header>
@@ -90,12 +129,14 @@ export default function ReadPage() {
           role="complementary"
           aria-label="AI 助手面板"
         >
-          <div className="ai-panel-placeholder">
-            <p>🦌 AI 助手即将上线</p>
-            <p className="ai-hint">选中文本即可向 Deer 提问、获取解释或生成摘要。</p>
-          </div>
+          {renderAiPanelContent()}
         </aside>
       </div>
+
+      <SettingsPanel isOpen={settingsOpen} onClose={() => {
+        setSettingsOpen(false);
+        setHasConfig(getStoredConfig() !== null);
+      }} />
     </div>
   );
 }

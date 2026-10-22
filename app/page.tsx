@@ -3,11 +3,13 @@
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ThemeToggle from '@/src/components/ThemeToggle';
+import SettingsPanel from '@/src/components/SettingsPanel';
 
 export default function Home() {
   const router = useRouter();
   const [text, setText] = useState('');
   const [fileName, setFileName] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -43,6 +45,14 @@ export default function Home() {
   return (
     <main className="page">
       <div className="top-bar">
+        <button
+          className="settings-btn"
+          onClick={() => setSettingsOpen(true)}
+          type="button"
+          aria-label="打开 AI 模型设置"
+        >
+          ⚙️
+        </button>
         <ThemeToggle />
       </div>
       <section className="hero" aria-labelledby="deer-title">
@@ -89,6 +99,8 @@ export default function Home() {
           开始阅读
         </button>
       </section>
+
+      <SettingsPanel isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </main>
   );
 }
