@@ -157,12 +157,12 @@ function keepNewest(sessions: readonly StoredSession[]): StoredSession[] {
   return sessions.slice(Math.max(0, sessions.length - MAX_STORED_SESSIONS));
 }
 
-function writeSessions(sessions: readonly StoredSession[]): void {
+function writeSessions(sessions: readonly StoredSession[]): boolean {
   if (sessions.length === 0) {
     removeItem(SESSIONS_STORAGE_KEY);
-    return;
+    return true;
   }
-  writeItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+  return writeItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
 }
 
 /**
@@ -320,7 +320,9 @@ export function peekUndo(): StoredSession | null {
  * the session's `updatedAt` moves to now in the same write, so a recovered
  * conversation is never the next LRU eviction victim and reappears at the top
  * of the 「历史会话」 list. Only the metadata field changes; the messages are
- * reinserted verbatim.
+ * reinserted verbatim. The slot is freed only after the list write succeeded,
+ * so a failed restore degrades to "nothing happened" and can be retried
+ * instead of losing both the session and the undo slot.
  */
 export function restoreUndo(): StoredSession | null {
   const pending = readUndo();
@@ -331,7 +333,7 @@ export function restoreUndo(): StoredSession | null {
   const sessions = sortAscending(parseSessions(readItem(SESSIONS_STORAGE_KEY)))
     .filter((s) => s.contentId !== pending.contentId);
   sessions.push(restored);
-  writeSessions(keepNewest(sessions));
+  if (!writeSessions(keepNewest(sessions))) return null;
   removeItem(UNDO_STORAGE_KEY);
   return restored;
 }

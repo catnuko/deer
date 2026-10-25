@@ -450,6 +450,24 @@ describe('chat-storage - clearSessionToUndo and restoreUndo', () => {
     expect(peekUndo()).toBeNull();
   });
 
+  it('AC5 (review): a failed restore list write keeps the undo slot for a retry', () => {
+    saveChatHistory('content-a', [{ id: '1', role: 'user', content: '问题' }]);
+    clearSessionToUndo('content-a');
+    expect(loadChatHistory('content-a')).toEqual([]);
+
+    failingSetItem = true;
+    expect(restoreUndo()).toBeNull();
+    // Nothing was restored and the slot survived, so the user can retry.
+    expect(loadChatHistory('content-a')).toEqual([]);
+    expect(peekUndo()?.contentId).toBe('content-a');
+
+    failingSetItem = false;
+    const restored = restoreUndo();
+    expect(restored?.contentId).toBe('content-a');
+    expect(loadChatHistory('content-a')).toEqual([{ id: '1', role: 'user', content: '问题' }]);
+    expect(peekUndo()).toBeNull();
+  });
+
   it('degrades silently when the quota is exhausted', () => {
     saveChatHistory('content-a', [{ id: '1', role: 'user', content: '问题' }]);
     failingSetItem = true;
