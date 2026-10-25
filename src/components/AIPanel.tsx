@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { type AIModelConfig, getStoredConfig } from '@/src/lib/ai-config';
+import { formatSelectionPrompt, trimHistoryMessages } from '@/src/lib/chat-context';
 
 interface Message {
   id: string;
@@ -36,8 +37,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   // When selectedText changes, send it as a message
   useEffect(() => {
     if (selectedText && config && isOpen) {
-      const question = `请解释这段内容：\n\n"${selectedText}"`;
-      sendMessage(question);
+      sendMessage(formatSelectionPrompt(selectedText));
       stableOnClearSelection();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -52,10 +52,14 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
       content,
     };
 
+    const history = trimHistoryMessages(messages);
+
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
     setError(null);
     setInput('');
+
+    let pendingId: string | null = null;
 
     try {
       const response = await fetch('/api/chat', {
@@ -63,7 +67,8 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           config,
-          messages: [...messages, userMessage].map((m) => ({ role: m.role, content: m.content })),
+          messages: history,
+          userInput: content,
           context: readingContent.slice(0, 2000),
         }),
       });
@@ -81,6 +86,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
         role: 'assistant',
         content: '',
       };
+      pendingId = assistantMessage.id;
 
       setMessages((prev) => [...prev, assistantMessage]);
 
@@ -101,6 +107,11 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
+      if (pendingId) {
+        // Drop an empty assistant placeholder so failures never enter the
+        // multi-turn history the next request is built from.
+        setMessages((prev) => prev.filter((m) => m.id !== pendingId || m.content.trim().length > 0));
+      }
     } finally {
       setIsLoading(false);
     }
