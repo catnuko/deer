@@ -51,27 +51,68 @@ function sanitize(history: readonly ChatMessage[]): ConversationMessage[] {
     .map((m) => ({ role: m.role, content: m.content }));
 }
 
+function totalChars(list: readonly ChatMessage[]): number {
+  return list.reduce((sum, m) => sum + m.content.length, 0);
+}
+
+/**
+ * Group sanitized messages into user-anchored units: every unit starts with a
+ * user message and carries its following assistant reply. A reply without a
+ * preceding user message is dropped, so no unit can begin with an assistant.
+ */
+function toUserAnchoredUnits(messages: readonly ConversationMessage[]): ConversationMessage[][] {
+  const units: ConversationMessage[][] = [];
+  for (const message of messages) {
+    if (message.role === 'user') {
+      units.push([message]);
+      continue;
+    }
+    const current = units[units.length - 1];
+    if (!current) continue;
+    current.push(message);
+  }
+  return units;
+}
+
 /**
  * Keep the most recent turns within both the message-count and character
- * budgets. The window never starts with an orphan assistant reply, so the
- * history stays a valid user/assistant alternation for every provider.
+ * budgets. Trimming works on whole user/assistant units and only ever emits
+ * an assistant reply together with the user message it answers, so the
+ * history never starts with an orphan assistant turn. When the newest unit
+ * alone exceeds the budget it is kept in trimmed form instead of dropped.
  */
 export function trimHistoryMessages(history: readonly ChatMessage[]): ConversationMessage[] {
-  const messages = sanitize(history);
+  const units = toUserAnchoredUnits(sanitize(history));
+  const kept: ConversationMessage[][] = [];
+  let messageCount = 0;
+  let charCount = 0;
 
-  let start = Math.max(0, messages.length - CONTEXT_LIMITS.maxHistoryMessages);
-  while (start < messages.length && messages[start].role !== 'user') start += 1;
-  let window = messages.slice(start);
+  for (let i = units.length - 1; i >= 0; i -= 1) {
+    const unit = units[i];
+    const unitChars = totalChars(unit);
+    const fits = messageCount + unit.length <= CONTEXT_LIMITS.maxHistoryMessages
+      && charCount + unitChars <= CONTEXT_LIMITS.maxHistoryChars;
 
-  const totalChars = (list: readonly ChatMessage[]) =>
-    list.reduce((sum, m) => sum + m.content.length, 0);
+    if (!fits) {
+      if (kept.length === 0) return clampUnit(unit);
+      break;
+    }
 
-  while (window.length > 1 && totalChars(window) > CONTEXT_LIMITS.maxHistoryChars) {
-    window = window.slice(1);
-    if (window.length > 1 && window[0].role !== 'user') window = window.slice(1);
+    kept.unshift(unit);
+    messageCount += unit.length;
+    charCount += unitChars;
   }
 
-  return window;
+  return kept.flat();
+}
+
+/**
+ * Shrink an over-budget unit to the newest user message, so the history still
+ * starts with a user message, and cap its content to the character budget.
+ */
+function clampUnit(unit: ConversationMessage[]): ConversationMessage[] {
+  const anchor = unit[0];
+  return [{ role: 'user', content: anchor.content.slice(0, CONTEXT_LIMITS.maxHistoryChars) }];
 }
 
 function looksLikeSelectionQuestion(userInput: string): boolean {

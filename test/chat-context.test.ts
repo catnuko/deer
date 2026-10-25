@@ -93,14 +93,47 @@ describe('trimHistoryMessages - character budget', () => {
     expect(trimmed.length).toBeLessThan(history.length);
   });
 
-  it('keeps at least the latest message even when it exceeds the whole budget', () => {
+  it('keeps the latest user message when the newest turn exceeds the whole budget', () => {
     const history: ChatMessage[] = [
       { role: 'user', content: '旧问题' },
       { role: 'assistant', content: 'y'.repeat(CONTEXT_LIMITS.maxHistoryChars + 500) },
     ];
     const trimmed = trimHistoryMessages(history);
+    expect(trimmed[0].role).toBe('user');
+    expect(trimmed.reduce((sum, m) => sum + m.content.length, 0)).toBeLessThanOrEqual(CONTEXT_LIMITS.maxHistoryChars);
+  });
+
+  // Regression for review blocking item B1 on PR #16.
+  it('never starts the window with an assistant reply (B1: oversize user + empty assistant placeholder)', () => {
+    const history: ChatMessage[] = [
+      { role: 'user', content: 'u'.repeat(CONTEXT_LIMITS.maxHistoryChars + 100) },
+      { role: 'assistant', content: '' },
+    ];
+    const trimmed = trimHistoryMessages(history);
+    expect(trimmed[0].role).toBe('user');
+    expect(trimmed.every((m) => m.content.trim().length > 0)).toBe(true);
+  });
+
+  // Regression for review blocking item B1 on PR #16.
+  it('never starts the window with an assistant reply (B1: multi-turn with oversize reply)', () => {
+    const history: ChatMessage[] = [
+      { role: 'user', content: '问1' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: '问2' },
+      { role: 'assistant', content: 'a'.repeat(CONTEXT_LIMITS.maxHistoryChars + 100) },
+    ];
+    const trimmed = trimHistoryMessages(history);
+    expect(trimmed[0].role).toBe('user');
     expect(trimmed).toHaveLength(1);
-    expect(trimmed[0].role).toBe('assistant');
+    expect(trimmed[0].content.length).toBeLessThanOrEqual(CONTEXT_LIMITS.maxHistoryChars);
+  });
+
+  it('keeps a whole user/assistant pair together on the character budget path', () => {
+    const history = multiTurn(6, 'x'.repeat(1500));
+    const trimmed = trimHistoryMessages(history);
+    expect(trimmed[0].role).toBe('user');
+    expect(trimmed[trimmed.length - 1].role).toBe('assistant');
+    expect(trimmed.length % 2).toBe(0);
   });
 
   it('trimmed result never exceeds the character budget for normal histories', () => {

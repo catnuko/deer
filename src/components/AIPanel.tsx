@@ -59,6 +59,8 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     setError(null);
     setInput('');
 
+    let pendingId: string | null = null;
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -84,6 +86,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
         role: 'assistant',
         content: '',
       };
+      pendingId = assistantMessage.id;
 
       setMessages((prev) => [...prev, assistantMessage]);
 
@@ -104,6 +107,11 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
+      if (pendingId) {
+        // Drop an empty assistant placeholder so failures never enter the
+        // multi-turn history the next request is built from.
+        setMessages((prev) => prev.filter((m) => m.id !== pendingId || m.content.trim().length > 0));
+      }
     } finally {
       setIsLoading(false);
     }

@@ -127,7 +127,40 @@ describe('POST /api/chat - multi-turn context (Issue #15)', () => {
     const historyChars = sentHistory.reduce((sum: number, m: { content: string }) => sum + m.content.length, 0);
     expect(historyChars).toBeLessThanOrEqual(CONTEXT_LIMITS.maxHistoryChars);
     expect(sentHistory[0].content.startsWith('第1轮')).toBe(false);
+    expect(sentHistory[0].role).toBe('user');
     expect(body.messages[body.messages.length - 1].content).toBe('最核心的一句话是什么？');
+  });
+
+  // Regression for review blocking item B1 on PR #16: oversize turn left an
+  // assistant-first dialogue, which Anthropic rejects with 400.
+  it('B1: upstream dialogue never starts with an assistant reply', async () => {
+    const { POST } = await import('@/app/api/chat/route');
+    const oversize = 'a'.repeat(CONTEXT_LIMITS.maxHistoryChars + 200);
+
+    const cases = [
+      [
+        { role: 'user', content: 'u'.repeat(CONTEXT_LIMITS.maxHistoryChars + 200) },
+        { role: 'assistant', content: '' },
+      ],
+      [
+        { role: 'user', content: '问1' },
+        { role: 'assistant', content: '' },
+        { role: 'user', content: '问2' },
+        { role: 'assistant', content: oversize },
+      ],
+    ];
+
+    for (const messages of cases) {
+      captured.length = 0;
+      await POST(makeRequest({
+        config: { provider: 'anthropic', apiKey: 'sk-ant' },
+        messages,
+        userInput: '继续',
+      }));
+      const body = lastBody();
+      expect(body.messages[0].role).toBe('user');
+      expect(body.messages.every((m) => m.content.trim().length > 0)).toBe(true);
+    }
   });
 
   it('AC5: chapter summary and the follow-up share one conversation thread', async () => {
