@@ -8,6 +8,7 @@ import {
   getReadingContentId,
   loadChatHistory,
   saveChatHistory,
+  withCompletedTurn,
 } from '@/src/lib/chat-storage';
 
 interface Message {
@@ -104,6 +105,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
       }
 
       const reader = response.body?.getReader();
+      if (!reader) throw new Error('Empty response body');
       const decoder = new TextDecoder();
 
       const assistantMessage: Message = {
@@ -115,28 +117,31 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
 
       setSession((prev) => [...prev, assistantMessage]);
 
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          assistantContent += chunk;
+        const chunk = decoder.decode(value, { stream: true });
+        assistantContent += chunk;
 
-          setSession((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessage.id ? { ...m, content: assistantContent } : m
-            )
-          );
-        }
+        setSession((prev) =>
+          prev.map((m) =>
+            m.id === assistantMessage.id ? { ...m, content: assistantContent } : m
+          )
+        );
       }
 
       // A reply cut short by the network may end mid-character.
       assistantContent += decoder.decode();
 
       // Persist only once the reply is complete, so a refresh mid-stream
-      // restores the conversation without the half-written message.
-      const completed = [...allMessages, { ...assistantMessage, content: assistantContent }];
+      // restores the conversation without the half-written message. A turn
+      // that never received text adds nothing to the stored history.
+      const completed = withCompletedTurn(
+        allMessages.slice(0, -1),
+        allMessages[allMessages.length - 1],
+        { ...assistantMessage, content: assistantContent },
+      );
       setSession(completed.slice(restoredMessages.length));
       saveChatHistory(contentId, completed);
     } catch (err) {

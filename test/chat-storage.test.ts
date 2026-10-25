@@ -8,6 +8,7 @@ import {
   loadChatHistory,
   saveChatHistory,
   sanitizeStoredMessages,
+  withCompletedTurn,
   type StoredChatMessage,
 } from '../src/lib/chat-storage';
 
@@ -217,6 +218,38 @@ describe('chat-storage - isPersistableMessage', () => {
 
   it('rejects the empty assistant placeholder used while streaming', () => {
     expect(isPersistableMessage({ id: '9', role: 'assistant', content: '' })).toBe(false);
+  });
+});
+
+describe('chat-storage - withCompletedTurn', () => {
+  const existing: StoredChatMessage[] = [
+    { id: '1', role: 'user', content: '第一个问题' },
+    { id: '2', role: 'assistant', content: '第一个回答' },
+  ];
+  const user: StoredChatMessage = { id: '3', role: 'user', content: '第二个问题' };
+
+  it('appends the user turn and its finished reply', () => {
+    const result = withCompletedTurn(existing, user, { id: '4', role: 'assistant', content: '第二个回答' });
+    expect(result).toEqual([...existing, user, { id: '4', role: 'assistant', content: '第二个回答' }]);
+  });
+
+  it('B1: an empty reply keeps the previous conversation untouched', () => {
+    const result = withCompletedTurn(existing, user, { id: '4', role: 'assistant', content: '' });
+    expect(result).toEqual(existing);
+  });
+
+  it('B1: a whitespace-only reply is treated as unfinished', () => {
+    expect(withCompletedTurn(existing, user, { id: '4', role: 'assistant', content: '  \n' })).toEqual(existing);
+  });
+
+  it('B1: an interrupted stream does not change what storage already holds', () => {
+    installWindow();
+    const contentId = getReadingContentId('全文');
+    saveChatHistory(contentId, existing);
+
+    saveChatHistory(contentId, withCompletedTurn(existing, user, { id: '4', role: 'assistant', content: '' }));
+
+    expect(loadChatHistory(contentId)).toEqual(existing);
   });
 });
 

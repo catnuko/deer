@@ -6,6 +6,7 @@ import {
   getReadingContentId,
   loadChatHistory,
   saveChatHistory,
+  withCompletedTurn,
   type StoredChatMessage,
 } from '@/src/lib/chat-storage';
 
@@ -227,5 +228,66 @@ describe('AI panel persistence (Issue #19)', () => {
     const raw = store[CHAT_STORAGE_KEY];
     expect(raw).not.toContain('apiKey');
     expect(raw).not.toContain('baseUrl');
+  });
+
+  it('S1: a single slot means saving B overwrites A, so A no longer restores', () => {
+    const idA = getReadingContentId('文本 A 的内容');
+    const idB = getReadingContentId('文本 B 的内容');
+    saveChatHistory(idA, [
+      { id: '1', role: 'user', content: 'A 的问题' },
+      { id: '2', role: 'assistant', content: 'A 的回答' },
+    ]);
+    saveChatHistory(idB, [
+      { id: '3', role: 'user', content: 'B 的问题' },
+      { id: '4', role: 'assistant', content: 'B 的回答' },
+    ]);
+
+    expect(loadChatHistory(idA)).toEqual([]);
+    expect(loadChatHistory(idB)).toHaveLength(2);
+  });
+
+  it('AC2 (panel): an interrupted stream leaves the persisted history untouched', () => {
+    const contentId = getReadingContentId('全文');
+    saveChatHistory(contentId, [
+      { id: '1', role: 'user', content: '第一个问题' },
+      { id: '2', role: 'assistant', content: '第一个回答' },
+    ]);
+    const before = loadChatHistory(contentId);
+
+    // The panel collects the stream, then persists exactly this turn; an empty
+    // reply here stands for a stream that produced no text (B1 regression).
+    const interrupted = withCompletedTurn(
+      before,
+      { id: '3', role: 'user', content: '第二个问题' },
+      { id: '4', role: 'assistant', content: '' },
+    );
+    saveChatHistory(contentId, interrupted);
+
+    expect(loadChatHistory(contentId)).toEqual(before);
+  });
+
+  it('AC2 (panel): a finished stream persists the whole turn', () => {
+    const contentId = getReadingContentId('全文');
+    saveChatHistory(contentId, [
+      { id: '1', role: 'user', content: '第一个问题' },
+      { id: '2', role: 'assistant', content: '第一个回答' },
+    ]);
+    const before = loadChatHistory(contentId);
+
+    const streamed = ['第一', '段'.repeat(3), '回复'].join('');
+    saveChatHistory(
+      contentId,
+      withCompletedTurn(
+        before,
+        { id: '3', role: 'user', content: '第二个问题' },
+        { id: '4', role: 'assistant', content: streamed },
+      ),
+    );
+
+    expect(loadChatHistory(contentId)).toEqual([
+      ...before,
+      { id: '3', role: 'user', content: '第二个问题' },
+      { id: '4', role: 'assistant', content: '第一段段段回复' },
+    ]);
   });
 });

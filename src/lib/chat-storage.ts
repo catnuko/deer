@@ -68,6 +68,20 @@ export function sanitizeStoredMessages(value: unknown): StoredChatMessage[] {
 }
 
 /**
+ * Append a completed turn to the conversation. The turn is persisted only when
+ * it ends with a finished assistant reply, so an interrupted stream never
+ * leaves a trailing user message behind; it returns the previous list untouched.
+ */
+export function withCompletedTurn(
+  conversation: readonly StoredChatMessage[],
+  user: StoredChatMessage,
+  assistant: StoredChatMessage,
+): StoredChatMessage[] {
+  const completed = assistant.role === 'assistant' && isPersistableMessage(assistant);
+  return completed ? [...conversation, user, assistant] : [...conversation];
+}
+
+/**
  * Persist the current conversation. Messages are sanitised and capped, and
  * writing degrades silently when storage is unavailable or the quota is full.
  */
