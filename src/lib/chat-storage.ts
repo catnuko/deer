@@ -94,11 +94,13 @@ function readItem(key: string): string | null {
   }
 }
 
-function writeItem(key: string, value: string): void {
+function writeItem(key: string, value: string): boolean {
   try {
     window.localStorage.setItem(key, value);
+    return true;
   } catch {
     // Quota exceeded or storage disabled: the in-memory conversation survives.
+    return false;
   }
 }
 
@@ -285,9 +287,11 @@ function readUndo(): StoredSession | null {
 }
 
 /**
- * Clear one conversation into the single undo slot. The slot lives on its own
- * key so a failed list write can never destroy the conversation that was just
- * cleared; a later clear replaces it, which is the documented one-step undo.
+ * Clear one conversation into the single undo slot. The slot is written first
+ * and the session only leaves the list once that write succeeded, so a failed
+ * slot write degrades to "the clear did not happen" instead of losing the
+ * conversation; a later clear replaces the slot, which is the documented
+ * one-step undo.
  */
 export function clearSessionToUndo(contentId: string): StoredSession | null {
   if (!hasLocalStorage()) return null;
@@ -302,8 +306,8 @@ export function clearSessionToUndo(contentId: string): StoredSession | null {
     messages: target.messages,
     updatedAt: target.updatedAt > 0 ? target.updatedAt : Date.now(),
   };
+  if (!writeItem(UNDO_STORAGE_KEY, JSON.stringify(cleared))) return null;
   writeSessions(sessions.filter((s) => s.contentId !== contentId));
-  writeItem(UNDO_STORAGE_KEY, JSON.stringify(cleared));
   return cleared;
 }
 
@@ -312,17 +316,22 @@ export function peekUndo(): StoredSession | null {
 }
 
 /**
- * Put the cleared conversation back exactly as it was and free the slot.
+ * Put the cleared conversation back and free the slot. Restore counts as use:
+ * the session's `updatedAt` moves to now in the same write, so a recovered
+ * conversation is never the next LRU eviction victim and reappears at the top
+ * of the 「历史会话」 list. Only the metadata field changes; the messages are
+ * reinserted verbatim.
  */
 export function restoreUndo(): StoredSession | null {
   const pending = readUndo();
   if (!pending) return null;
   if (!hasLocalStorage()) return null;
 
+  const restored: StoredSession = { ...pending, updatedAt: Date.now() };
   const sessions = sortAscending(parseSessions(readItem(SESSIONS_STORAGE_KEY)))
     .filter((s) => s.contentId !== pending.contentId);
-  sessions.push(pending);
-  writeSessions(sessions.slice(Math.max(0, sessions.length - MAX_STORED_SESSIONS)));
+  sessions.push(restored);
+  writeSessions(keepNewest(sessions));
   removeItem(UNDO_STORAGE_KEY);
-  return pending;
+  return restored;
 }

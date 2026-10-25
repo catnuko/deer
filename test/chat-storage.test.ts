@@ -363,6 +363,28 @@ describe('chat-storage - clearSessionToUndo and restoreUndo', () => {
     expect(store[UNDO_STORAGE_KEY]).toBeUndefined();
   });
 
+  it('AC5 (review): a restored session is touched so it is not the next LRU victim', () => {
+    for (let i = 1; i <= 20; i += 1) {
+      saveChatHistory(`content-${i}`, [{ id: String(i), role: 'user', content: `会话 ${i}` }]);
+    }
+    expect(listSessions()).toHaveLength(20);
+
+    clearSessionToUndo('content-1');
+    expect(listSessions()).toHaveLength(19);
+
+    const restored = restoreUndo();
+    expect(restored?.contentId).toBe('content-1');
+    // Restore counts as use: the restored session jumps to the top of the list.
+    expect(listSessions()[0]?.contentId).toBe('content-1');
+
+    // The next save evicts the now-oldest session, not the restored one.
+    saveChatHistory('content-21', [{ id: '21', role: 'user', content: '新会话' }]);
+    const survivors = listSessions().map((s) => s.contentId);
+    expect(survivors).toHaveLength(20);
+    expect(survivors).toContain('content-1');
+    expect(survivors).not.toContain('content-2');
+  });
+
   it('AC5: a later clear replaces the slot, the first clear is unrecoverable', () => {
     saveChatHistory('content-a', [{ id: '1', role: 'user', content: 'A 的问题' }]);
     saveChatHistory('content-b', [{ id: '2', role: 'user', content: 'B 的问题' }]);
@@ -414,6 +436,18 @@ describe('chat-storage - clearSessionToUndo and restoreUndo', () => {
     store[UNDO_STORAGE_KEY] = '{broken';
     expect(peekUndo()).toBeNull();
     expect(restoreUndo()).toBeNull();
+  });
+
+  it('AC5 (review): a failed undo-slot write keeps the session in the list', () => {
+    saveChatHistory('content-a', [{ id: '1', role: 'user', content: '问题' }]);
+    saveChatHistory('content-b', [{ id: '2', role: 'user', content: 'B 的问题' }]);
+
+    failingSetItem = true;
+    expect(clearSessionToUndo('content-a')).toBeNull();
+
+    // Nothing was cleared: the list is untouched and no "removed but slotless" state exists.
+    expect(listSessions().map((s) => s.contentId)).toEqual(['content-b', 'content-a']);
+    expect(peekUndo()).toBeNull();
   });
 
   it('degrades silently when the quota is exhausted', () => {
