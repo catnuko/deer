@@ -1,59 +1,40 @@
 import { type AIModelConfig } from '@/src/lib/ai-config';
+import { type ChatMessage, buildChatMessages, buildOutgoingRequest } from '@/src/lib/chat-context';
 
 export async function POST(req: Request) {
   try {
-    const { config, messages, context } = await req.json() as {
+    const { config, messages, context, prompt, userInput } = await req.json() as {
       config: AIModelConfig;
-      messages: Array<{ role: string; content: string }>;
+      messages?: ChatMessage[];
       context?: string;
+      /** Legacy single-turn field kept for backward compatibility. */
+      prompt?: string;
+      userInput?: string;
     };
 
     if (!config || !config.provider || !config.apiKey) {
       return new Response('Missing AI configuration', { status: 400 });
     }
 
-    const baseUrl = config.baseUrl || getDefaultBaseUrl(config.provider);
-    const modelName = config.modelName || getDefaultModel(config.provider);
-
-    // Build messages with context if provided
-    const systemMessage = context
-      ? { role: 'system', content: `You are a helpful reading assistant. The user is reading the following content:\n\n${context}\n\nHelp them understand it better.` }
-      : { role: 'system', content: 'You are a helpful reading assistant.' };
-
-    const allMessages = [systemMessage, ...messages];
-
-    let endpoint: string;
-    let headers: Record<string, string>;
-    let body: string;
-
-    if (config.provider === 'anthropic') {
-      endpoint = `${baseUrl}/v1/messages`;
-      headers = {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
-      };
-      body = JSON.stringify({
-        model: modelName,
-        messages: allMessages.filter((m) => m.role !== 'system'),
-        system: systemMessage.content,
-        max_tokens: 1024,
-        stream: true,
-      });
-    } else {
-      // openai, deepseek, custom all use OpenAI-compatible format
-      endpoint = `${baseUrl}/chat/completions`;
-      headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      };
-      body = JSON.stringify({
-        model: modelName,
-        messages: allMessages,
-        max_tokens: 1024,
-        stream: true,
-      });
+    const history = Array.isArray(messages) ? messages : [];
+    const currentInput = (userInput || prompt || '').trim();
+    if (!currentInput && history.length === 0) {
+      return new Response('Missing user input', { status: 400 });
     }
+
+    // When only the full `messages` array is supplied, treat its last user
+    // message as the current turn and the rest as history.
+    const latestUserInput = currentInput
+      || [...history].reverse().find((m) => m.role === 'user')?.content
+      || '';
+    const baseHistory = currentInput ? history : history.slice(0, -1);
+
+    const assembled = buildChatMessages({
+      history: baseHistory,
+      userInput: latestUserInput,
+      readingContent: context,
+    });
+    const { endpoint, headers, body } = buildOutgoingRequest(config, assembled);
 
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -142,23 +123,5 @@ export async function POST(req: Request) {
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
-  }
-}
-
-function getDefaultBaseUrl(provider: string): string {
-  switch (provider) {
-    case 'openai': return 'https://api.openai.com/v1';
-    case 'anthropic': return 'https://api.anthropic.com';
-    case 'deepseek': return 'https://api.deepseek.com/v1';
-    default: return 'https://api.openai.com/v1';
-  }
-}
-
-function getDefaultModel(provider: string): string {
-  switch (provider) {
-    case 'openai': return 'gpt-4o';
-    case 'anthropic': return 'claude-3-5-sonnet-20241022';
-    case 'deepseek': return 'deepseek-chat';
-    default: return 'gpt-4o';
   }
 }
