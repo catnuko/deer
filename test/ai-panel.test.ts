@@ -1,14 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChatMessages, formatSelectionPrompt, trimHistoryMessages } from '@/src/lib/chat-context';
 import {
-  CHAT_STORAGE_KEY,
-  clearChatHistory,
+  SESSIONS_STORAGE_KEY,
+  UNDO_STORAGE_KEY,
+  clearSessionToUndo,
   getReadingContentId,
+  listSessions,
   loadChatHistory,
+  peekUndo,
+  restoreUndo,
   saveChatHistory,
   withCompletedTurn,
   type StoredChatMessage,
 } from '@/src/lib/chat-storage';
+import { undoButtonLabel } from '@/src/lib/session-display';
 
 describe('AI panel message formatting', () => {
   it('formats selected text as a question', () => {
@@ -196,41 +201,39 @@ describe('AI panel persistence (Issue #19)', () => {
     ]);
   });
 
-  it('AC4: clearing the conversation drops the persisted session', () => {
+  it('AC4: clearing the conversation moves it out of the list and into the undo slot', () => {
     const contentId = getReadingContentId('全文');
     saveChatHistory(contentId, [{ id: '1', role: 'user', content: '问题' }]);
-    expect(store[CHAT_STORAGE_KEY]).toBeDefined();
+    expect(store[SESSIONS_STORAGE_KEY]).toBeDefined();
 
-    clearChatHistory();
-    expect(store[CHAT_STORAGE_KEY]).toBeUndefined();
+    clearSessionToUndo(contentId);
     expect(loadChatHistory(contentId)).toEqual([]);
+    expect(listSessions()).toHaveLength(0);
+    expect(store[UNDO_STORAGE_KEY]).toBeDefined();
   });
 
-  it('AC5: another reading text starts clean and switching back restores it', () => {
-    const textA = '文本 A 的内容';
-    const textB = '文本 B 的内容';
-    const idA = getReadingContentId(textA);
-    const idB = getReadingContentId(textB);
-
-    saveChatHistory(idA, [
-      { id: '1', role: 'user', content: 'A 的问题' },
-      { id: '2', role: 'assistant', content: 'A 的回答' },
-    ]);
-
-    expect(getReadingContentId(textA)).not.toBe(getReadingContentId(textB));
-    expect(loadChatHistory(idB)).toEqual([]);
-    expect(loadChatHistory(idA)).toHaveLength(2);
-  });
-
-  it('AC8: the persisted session never carries configuration fields', () => {
+  it('AC5: the panel-derived undo state survives a refresh and restores verbatim', () => {
     const contentId = getReadingContentId('全文');
-    saveChatHistory(contentId, [{ id: '1', role: 'user', content: '问题' }]);
-    const raw = store[CHAT_STORAGE_KEY];
-    expect(raw).not.toContain('apiKey');
-    expect(raw).not.toContain('baseUrl');
+    const conversation: StoredChatMessage[] = [
+      { id: '1', role: 'user', content: '问题一' },
+      { id: '2', role: 'assistant', content: '回答一' },
+    ];
+    saveChatHistory(contentId, conversation);
+    clearSessionToUndo(contentId);
+
+    // The undo entry shown at panel mount is derived from storage, so a
+    // refresh keeps it available; the label carries the cleared summary.
+    const pending = peekUndo();
+    expect(pending).not.toBeNull();
+    expect(undoButtonLabel(pending?.messages ?? [])).toBe('↩️ 撤销恢复「问题一」');
+
+    const restored = restoreUndo();
+    expect(restored?.messages).toEqual(conversation);
+    expect(loadChatHistory(contentId)).toEqual(conversation);
+    expect(peekUndo()).toBeNull();
   });
 
-  it('S1: a single slot means saving B overwrites A, so A no longer restores', () => {
+  it('AC1: switching between texts keeps both histories restorable (Deer-06 S1 replaced)', () => {
     const idA = getReadingContentId('文本 A 的内容');
     const idB = getReadingContentId('文本 B 的内容');
     saveChatHistory(idA, [
@@ -242,7 +245,22 @@ describe('AI panel persistence (Issue #19)', () => {
       { id: '4', role: 'assistant', content: 'B 的回答' },
     ]);
 
-    expect(loadChatHistory(idA)).toEqual([]);
+    // Text A is restored again exactly as before text B was opened.
+    expect(loadChatHistory(idA)).toEqual([
+      { id: '1', role: 'user', content: 'A 的问题' },
+      { id: '2', role: 'assistant', content: 'A 的回答' },
+    ]);
+    expect(listSessions().map((s) => s.contentId)).toEqual([idB, idA]);
+
+    // Continuing the conversation after switching back appends to A itself;
+    // the product ruling: ownership never migrates to the other text.
+    const continued = withCompletedTurn(
+      loadChatHistory(idA),
+      { id: '5', role: 'user', content: 'A 的追问' },
+      { id: '6', role: 'assistant', content: 'A 的补充回答' },
+    );
+    saveChatHistory(idA, continued);
+    expect(loadChatHistory(idA)).toHaveLength(4);
     expect(loadChatHistory(idB)).toHaveLength(2);
   });
 

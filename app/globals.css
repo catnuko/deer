@@ -390,6 +390,15 @@ h1 {
     border-left: none;
     border-top: 1px solid var(--sand);
   }
+
+  .session-row {
+    margin: 0 16px;
+  }
+
+  .list-footer {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -691,6 +700,72 @@ h1 {
   color: var(--muted);
   padding: 40px 20px;
   font-size: 0.9rem;
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0 12px;
+}
+
+.session-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-height: 44px;
+  padding: 10px 12px;
+  margin: 0 20px;
+  border: none;
+  border-bottom: 1px solid var(--sand);
+  border-radius: 8px;
+  background: var(--card);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-row:hover {
+  background: var(--hover-bg);
+}
+
+.session-row[aria-current='true'] {
+  background: var(--sand);
+}
+
+.session-title {
+  font-size: 0.9rem;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.badge-current {
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 1px 6px;
+}
+
+.list-footer {
+  margin: 12px 20px 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 .ai-message {
