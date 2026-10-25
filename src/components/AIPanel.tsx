@@ -1,8 +1,14 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { type AIModelConfig, getStoredConfig } from '@/src/lib/ai-config';
 import { formatSelectionPrompt, trimHistoryMessages } from '@/src/lib/chat-context';
+import {
+  clearChatHistory,
+  getReadingContentId,
+  loadChatHistory,
+  saveChatHistory,
+} from '@/src/lib/chat-storage';
 
 interface Message {
   id: string;
@@ -20,11 +26,30 @@ interface AIPanelProps {
 
 export default function AIPanel({ isOpen, onClose, readingContent, selectedText, onClearSelection }: AIPanelProps) {
   const [config] = useState<AIModelConfig | null>(() => getStoredConfig());
-  const [messages, setMessages] = useState<Message[]>([]);
+  const contentId = getReadingContentId(readingContent);
+  // The conversation restored from storage for `restored.contentId`; the
+  // messages typed in this session are layered on top of it.
+  const [restored, setRestored] = useState<{ contentId: string; messages: Message[] } | null>(null);
+  const [session, setSession] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Restore the conversation that belongs to the current reading text. A
+  // stored conversation of another text is never restored nor overwritten
+  // here, so switching texts back and forth keeps each conversation.
+  if (restored?.contentId !== contentId) {
+    setRestored({ contentId, messages: loadChatHistory(contentId) });
+    setSession([]);
+    setError(null);
+  }
+
+  const restoredMessages = useMemo(
+    () => (restored?.contentId === contentId ? restored.messages : []),
+    [restored, contentId],
+  );
+  const messages = useMemo(() => [...restoredMessages, ...session], [restoredMessages, session]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -46,20 +71,21 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   async function sendMessage(content: string) {
     if (!config || isLoading || !content.trim()) return;
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content,
-    };
+    // The full in-memory conversation; only finished messages reach storage.
+    const allMessages = [
+      ...restoredMessages,
+      ...session,
+      { id: Date.now().toString(), role: 'user' as const, content },
+    ];
+    const history = trimHistoryMessages([...restoredMessages, ...session]);
 
-    const history = trimHistoryMessages(messages);
-
-    setMessages((prev) => [...prev, userMessage]);
+    setSession([...session, allMessages[allMessages.length - 1]]);
     setIsLoading(true);
     setError(null);
     setInput('');
 
     let pendingId: string | null = null;
+    let assistantContent = '';
 
     try {
       const response = await fetch('/api/chat', {
@@ -79,7 +105,6 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
-      let assistantContent = '';
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -88,7 +113,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
       };
       pendingId = assistantMessage.id;
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      setSession((prev) => [...prev, assistantMessage]);
 
       if (reader) {
         while (true) {
@@ -98,20 +123,29 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
           const chunk = decoder.decode(value, { stream: true });
           assistantContent += chunk;
 
-          setMessages((prev) =>
+          setSession((prev) =>
             prev.map((m) =>
               m.id === assistantMessage.id ? { ...m, content: assistantContent } : m
             )
           );
         }
       }
+
+      // A reply cut short by the network may end mid-character.
+      assistantContent += decoder.decode();
+
+      // Persist only once the reply is complete, so a refresh mid-stream
+      // restores the conversation without the half-written message.
+      const completed = [...allMessages, { ...assistantMessage, content: assistantContent }];
+      setSession(completed.slice(restoredMessages.length));
+      saveChatHistory(contentId, completed);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
-      if (pendingId) {
+      setSession((prev) =>
         // Drop an empty assistant placeholder so failures never enter the
         // multi-turn history the next request is built from.
-        setMessages((prev) => prev.filter((m) => m.id !== pendingId || m.content.trim().length > 0));
-      }
+        prev.filter((m) => m.id !== pendingId || m.content.trim().length > 0)
+      );
     } finally {
       setIsLoading(false);
     }
@@ -121,6 +155,14 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     if (!config || isLoading) return;
     const summaryPrompt = '请总结本章的主要内容（前500字）：';
     sendMessage(summaryPrompt);
+  }
+
+  function handleClearConversation() {
+    if (isLoading) return;
+    clearChatHistory();
+    setRestored({ contentId, messages: [] });
+    setSession([]);
+    setError(null);
   }
 
   function onFormSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -159,6 +201,15 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
           type="button"
         >
           📝 总结本章
+        </button>
+        <button
+          className="action-btn"
+          onClick={handleClearConversation}
+          disabled={isLoading || messages.length === 0}
+          type="button"
+          aria-label="清空对话"
+        >
+          🗑️ 清空
         </button>
       </div>
 
