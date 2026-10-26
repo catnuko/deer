@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { type Theme, getStoredTheme, setStoredTheme, subscribeStoredTheme } from '@/src/lib/theme';
 
 function subscribe(onChange: () => void): () => void {
@@ -18,20 +18,24 @@ function getSnapshot(): Theme {
   return getStoredTheme();
 }
 
+// B1 regression fix: the effect runs on mount too, so a stored dark theme is
+// applied to data-theme right after hydration (SSR hardcodes light). The
+// render itself still hydrates with 'light' via getServerSnapshot, so the
+// React #418 mismatch cannot come back — the dark swap is a post-hydration
+// update, never a first-render difference.
 export default function ThemeToggle() {
   const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const [touched, setTouched] = useState(false);
 
   useEffect(() => {
-    if (!touched) return;
     document.documentElement.setAttribute('data-theme', theme);
-  }, [theme, touched]);
+  }, [theme]);
 
   function toggleTheme() {
     const next: Theme = theme === 'light' ? 'dark' : 'light';
-    setTouched(true);
     setStoredTheme(next);
-    document.documentElement.setAttribute('data-theme', next);
+    // Same-document writes do not fire a storage event; notify our own
+    // subscription so the store (and this button) re-render from storage.
+    window.dispatchEvent(new StorageEvent('storage', { key: 'deer-theme' }));
   }
 
   return (

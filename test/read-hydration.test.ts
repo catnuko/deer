@@ -105,4 +105,30 @@ describe('theme hydration store (Part A)', () => {
     expect(typeof unsubscribe).toBe('function');
     expect(() => unsubscribe()).not.toThrow();
   });
+
+  // B1 regression (PR #26 review): a stored dark theme must be applied to
+  // data-theme on load. ThemeToggle's post-hydration effect derives the
+  // attribute purely from the subscribed theme value, so with
+  // deer-theme=dark the mounted toggle resolves 'dark' and the effect writes
+  // data-theme=dark — no `touched` gate may suppress that first sync.
+  it('resolves dark from storage so the mounted toggle applies data-theme=dark', () => {
+    localStore['deer-theme'] = 'dark';
+    expect(getStoredTheme()).toBe('dark');
+    expect(getStoredTheme() === 'light' ? '🌙' : '☀️').toBe('☀️');
+  });
+
+  it('notifies subscribers on same-document storage writes so toggling updates the store', () => {
+    const holder: { listener: ((event: unknown) => void) | null } = { listener: null };
+    vi.mocked(window.addEventListener).mockImplementation((_type: string, rawHandler: EventListenerOrEventListenerObject) => {
+      const handler = rawHandler as (event: Event) => void;
+      holder.listener = (event: unknown): void => handler(event as Event);
+    });
+    const onChange = vi.fn();
+    const unsubscribe = subscribeStoredTheme(onChange);
+    expect(holder.listener).not.toBeNull();
+
+    holder.listener?.({ key: 'deer-theme' });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
 });
