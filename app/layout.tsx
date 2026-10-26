@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import CommandPalette from '@/src/components/CommandPalette';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -12,7 +13,10 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN" data-theme="light">
-      <body>{children}</body>
+      <body>
+        {children}
+        <CommandPalette />
+      </body>
     </html>
   );
 }

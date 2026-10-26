@@ -1,9 +1,15 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ThemeToggle from '@/src/components/ThemeToggle';
 import SettingsPanel from '@/src/components/SettingsPanel';
+import { COMMAND_EVENT, type CommandTarget } from '@/src/lib/command-events';
+import {
+  READING_CONTENT_KEY,
+  READING_TITLE_KEY,
+  READING_TYPE_KEY,
+} from '@/src/lib/reading';
 
 export default function Home() {
   const router = useRouter();
@@ -11,6 +17,17 @@ export default function Home() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // The ⌘K palette can raise the settings panel of the page that is open.
+  useEffect(() => {
+    function onCommand(event: Event) {
+      const target = (event as CustomEvent<CommandTarget>).detail;
+      if (target?.kind !== 'settings') return;
+      setSettingsOpen(true);
+    }
+    window.addEventListener(COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(COMMAND_EVENT, onCommand);
+  }, []);
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -36,9 +53,11 @@ export default function Home() {
       return;
     }
 
-    sessionStorage.setItem('deer-reading-content', text);
-    sessionStorage.setItem('deer-reading-title', fileName || '未命名文本');
-    sessionStorage.setItem('deer-reading-type', fileName?.endsWith('.md') ? 'markdown' : 'text');
+    // The keys come from the shared contract, so the writing side and the
+    // reading side can never drift apart on the storage key.
+    sessionStorage.setItem(READING_CONTENT_KEY, text);
+    sessionStorage.setItem(READING_TITLE_KEY, fileName || '未命名文本');
+    sessionStorage.setItem(READING_TYPE_KEY, fileName?.endsWith('.md') ? 'markdown' : 'text');
     router.push('/read');
   }
 

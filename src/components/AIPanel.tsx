@@ -36,6 +36,7 @@ import {
 } from '@/src/lib/notes';
 import { createDraftController } from '@/src/lib/note-drafts';
 import { getSelectionText, isCaptureAvailable } from '@/src/lib/selection';
+import { COMMAND_EVENT, type CommandTarget } from '@/src/lib/command-events';
 
 interface Message {
   id: string;
@@ -56,6 +57,8 @@ const NOTES_LIST_ID = 'ai-notes-list';
 const HINT_VISIBLE_MS = 1500;
 const EDIT_DEBOUNCE_MS = 300;
 const SEARCH_DEBOUNCE_MS = 200;
+// How often a command of the ⌘K palette is retried while an answer runs.
+const COMMAND_RETRY_MS = 250;
 
 function noteSourceTitle(note: StoredNote): string {
   return note.sourceLabel || note.sourceContentId || '未知来源';
@@ -74,7 +77,13 @@ function fullNoteTime(updatedAt: number): string {
   return new Date(updatedAt).toLocaleString();
 }
 
-export default function AIPanel({ isOpen, onClose, readingContent, selectedText, onClearSelection }: AIPanelProps) {
+export default function AIPanel({
+  isOpen,
+  onClose,
+  readingContent,
+  selectedText,
+  onClearSelection,
+}: AIPanelProps) {
   const [config] = useState<AIModelConfig | null>(() => getStoredConfig());
   const contentId = getReadingContentId(readingContent);
   // The conversation on screen, identified by the session it belongs to. The
@@ -120,6 +129,13 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   const notesEntryRef = useRef<HTMLButtonElement>(null);
   const connectEntryRef = useRef<HTMLButtonElement>(null);
   const connectSearchRef = useRef<HTMLInputElement>(null);
+  // The command of the ⌘K palette that is waiting to be applied, and the
+  // timer that retries it while an answer is running.
+  const pendingTargetRef = useRef<CommandTarget | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The loading state as the command handler sees it: the handler outlives
+  // the render it was created in.
+  const isLoadingRef = useRef(false);
   const timersRef = useRef<{
     capture?: ReturnType<typeof setTimeout>;
     capHint?: ReturnType<typeof setTimeout>;
@@ -162,6 +178,12 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   }, [allNotes, openNoteId, noteVersion]);
 
   const selectedTextAvailable = isCaptureAvailable(liveSelection);
+
+  // The command handler of the ⌘K palette outlives the render it was created
+  // in, so it reads the loading state from here.
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
 
   // Track the browser's live selection so the capture button reflects the
   // real-time reading-area selection. Asking a question consumes only the
@@ -253,6 +275,77 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [connectOpen]);
+
+  // A command from the ⌘K palette: show the picked session, or the picked
+  // note in the notes view. The command is applied from the event itself, so
+  // it never waits for a render to pick it up. A command that arrives while
+  // an answer is running waits for it to end: the conversation on screen must
+  // never belong to two sessions at once.
+  useEffect(() => {
+    function applyCommand(target: CommandTarget): boolean {
+      if (isLoadingRef.current) return false;
+
+      if (target.kind === 'session') {
+        const session = target.id
+          ? listSessions().find((s) => s.contentId === target.id)
+          : undefined;
+        if (!session) return true;
+        // Switching protects the session from eviction and makes it the current one.
+        touchSession(session.contentId);
+        setActive({ contentId: session.contentId, messages: session.messages });
+        setSession([]);
+        setError(null);
+        setShowList(false);
+        setShowNotes(false);
+        setOpenNoteId(null);
+        return true;
+      }
+
+      if (target.kind === 'note') {
+        const note = target.id ? listNotes().find((n) => n.id === target.id) : undefined;
+        if (!note) return true;
+        setShowList(false);
+        setShowNotes(true);
+        setNoteSearch('');
+        setNoteFilter('');
+        setNoteVersion((v) => v + 1);
+        setOpenNoteId(note.id);
+        setDraftTitle(null);
+        setDraftUnderstanding(null);
+        setConnectOpen(false);
+        setConnectFilter('');
+        setConfirmDelete(false);
+        return true;
+      }
+
+      return true;
+    }
+
+    // The command waits in a slot while an answer is running and is applied
+    // as soon as the answer is over.
+    function applyPending() {
+      const pending = pendingTargetRef.current;
+      if (!pending) return;
+      if (applyCommand(pending)) {
+        pendingTargetRef.current = null;
+        return;
+      }
+      retryTimerRef.current = setTimeout(applyPending, COMMAND_RETRY_MS);
+    }
+
+    function onCommand(event: Event) {
+      const target = (event as CustomEvent<CommandTarget>).detail;
+      if (!target || target.kind === 'settings') return;
+      pendingTargetRef.current = target;
+      applyPending();
+    }
+
+    window.addEventListener(COMMAND_EVENT, onCommand);
+    return () => {
+      window.removeEventListener(COMMAND_EVENT, onCommand);
+      if (retryTimerRef.current !== undefined) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
 
   const stableOnClearSelection = useCallback(() => {
     onClearSelection?.();

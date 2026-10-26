@@ -8,6 +8,18 @@ import SettingsPanel from '@/src/components/SettingsPanel';
 import AIPanel from '@/src/components/AIPanel';
 import FloatingToolbar from '@/src/components/FloatingToolbar';
 import { getStoredConfig } from '@/src/lib/ai-config';
+import {
+  READING_CONTENT_KEY,
+  READING_TITLE_KEY,
+  READING_TYPE_KEY,
+} from '@/src/lib/reading';
+import {
+  COMMAND_EVENT,
+  clearPendingCommand,
+  emitCommand,
+  readPendingCommand,
+  type CommandTarget,
+} from '@/src/lib/command-events';
 
 type ReadState = {
   content: string;
@@ -17,10 +29,10 @@ type ReadState = {
 
 function readFromSession(): ReadState {
   if (typeof window === 'undefined') return null;
-  const stored = sessionStorage.getItem('deer-reading-content');
+  const stored = sessionStorage.getItem(READING_CONTENT_KEY);
   if (!stored) return null;
-  const storedTitle = sessionStorage.getItem('deer-reading-title');
-  const storedType = sessionStorage.getItem('deer-reading-type');
+  const storedTitle = sessionStorage.getItem(READING_TITLE_KEY);
+  const storedType = sessionStorage.getItem(READING_TYPE_KEY);
   return {
     content: stored,
     title: storedTitle || '未命名文本',
@@ -61,6 +73,35 @@ export default function ReadPage() {
     });
     return () => window.cancelAnimationFrame(idle);
   }, []);
+
+  // A command raised while this page is open arrives as a window event.
+  useEffect(() => {
+    function onCommand(event: Event) {
+      const target = (event as CustomEvent<CommandTarget>).detail;
+      if (!target) return;
+      if (target.kind === 'settings') {
+        setSettingsOpen(true);
+        return;
+      }
+      // The stored copy is dropped here as well: the target was handed over,
+      // so it must not fire again on a later visit.
+      clearPendingCommand();
+      setAiPanelOpen(true);
+    }
+    window.addEventListener(COMMAND_EVENT, onCommand);
+    return () => window.removeEventListener(COMMAND_EVENT, onCommand);
+  }, []);
+
+  // A command raised on another page arrives as a stored copy, because the
+  // reading page was not mounted yet when it was raised. It is handed over
+  // once the AI panel has mounted and can listen for it.
+  useEffect(() => {
+    if (!state) return;
+    const pending = readPendingCommand();
+    if (!pending) return;
+    clearPendingCommand();
+    emitCommand(pending);
+  }, [state]);
 
   useEffect(() => {
     if (mounted && !state) {
