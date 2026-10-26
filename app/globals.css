@@ -395,6 +395,12 @@ h1 {
     margin: 0 16px;
   }
 
+  /* Touch target: keep panel action buttons (incl. 「🔖 收藏笔记」) at the
+     44px mobile minimum. */
+  .ai-panel .action-btn {
+    min-height: 44px;
+  }
+
   .list-footer {
     margin-left: 16px;
     margin-right: 16px;
@@ -837,6 +843,102 @@ h1 {
   color: var(--ink);
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+/* Concept notes (Deer-09) — 8 new classes: notes-detail, notes-edit-input,
+   notes-text-btn, notes-muted, notes-stack, notes-excerpt, notes-hint,
+   notes-connect-row. Pure-layout and small-muted-text needs reuse existing
+   classes (session-list, session-title, session-meta, list-footer). */
+
+.notes-detail {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notes-edit-input {
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: var(--input-bg);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.session-list > .notes-edit-input {
+  margin: 8px 20px 4px;
+}
+
+.notes-text-btn {
+  background: none;
+  border: none;
+  color: var(--moss);
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 6px 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.notes-text-btn:hover {
+  text-decoration: underline;
+}
+
+.notes-muted {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.notes-excerpt {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--card);
+  border-left: 3px solid var(--sand);
+  border-radius: 0 8px 8px 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.notes-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notes-hint {
+  font-size: 0.8rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.notes-detail > .notes-hint:first-child {
+  justify-content: space-between;
+}
+
+.notes-connect-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notes-connect-row:hover {
+  background: var(--hover-bg);
 }
 
 .ai-input:focus {
