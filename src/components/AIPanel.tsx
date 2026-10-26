@@ -102,6 +102,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   const [noteVersion, setNoteVersion] = useState(0);
   const [captureFeedback, setCaptureFeedback] = useState(false);
   const [capHint, setCapHint] = useState(false);
+  const [quotaHint, setQuotaHint] = useState(false);
   const [linkedHint, setLinkedHint] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const notesEntryRef = useRef<HTMLButtonElement>(null);
@@ -110,6 +111,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   const timersRef = useRef<{
     capture?: ReturnType<typeof setTimeout>;
     capHint?: ReturnType<typeof setTimeout>;
+    quotaHint?: ReturnType<typeof setTimeout>;
     linked?: ReturnType<typeof setTimeout>;
     edit?: ReturnType<typeof setTimeout>;
     search?: ReturnType<typeof setTimeout>;
@@ -383,7 +385,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     }
   }
 
-  function flashHint(set: (v: boolean) => void, key: 'capHint' | 'linked') {
+  function flashHint(set: (v: boolean) => void, key: 'capHint' | 'quotaHint' | 'linked') {
     set(true);
     if (timersRef.current[key]) clearTimeout(timersRef.current[key]);
     timersRef.current[key] = setTimeout(() => set(false), HINT_VISIBLE_MS);
@@ -398,9 +400,10 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     });
     stableOnClearSelection();
     if (!created) {
-      // The 200-note cap (or a quota failure): one inline hint, no automatic
-      // deletion, no retry hammering.
-      flashHint(setCapHint, 'capHint');
+      // Distinguish the 200-note cap from a quota write failure: one inline
+      // hint each, no automatic deletion, no retry hammering.
+      if (allNotes.length >= MAX_NOTES) flashHint(setCapHint, 'capHint');
+      else flashHint(setQuotaHint, 'quotaHint');
       return;
     }
     setCaptureFeedback(true);
@@ -538,7 +541,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             showNotes
               ? detailNote
                 ? () => {
-                    if (detailNote) flushEdits(detailNote);
+                    flushEdits(detailNote);
                     setOpenNoteId(null);
                     setConnectOpen(false);
                   }
@@ -564,11 +567,11 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
 
       {showNotes && detailNote ? (
         <div className="notes-detail">
-          <div className="notes-detail-actions">
+          <div className="notes-hint">
             <button
               className="notes-text-btn"
               onClick={() => {
-                flushEdits(detailNote);
+                if (detailNote) flushEdits(detailNote);
                 setOpenNoteId(null);
                 setConnectOpen(false);
               }}
@@ -577,7 +580,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
               ← 返回列表
             </button>
             {confirmDelete ? (
-              <span className="notes-confirm">
+              <span className="notes-muted">
                 <span>删除后相关连接一并移除，确定？</span>
                 <button className="notes-text-btn" onClick={() => handleDeleteNote(detailNote.id)} type="button">
                   删除
@@ -593,7 +596,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             )}
           </div>
 
-          <label className="notes-field-label" htmlFor="note-title-input">概念名</label>
+          <label className="notes-muted" htmlFor="note-title-input">概念名</label>
           <input
             id="note-title-input"
             className="notes-edit-input"
@@ -603,10 +606,11 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             disabled={isLoading}
           />
 
-          <label className="notes-field-label" htmlFor="note-understanding-input">我的理解</label>
+          <label className="notes-muted" htmlFor="note-understanding-input">我的理解</label>
           <textarea
             id="note-understanding-input"
-            className="notes-edit-input notes-understanding"
+            className="notes-edit-input"
+            style={{ minHeight: 72, resize: 'vertical' }}
             value={draftUnderstanding ?? detailNote.understanding}
             placeholder="用自己的话写下对它的理解…"
             onChange={(e) => queueEdit(detailNote, 'understanding', e.target.value)}
@@ -614,11 +618,11 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             disabled={isLoading}
           />
 
-          <p className="notes-field-label">摘录</p>
+          <p className="notes-muted">摘录</p>
           <blockquote className="notes-excerpt">{detailNote.excerpt}</blockquote>
-          <p className="notes-source" title={detailNote.sourceContentId}>来源：{noteSourceTitle(detailNote)}</p>
+          <p className="notes-muted" title={detailNote.sourceContentId}>来源：{noteSourceTitle(detailNote)}</p>
 
-          <div className="notes-connect-section">
+          <div className="notes-stack">
             <button
               ref={connectEntryRef}
               className="action-btn"
@@ -634,7 +638,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             </button>
 
             {connectOpen && (
-              <div className="notes-connect-list">
+              <div className="notes-stack" style={{ gap: 4 }}>
                 <input
                   ref={connectSearchRef}
                   className="notes-edit-input"
@@ -660,7 +664,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
                       aria-label={`${linked ? '解除连接' : '连接'}「${n.title}」`}
                     >
                       <span className="session-title">{n.title}</span>
-                      <span className="notes-connect-meta">
+                      <span className="session-meta">
                         {linked && <span className="badge-current">已连接 ✓</span>}
                         <span>{noteSourceTitle(n)}</span>
                       </span>
@@ -670,17 +674,18 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
               </div>
             )}
             {linkedHint && (
-              <p className="notes-hint" role="status" aria-live="polite">已解除</p>
+              <p className="notes-muted" role="status" aria-live="polite">已解除</p>
             )}
           </div>
 
           {detailPeers.length > 0 && (
-            <div className="notes-peers">
-              <p className="notes-field-label">相关概念</p>
+            <div className="notes-stack" style={{ gap: 4 }}>
+              <p className="notes-muted">相关概念</p>
               {detailPeers.map((p) => (
-                <div key={p.id} className="notes-peer-row">
+                <div key={p.id} className="notes-hint">
                   <button
-                    className="notes-peer-link"
+                    className="notes-text-btn"
+                    style={{ color: 'var(--ink)' }}
                     onClick={() => {
                       flushEdits(detailNote);
                       openDetail(p.id);
@@ -705,7 +710,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
       ) : showNotes ? (
         <div className="session-list" id={NOTES_LIST_ID}>
           <input
-            className="notes-search"
+            className="notes-edit-input"
             type="search"
             placeholder="搜索概念名或摘录"
             value={noteSearch}
@@ -734,7 +739,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
                 aria-label={`打开笔记「${n.title}」，${fullNoteTime(n.updatedAt)}`}
               >
                 <span className="session-title">{n.title}</span>
-                <span className="notes-row-excerpt">{n.excerpt}</span>
+                <span className="notes-muted">{n.excerpt}</span>
                 <span className="session-meta">
                   {n.links.length > 0 && <span>🔗 {n.links.length}</span>}
                   <time dateTime={new Date(n.updatedAt).toISOString()} title={fullNoteTime(n.updatedAt)}>
@@ -744,7 +749,10 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
               </button>
             ))
           )}
-          <p className={`list-footer${allNotes.length >= 180 ? ' notes-cap' : ''}`}>
+          <p
+            className="list-footer"
+            style={allNotes.length >= MAX_NOTES - 20 ? { color: 'var(--moss)' } : undefined}
+          >
             {allNotes.length} / {MAX_NOTES}
           </p>
         </div>
@@ -843,6 +851,11 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
               >
                 {undoButtonLabel(pendingUndo?.messages ?? [])}
               </button>
+            )}
+            {quotaHint && (
+              <p className="notes-hint" role="status" aria-live="polite">
+                收藏失败，笔记未保存
+              </p>
             )}
             {capHint && (
               <p className="notes-hint" role="status" aria-live="polite">
