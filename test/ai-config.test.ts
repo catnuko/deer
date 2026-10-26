@@ -4,6 +4,7 @@ import {
   setStoredConfig,
   clearStoredConfig,
   getDefaultConfig,
+  getEnvDefaultConfig,
   validateBaseUrl,
   type AIModelConfig,
 } from '../src/lib/ai-config';
@@ -104,6 +105,65 @@ describe('AI config utilities', () => {
       expect(config.provider).toBe('custom');
       expect(config.baseUrl).toBe('');
       expect(config.modelName).toBe('');
+    });
+  });
+
+  describe('environment default config', () => {
+    const ENV_KEYS = [
+      'NEXT_PUBLIC_DEER_DEFAULT_PROVIDER',
+      'NEXT_PUBLIC_DEER_DEFAULT_API_KEY',
+      'NEXT_PUBLIC_DEER_DEFAULT_BASE_URL',
+      'NEXT_PUBLIC_DEER_DEFAULT_MODEL',
+    ];
+
+    afterEach(() => {
+      for (const key of ENV_KEYS) delete process.env[key];
+    });
+
+    it('returns null when no default is configured', () => {
+      expect(getEnvDefaultConfig()).toBeNull();
+    });
+
+    it('builds a config from the environment variables', () => {
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_PROVIDER = 'custom';
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_API_KEY = 'env-key';
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_BASE_URL = 'http://127.0.0.1:3425/v1';
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_MODEL = 'group/qoder';
+
+      expect(getEnvDefaultConfig()).toEqual({
+        provider: 'custom',
+        apiKey: 'env-key',
+        baseUrl: 'http://127.0.0.1:3425/v1',
+        modelName: 'group/qoder',
+      });
+    });
+
+    it('ignores an unknown provider', () => {
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_PROVIDER = 'not-a-provider';
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_API_KEY = 'env-key';
+
+      expect(getEnvDefaultConfig()).toBeNull();
+    });
+
+    it('is used as the fallback when nothing is stored', () => {
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_PROVIDER = 'custom';
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_API_KEY = 'env-key';
+
+      expect(getStoredConfig()).toEqual({ provider: 'custom', apiKey: 'env-key' });
+    });
+
+    it('gives way to a config the user saved', () => {
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_PROVIDER = 'custom';
+      process.env.NEXT_PUBLIC_DEER_DEFAULT_API_KEY = 'env-key';
+      const saved: AIModelConfig = {
+        provider: 'openai',
+        apiKey: 'stored-key',
+        baseUrl: 'https://api.openai.com/v1',
+        modelName: 'gpt-4o',
+      };
+      setStoredConfig(saved);
+
+      expect(getStoredConfig()).toEqual(saved);
     });
   });
 

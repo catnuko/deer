@@ -48,6 +48,11 @@ pnpm build
 
 交付遵循 GitHub DevOps 流程：需求 → PR → 评审 → 人工合并 → 独立验收 → 发布 PR → 人工合并 → Tag 与 GitHub Release。
 
+### 本地默认 provider（可选）
+
+把 `.env.example` 复制为 `.env.local` 并填入真实值，本地开发即自带一个默认模型 provider，无需在设置面板手动配置。
+`.env.local` 已被 git 排除，密钥不会进入仓库。在设置面板保存过的配置优先级更高。
+
 ---
 
 ## 许可证

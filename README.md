@@ -48,6 +48,13 @@ pnpm build
 
 Delivery follows the GitHub DevOps flow: requirement → PR → review → human merge → independent verification → release PR → human merge → tag and GitHub Release.
 
+### Local default provider (optional)
+
+Copy `.env.example` to `.env.local` and fill in the values to get a preconfigured
+provider for local testing — no need to configure one in the settings panel.
+`.env.local` is gitignored, so no credential reaches the repository. A provider
+saved in the settings panel always takes precedence.
+
 ---
 
 ## License

@@ -31,14 +31,38 @@ const PROVIDER_DEFAULTS: Record<ModelProvider, { baseUrl: string; modelName: str
 export function getStoredConfig(): AIModelConfig | null {
   if (typeof window === 'undefined') return null;
   const stored = window.localStorage.getItem(CONFIG_KEY);
-  if (!stored) return null;
-  try {
-    const parsed = JSON.parse(stored) as AIModelConfig;
-    if (!parsed.provider || !parsed.apiKey) return null;
-    return parsed;
-  } catch {
-    return null;
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored) as AIModelConfig;
+      if (parsed.provider && parsed.apiKey) return parsed;
+    } catch {
+      // Corrupt entry: fall back to the environment default.
+    }
   }
+  return getEnvDefaultConfig();
+}
+
+/**
+ * Development-only default provider.
+ *
+ * The values come from NEXT_PUBLIC_DEER_DEFAULT_* environment variables,
+ * which are read from .env.local — a gitignored file, so no credential ever
+ * reaches the repository. A provider saved by the user always wins over this
+ * default. When the variables are absent (CI, production) nothing changes and
+ * the user configures a provider by hand.
+ */
+export function getEnvDefaultConfig(): AIModelConfig | null {
+  const provider = process.env.NEXT_PUBLIC_DEER_DEFAULT_PROVIDER as ModelProvider | undefined;
+  const apiKey = process.env.NEXT_PUBLIC_DEER_DEFAULT_API_KEY;
+  if (!provider || !apiKey) return null;
+  if (!(provider in PROVIDER_DEFAULTS)) return null;
+
+  const config: AIModelConfig = { provider, apiKey };
+  const baseUrl = process.env.NEXT_PUBLIC_DEER_DEFAULT_BASE_URL;
+  const modelName = process.env.NEXT_PUBLIC_DEER_DEFAULT_MODEL;
+  if (baseUrl) config.baseUrl = baseUrl;
+  if (modelName) config.modelName = modelName;
+  return config;
 }
 
 export function setStoredConfig(config: AIModelConfig): void {
