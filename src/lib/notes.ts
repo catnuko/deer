@@ -86,15 +86,28 @@ export function parseNotes(raw: string | null): StoredNote[] {
     parsed = JSON.parse(raw);
   } catch {
     console.warn('[deer-notes] 笔记存储数据损坏，已重置为空');
+    lastParseCorrupt = true;
     return [];
   }
   if (!Array.isArray(parsed)) {
     console.warn('[deer-notes] 笔记存储数据损坏，已重置为空');
+    lastParseCorrupt = true;
     return [];
   }
+  lastParseCorrupt = parsed.some((entry) => toNote(entry) === null);
   return parsed
     .map(toNote)
     .filter((n): n is StoredNote => n !== null);
+}
+
+let lastParseCorrupt = false;
+
+/**
+ * Whether the most recent read of `deer-notes` hit a corrupt payload and
+ * degraded to an empty library, so the UI can surface an awareness hint.
+ */
+export function wasLastParseCorrupt(): boolean {
+  return lastParseCorrupt;
 }
 
 function readNotes(): StoredNote[] {

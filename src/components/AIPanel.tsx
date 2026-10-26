@@ -31,8 +31,10 @@ import {
   disconnectNotes,
   listNotes,
   updateNote,
+  wasLastParseCorrupt,
   type StoredNote,
 } from '@/src/lib/notes';
+import { getSelectionText, isCaptureAvailable } from '@/src/lib/selection';
 
 interface Message {
   id: string;
@@ -53,10 +55,6 @@ const NOTES_LIST_ID = 'ai-notes-list';
 const HINT_VISIBLE_MS = 1500;
 const EDIT_DEBOUNCE_MS = 300;
 const SEARCH_DEBOUNCE_MS = 200;
-
-function hasSelection(text?: string): boolean {
-  return typeof text === 'string' && text.trim().length > 0;
-}
 
 function noteSourceTitle(note: StoredNote): string {
   return note.sourceLabel || note.sourceContentId || '未知来源';
@@ -105,6 +103,10 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   const [quotaHint, setQuotaHint] = useState(false);
   const [linkedHint, setLinkedHint] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Bug #30: the capture entry is driven by the browser's live selection, so
+  // it stays enabled while a selection exists regardless of the 「问 Deer」
+  // conversation flow that consumes its own selectedText copy.
+  const [liveSelection, setLiveSelection] = useState('');
   const notesEntryRef = useRef<HTMLButtonElement>(null);
   const connectEntryRef = useRef<HTMLButtonElement>(null);
   const connectSearchRef = useRef<HTMLInputElement>(null);
@@ -150,7 +152,22 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     return openNoteId ? allNotes.find((n) => n.id === openNoteId) ?? null : null;
   }, [allNotes, openNoteId, noteVersion]);
 
-  const selectedTextAvailable = hasSelection(selectedText);
+  const selectedTextAvailable = isCaptureAvailable(liveSelection);
+
+  // Track the browser's live selection so the capture button reflects the
+  // real-time reading-area selection. Asking a question consumes only the
+  // panel's own selectedText prop; it never clears the browser selection and
+  // must not disable capture.
+  useEffect(() => {
+    function syncSelection() {
+      setLiveSelection(getSelectionText());
+    }
+    syncSelection();
+    document.addEventListener('selectionchange', syncSelection);
+    return () => {
+      document.removeEventListener('selectionchange', syncSelection);
+    };
+  }, []);
 
   useEffect(() => {
     const timers = timersRef.current;
@@ -180,13 +197,19 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   }, [showList]);
 
   // Esc leaves the notes view (detail first, then the list) and returns focus
-  // to the notes entry button.
+  // to the notes entry button. With the connection selector open, Esc only
+  // collapses the selector so the entry button survives and takes focus back.
   useEffect(() => {
     if (!showNotes) return;
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== 'Escape') return;
       if (openNoteId) {
+        if (connectOpen) {
+          setConnectOpen(false);
+          connectEntryRef.current?.focus();
+          return;
+        }
         setOpenNoteId(null);
         setConnectOpen(false);
         setConfirmDelete(false);
@@ -200,7 +223,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [showNotes, openNoteId]);
+  }, [showNotes, openNoteId, connectOpen]);
 
   // Esc collapses the inline connection selector and returns focus to its
   // entry button.
@@ -393,12 +416,18 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
 
   function handleCaptureNote() {
     if (isLoading || !selectedTextAvailable) return;
+    // Capture reads the live selection at click time; it neither consumes nor
+    // clears it, so capturing and asking stay independent actions.
+    const selection = getSelectionText();
+    if (!isCaptureAvailable(selection)) {
+      setLiveSelection(selection);
+      return;
+    }
     const created = createNote({
-      selection: selectedText as string,
+      selection,
       sourceContentId: contentId,
       sourceLabel: document.title || '阅读内容',
     });
-    stableOnClearSelection();
     if (!created) {
       // Distinguish the 200-note cap from a quota write failure: one inline
       // hint each, no automatic deletion, no retry hammering.
@@ -755,6 +784,9 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
           >
             {allNotes.length} / {MAX_NOTES}
           </p>
+          {wasLastParseCorrupt() && (
+            <p className="notes-muted" role="status">笔记数据无法读取，已重置为空</p>
+          )}
         </div>
       ) : showList ? (
         <div className="session-list" id={SESSION_LIST_ID}>

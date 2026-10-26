@@ -395,6 +395,12 @@ h1 {
     margin: 0 16px;
   }
 
+  /* Touch target: keep panel action buttons (incl. 「🔖 收藏笔记」) at the
+     44px mobile minimum. */
+  .ai-panel .action-btn {
+    min-height: 44px;
+  }
+
   .list-footer {
     margin-left: 16px;
     margin-right: 16px;
