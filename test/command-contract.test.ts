@@ -81,14 +81,25 @@ describe('the freshness of a pending command', () => {
   }
 
   it('honours a command that is exactly at the age limit', () => {
-    installWindow();
-    store[COMMAND_PENDING_KEY] = JSON.stringify({
-      kind: 'session',
-      id: 'c1',
-      at: Date.now() - COMMAND_TARGET_TTL_MS,
-    });
+    // The clock is frozen for this case only. The stored copy is written at
+    // `Date.now() - TTL` and read a moment later; with a running clock the
+    // read can cross a millisecond, which turns the age from exactly the
+    // limit into one millisecond past it and fails the case at random.
+    // Freezing the clock keeps the age at exactly the limit, which is the
+    // boundary the case is about.
+    vi.useFakeTimers();
+    try {
+      installWindow();
+      store[COMMAND_PENDING_KEY] = JSON.stringify({
+        kind: 'session',
+        id: 'c1',
+        at: Date.now() - COMMAND_TARGET_TTL_MS,
+      });
 
-    expect(readPendingCommand()).toMatchObject({ kind: 'session', id: 'c1' });
+      expect(readPendingCommand()).toMatchObject({ kind: 'session', id: 'c1' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('drops a command that is one millisecond past the age limit', () => {
