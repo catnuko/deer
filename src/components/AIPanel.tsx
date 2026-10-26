@@ -34,6 +34,7 @@ import {
   wasLastParseCorrupt,
   type StoredNote,
 } from '@/src/lib/notes';
+import { createDraftController } from '@/src/lib/note-drafts';
 import { getSelectionText, isCaptureAvailable } from '@/src/lib/selection';
 
 interface Message {
@@ -98,6 +99,15 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectFilter, setConnectFilter] = useState('');
   const [noteVersion, setNoteVersion] = useState(0);
+  // The pending edit draft lives outside React state: the debounce timer must
+  // persist the values typed most recently, not the ones captured by the
+  // render that armed it.
+  const [draftController] = useState(() => createDraftController({
+    delayMs: EDIT_DEBOUNCE_MS,
+    persist: (target, patch) => {
+      if (updateNote(target.id, patch)) setNoteVersion((v) => v + 1);
+    },
+  }));
   const [captureFeedback, setCaptureFeedback] = useState(false);
   const [capHint, setCapHint] = useState(false);
   const [quotaHint, setQuotaHint] = useState(false);
@@ -115,7 +125,6 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     capHint?: ReturnType<typeof setTimeout>;
     quotaHint?: ReturnType<typeof setTimeout>;
     linked?: ReturnType<typeof setTimeout>;
-    edit?: ReturnType<typeof setTimeout>;
     search?: ReturnType<typeof setTimeout>;
   }>({});
   // S5: the current turn's selection, when the question came from a text
@@ -173,8 +182,11 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     const timers = timersRef.current;
     return () => {
       Object.values(timers).forEach((t) => t !== undefined && clearTimeout(t));
+      // An edit that was still pending when the panel went away is saved
+      // rather than dropped.
+      draftController.flush();
     };
-  }, []);
+  }, [draftController]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -423,16 +435,20 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
       setLiveSelection(selection);
       return;
     }
-    const created = createNote({
+    const result = createNote({
       selection,
       sourceContentId: contentId,
       sourceLabel: document.title || '阅读内容',
     });
-    if (!created) {
-      // Distinguish the 200-note cap from a quota write failure: one inline
-      // hint each, no automatic deletion, no retry hammering.
-      if (allNotes.length >= MAX_NOTES) flashHint(setCapHint, 'capHint');
-      else flashHint(setQuotaHint, 'quotaHint');
+    if (!result.ok) {
+      // The library reports why the capture failed, so the 200-note cap and a
+      // quota write failure get their own hint. The cap hint carries the way
+      // out of the limit; the count it needs is the real one, never a view
+      // dependent one.
+      if (result.reason === 'cap') flashHint(setCapHint, 'capHint');
+      else if (result.reason === 'quota' || result.reason === 'unavailable') {
+        flashHint(setQuotaHint, 'quotaHint');
+      }
       return;
     }
     setCaptureFeedback(true);
@@ -450,28 +466,19 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
     setConfirmDelete(false);
   }
 
-  function flushEdits(target: StoredNote) {
-    if (timersRef.current.edit) {
-      clearTimeout(timersRef.current.edit);
-      timersRef.current.edit = undefined;
-    }
-    const title = draftTitle;
-    const understanding = draftUnderstanding;
+  function flushEdits() {
+    // The controller owns the pending values and the note they belong to, so
+    // a flush always persists what was typed last, whichever render armed the
+    // timer.
+    draftController.flush();
     setDraftTitle(null);
     setDraftUnderstanding(null);
-    const patch: { title?: string; understanding?: string } = {};
-    if (title !== null && title.trim() !== '' && title !== target.title) patch.title = title;
-    if (understanding !== null && understanding !== target.understanding) patch.understanding = understanding;
-    if (Object.keys(patch).length === 0) return;
-    updateNote(target.id, patch);
-    setNoteVersion((v) => v + 1);
   }
 
   function queueEdit(target: StoredNote, field: 'title' | 'understanding', value: string) {
     if (field === 'title') setDraftTitle(value);
     else setDraftUnderstanding(value);
-    if (timersRef.current.edit) clearTimeout(timersRef.current.edit);
-    timersRef.current.edit = setTimeout(() => flushEdits(target), EDIT_DEBOUNCE_MS);
+    draftController.edit(target, field, value);
   }
 
   function handleDeleteNote(id: string) {
@@ -570,7 +577,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             showNotes
               ? detailNote
                 ? () => {
-                    flushEdits(detailNote);
+                    flushEdits();
                     setOpenNoteId(null);
                     setConnectOpen(false);
                   }
@@ -600,7 +607,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             <button
               className="notes-text-btn"
               onClick={() => {
-                if (detailNote) flushEdits(detailNote);
+                flushEdits();
                 setOpenNoteId(null);
                 setConnectOpen(false);
               }}
@@ -631,7 +638,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             className="notes-edit-input"
             value={draftTitle ?? detailNote.title}
             onChange={(e) => queueEdit(detailNote, 'title', e.target.value)}
-            onBlur={() => flushEdits(detailNote)}
+            onBlur={() => flushEdits()}
             disabled={isLoading}
           />
 
@@ -643,7 +650,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
             value={draftUnderstanding ?? detailNote.understanding}
             placeholder="用自己的话写下对它的理解…"
             onChange={(e) => queueEdit(detailNote, 'understanding', e.target.value)}
-            onBlur={() => flushEdits(detailNote)}
+            onBlur={() => flushEdits()}
             disabled={isLoading}
           />
 
@@ -716,7 +723,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
                     className="notes-text-btn"
                     style={{ color: 'var(--ink)' }}
                     onClick={() => {
-                      flushEdits(detailNote);
+                      flushEdits();
                       openDetail(p.id);
                     }}
                     type="button"

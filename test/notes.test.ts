@@ -57,12 +57,13 @@ describe('createNote - capture fields (AC1/AC7 捕获字段)', () => {
   });
 
   it('creates a note with all capture fields and persists it', () => {
-    const created = createNote({
+    const result = createNote({
       selection: '重要概念原文',
       sourceContentId: 'c1-abc',
       sourceLabel: '第一章',
     });
-    expect(created).not.toBeNull();
+    expect(result.ok).toBe(true);
+    const created = result.ok ? result.note : null;
     expect(created?.title.length).toBeGreaterThan(0);
     expect(created?.excerpt).toBe('重要概念原文');
     expect(created?.excerptTruncated).toBe(false);
@@ -75,21 +76,29 @@ describe('createNote - capture fields (AC1/AC7 捕获字段)', () => {
 
   it('truncates excerpts beyond the 500-char cap and flags it', () => {
     const long = 'x'.repeat(MAX_EXCERPT_CHARS + 100);
-    const created = createNote({ selection: long, sourceContentId: 'c1', sourceLabel: 's' });
+    const result = createNote({ selection: long, sourceContentId: 'c1', sourceLabel: 's' });
+    expect(result.ok).toBe(true);
+    const created = result.ok ? result.note : null;
     expect(created?.excerpt.length).toBe(MAX_EXCERPT_CHARS);
     expect(created?.excerptTruncated).toBe(true);
   });
 
-  it('rejects creation at the 200-note cap instead of evicting silently', () => {
+  it('reports the cap as its own reason instead of evicting silently', () => {
     const full: StoredNote[] = [];
     for (let i = 0; i < MAX_NOTES; i += 1) full.push(note(`n${i}`, { updatedAt: i }));
     seedNotes(full);
-    expect(createNote({ selection: '新概念', sourceContentId: 'c', sourceLabel: 's' })).toBeNull();
+    expect(createNote({ selection: '新概念', sourceContentId: 'c', sourceLabel: 's' })).toEqual({
+      ok: false,
+      reason: 'cap',
+    });
     expect(listNotes()).toHaveLength(MAX_NOTES);
   });
 
   it('rejects an empty selection', () => {
-    expect(createNote({ selection: '   ', sourceContentId: 'c', sourceLabel: 's' })).toBeNull();
+    expect(createNote({ selection: '   ', sourceContentId: 'c', sourceLabel: 's' })).toEqual({
+      ok: false,
+      reason: 'empty',
+    });
   });
 });
 
@@ -204,7 +213,7 @@ describe('corrupt storage degradation (AC6/AC7 损坏降级)', () => {
     localStore[NOTES_STORAGE_KEY] = '{not-json';
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(listNotes()).toEqual([]);
-    expect(createNote({ selection: '新概念', sourceContentId: 'c', sourceLabel: 's' })).not.toBeNull();
+    expect(createNote({ selection: '新概念', sourceContentId: 'c', sourceLabel: 's' }).ok).toBe(true);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -239,7 +248,10 @@ describe('quota failure (失败路径)', () => {
         removeItem: vi.fn((key: string) => { delete localStore[key]; }),
       },
     });
-    expect(createNote({ selection: '新', sourceContentId: 'c', sourceLabel: 's' })).toBeNull();
+    expect(createNote({ selection: '新', sourceContentId: 'c', sourceLabel: 's' })).toEqual({
+      ok: false,
+      reason: 'quota',
+    });
     expect(JSON.parse(localStore[NOTES_STORAGE_KEY])).toHaveLength(1);
     expect(connectNotes('a', 'a')).toBe(false);
   });

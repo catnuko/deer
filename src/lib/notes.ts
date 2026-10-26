@@ -147,21 +147,33 @@ function nextNoteId(): string {
 }
 
 /**
- * Capture one concept card from the current reading selection. Returns null
- * (without touching stored data) on an empty selection, when the 200-note cap
- * is reached — no silent LRU eviction — or when the write fails on quota.
+ * Why a capture did not produce a note. The cap and a quota write failure need
+ * different wording and a different recovery path in the UI, so the reason is
+ * reported instead of a bare null.
+ */
+export type NoteCreateFailure = 'empty' | 'unavailable' | 'cap' | 'quota';
+
+export type NoteCreateResult =
+  | { ok: true; note: StoredNote }
+  | { ok: false; reason: NoteCreateFailure };
+
+/**
+ * Capture one concept card from the current reading selection. Reports the
+ * failure reason — empty selection, no storage, the 200-note cap (no silent
+ * LRU eviction) or a quota write failure — and leaves stored data untouched
+ * in every failing case.
  */
 export function createNote(input: {
   selection: string;
   sourceContentId: string;
   sourceLabel: string;
-}): StoredNote | null {
+}): NoteCreateResult {
   const selection = input.selection.trim();
-  if (selection.length === 0) return null;
-  if (!hasLocalStorage()) return null;
+  if (selection.length === 0) return { ok: false, reason: 'empty' };
+  if (!hasLocalStorage()) return { ok: false, reason: 'unavailable' };
 
   const notes = readNotes();
-  if (notes.length >= MAX_NOTES) return null;
+  if (notes.length >= MAX_NOTES) return { ok: false, reason: 'cap' };
 
   const now = Date.now();
   const excerpt = selection.slice(0, MAX_EXCERPT_CHARS);
@@ -177,8 +189,8 @@ export function createNote(input: {
     updatedAt: now,
     links: [],
   };
-  if (!writeNotes([...notes, created])) return null;
-  return created;
+  if (!writeNotes([...notes, created])) return { ok: false, reason: 'quota' };
+  return { ok: true, note: created };
 }
 
 export function getNote(id: string): StoredNote | null {
