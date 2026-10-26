@@ -28,22 +28,47 @@ function readFromSession(): ReadState {
   };
 }
 
+/**
+ * Hydration gate (React #418 fix): the reading state and config presence live
+ * in sessionStorage/localStorage, so the server renders the empty shell and
+ * the first client render must match it exactly. Only after mount do we read
+ * storage and render the real page — no SSR/client mismatch, and the shell is
+ * visually the same container so nothing flickers wrong content.
+ */
+function useMounted(): boolean {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const idle = window.requestAnimationFrame(() => setMounted(true));
+    return () => window.cancelAnimationFrame(idle);
+  }, []);
+  return mounted;
+}
+
 export default function ReadPage() {
   const router = useRouter();
-  const [state] = useState<ReadState>(() => readFromSession());
+  const mounted = useMounted();
+  const [state, setState] = useState<ReadState>(null);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [hasConfig, setHasConfig] = useState(() => getStoredConfig() !== null);
+  const [hasConfig, setHasConfig] = useState(false);
   const [selectedText, setSelectedText] = useState<string | undefined>();
   const readingAreaRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    if (!state) {
+    const idle = window.requestAnimationFrame(() => {
+      setState(readFromSession());
+      setHasConfig(getStoredConfig() !== null);
+    });
+    return () => window.cancelAnimationFrame(idle);
+  }, []);
+
+  useEffect(() => {
+    if (mounted && !state) {
       router.push('/');
     }
-  }, [state, router]);
+  }, [mounted, state, router]);
 
-  if (!state) {
+  if (!mounted || !state) {
     return null;
   }
 

@@ -45,10 +45,36 @@ export function buildSystemPrompt(readingContent?: string): string {
 }
 
 function sanitize(history: readonly ChatMessage[]): ConversationMessage[] {
-  return history
-    .filter((m): m is ConversationMessage =>
-      (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim().length > 0)
-    .map((m) => ({ role: m.role, content: m.content }));
+  const kept: ConversationMessage[] = [];
+  for (const m of history) {
+    if ((m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim().length > 0) {
+      kept.push({ role: m.role, content: m.content });
+    }
+  }
+  return kept;
+}
+
+const MERGED_QUESTION_SEPARATOR = '\n\n';
+
+/**
+ * S6: dropping empty messages can leave two adjacent user turns (e.g. a
+ * question, a lost empty placeholder, then the real follow-up). Merging them
+ * into one user message keeps the user/assistant alternation valid — some
+ * providers reject consecutive same-role messages — and the anchor-based
+ * trimming below stays whole-turn. The merge never spans sessions because
+ * sanitization always runs on one session's history.
+ */
+function mergeAdjacentUserMessages(messages: ConversationMessage[]): ConversationMessage[] {
+  const merged: ConversationMessage[] = [];
+  for (const message of messages) {
+    const previous = merged[merged.length - 1];
+    if (message.role === 'user' && previous && previous.role === 'user') {
+      previous.content = `${previous.content}${MERGED_QUESTION_SEPARATOR}${message.content}`;
+      continue;
+    }
+    merged.push({ ...message });
+  }
+  return merged;
 }
 
 function totalChars(list: readonly ChatMessage[]): number {
@@ -82,7 +108,7 @@ function toUserAnchoredUnits(messages: readonly ConversationMessage[]): Conversa
  * alone exceeds the budget it is kept in trimmed form instead of dropped.
  */
 export function trimHistoryMessages(history: readonly ChatMessage[]): ConversationMessage[] {
-  const units = toUserAnchoredUnits(sanitize(history));
+  const units = toUserAnchoredUnits(mergeAdjacentUserMessages(sanitize(history)));
   const kept: ConversationMessage[][] = [];
   let messageCount = 0;
   let charCount = 0;
@@ -140,6 +166,12 @@ export interface BuildChatMessagesInput {
   history: readonly ChatMessage[];
   userInput: string;
   readingContent?: string;
+  /**
+   * S5: the selection protocol is an explicit field, not text sniffing. The
+   * legacy prefix form (formatSelectionPrompt) stays recognized for old
+   * callers, but new code must pass this field.
+   */
+  selectedText?: string;
 }
 
 /**
@@ -147,15 +179,19 @@ export interface BuildChatMessagesInput {
  * history, then the current turn. Selected text is annotated inside the
  * current user message so the model can tell quotes from instructions.
  */
-export function buildChatMessages({ history, userInput, readingContent }: BuildChatMessagesInput): ChatMessage[] {
+export function buildChatMessages({ history, userInput, readingContent, selectedText }: BuildChatMessagesInput): ChatMessage[] {
   const messages: ChatMessage[] = [
     { role: 'system', content: buildSystemPrompt(readingContent) },
     ...trimHistoryMessages(history),
   ];
 
-  const annotated = looksLikeSelectionQuestion(userInput) && !userInput.includes(SELECTION_END_MARKER)
-    ? annotateSelection(userInput)
-    : userInput;
+  const explicitSelection = typeof selectedText === 'string' && selectedText.length > 0;
+  const legacySelection = looksLikeSelectionQuestion(userInput);
+  const annotated = explicitSelection
+    ? `${userInput}\n\n${SELECTED_TEXT_MARKER}\n"${selectedText}"\n${SELECTION_END_MARKER}`
+    : legacySelection && !userInput.includes(SELECTION_END_MARKER)
+      ? annotateSelection(userInput)
+      : userInput;
 
   messages.push({ role: 'user', content: annotated });
   return messages;

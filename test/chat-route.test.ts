@@ -243,3 +243,92 @@ describe('POST /api/chat - multi-turn context (Issue #15)', () => {
     expect(await response.text()).not.toContain('sk-very-secret');
   });
 });
+
+describe('POST /api/chat - Deer-08 robustness (S2/S3/S5)', () => {
+  beforeEach(() => {
+    captured.length = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      captured.push({ url: String(url), init: init ?? {} });
+      return sseResponse(['你', '好'], 'openai');
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('S2/AC2: invalid config shapes return 4xx and never echo the raw values', async () => {
+    const { POST } = await import('@/app/api/chat/route');
+    const cases: unknown[] = [
+      { userInput: '你好' },
+      { config: { provider: 'nope', apiKey: 'sk-secret-value' }, userInput: '你好' },
+      { config: { provider: 'openai', apiKey: '' }, userInput: '你好' },
+      { config: { provider: 'openai', apiKey: 42 }, userInput: '你好' },
+      { config: 'openai', userInput: '你好' },
+    ];
+    for (const payload of cases) {
+      const response = await POST(makeRequest(payload));
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(response.status).toBeLessThan(500);
+      const text = await response.text();
+      expect(text).not.toContain('sk-secret-value');
+      expect(text).not.toContain('nope');
+      expect(text).not.toContain('42');
+    }
+    expect(captured).toHaveLength(0);
+  });
+
+  it('S2: malformed message entries are rejected with 4xx', async () => {
+    const { POST } = await import('@/app/api/chat/route');
+    const response = await POST(makeRequest({
+      config: { provider: 'openai', apiKey: 'sk-test' },
+      messages: ['裸字符串'],
+      userInput: '你好',
+    }));
+    expect(response.status).toBe(400);
+    expect(captured).toHaveLength(0);
+  });
+
+  it('S3/AC3: upstream timeout produces a distinct error response and never calls the stream', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    }));
+    const { POST } = await import('@/app/api/chat/route');
+    const response = await POST(makeRequest({
+      config: { provider: 'openai', apiKey: 'sk-test' },
+      messages: [],
+      userInput: '你好',
+    }));
+    expect(response.status).toBe(504);
+    const text = await response.text();
+    expect(text).toContain('timeout');
+    expect(text).not.toContain('sk-test');
+  });
+
+  it('S3: the upstream fetch carries an abort signal so it cannot hang forever', async () => {
+    const { POST } = await import('@/app/api/chat/route');
+    await POST(makeRequest({
+      config: { provider: 'openai', apiKey: 'sk-test' },
+      messages: [],
+      userInput: '你好',
+    }));
+    const init = captured[0].init;
+    expect(init.signal).toBeDefined();
+  });
+
+  it('S5: the request carries an explicit selectedText field and the upstream turn is annotated', async () => {
+    const { POST } = await import('@/app/api/chat/route');
+    const response = await POST(makeRequest({
+      config: { provider: 'openai', apiKey: 'sk-test' },
+      messages: [],
+      userInput: '这段讲了什么？',
+      selectedText: '被选中的句子',
+    }));
+    expect(response.status).toBe(200);
+    const body = lastBody();
+    const lastMessage = body.messages[body.messages.length - 1];
+    expect(lastMessage.content).toContain('【选中文本】');
+    expect(lastMessage.content).toContain('被选中的句子');
+  });
+});
