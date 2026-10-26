@@ -11,12 +11,6 @@ on:
         description: Requirement title shown to the team
         required: true
         default: 阅读进度与章节总结
-      test_mode:
-        description: Test path
-        required: true
-        default: pass
-        type: choice
-        options: [pass, fail-once]
 
 permissions:
   contents: write
@@ -33,7 +27,6 @@ jobs:
         env:
           ITERATION: ${{ inputs.iteration }}
           REQUIREMENT: ${{ inputs.requirement }}
-          TEST_MODE: ${{ inputs.test_mode }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -46,7 +39,6 @@ jobs:
             }
             const milestone = (await github.rest.issues.createMilestone({ owner, repo, title })).data;
             const labels = ['flow:devops', 'type:requirement', 'status:backlog'];
-            if (process.env.TEST_MODE === 'fail-once') labels.push('devops:test-fail-once');
             const body = [
               '## 需求', '', process.env.REQUIREMENT, '',
               '## 验收标准', '',
@@ -54,7 +46,7 @@ jobs:
               '- 补充或更新自动化测试。',
               '- `npm run lint`、`npm test`、`npm run build` 全部通过。',
               '- 不引入与本需求无关的改动。', '',
-              '> Managed by the QoderWake GitHub DevOps flow.',
+              '> 人工流程：开发 → 技术负责人评审 → 测试复测 → 人工合并与发版。',
             ].join('\n');
             const issue = (await github.rest.issues.create({
               owner, repo, title: process.env.REQUIREMENT, body,
@@ -64,14 +56,3 @@ jobs:
             core.setOutput('milestone_number', String(milestone.number));
             core.setOutput('issue_number', String(issue.number));
             core.setOutput('iteration_branch', `iteration/${slug}`);
-      - name: Wake Release Waker
-        env:
-          QW_API_URL: ${{ secrets.QW_RELEASE_WEBHOOK }}
-          QODER_PAT: ${{ secrets.QODER_PAT }}
-          QW_FLOW: devops
-          QW_ROLE: release
-          QW_EVENT_TYPE: iteration.created
-          QW_SESSION_ENTITY: milestone:${{ steps.bootstrap.outputs.milestone_number }}
-          QW_CONTEXT_JSON: >-
-            {"milestoneNumber":${{ steps.bootstrap.outputs.milestone_number }},"issueNumber":${{ steps.bootstrap.outputs.issue_number }},"iterationName":${{ toJSON(inputs.iteration) }},"iterationBranch":${{ toJSON(steps.bootstrap.outputs.iteration_branch) }}}
-        run: node .github/scripts/invoke-waker.mjs
