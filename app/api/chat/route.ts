@@ -1,22 +1,18 @@
-import { type AIModelConfig } from '@/src/lib/ai-config';
 import { type ChatMessage, buildChatMessages, buildOutgoingRequest } from '@/src/lib/chat-context';
+import { UPSTREAM_TIMEOUT_MS, parseChatRequest } from '@/src/lib/chat-request';
 
 export async function POST(req: Request) {
   try {
-    const { config, messages, context, prompt, userInput } = await req.json() as {
-      config: AIModelConfig;
-      messages?: ChatMessage[];
-      context?: string;
-      /** Legacy single-turn field kept for backward compatibility. */
-      prompt?: string;
-      userInput?: string;
-    };
-
-    if (!config || !config.provider || !config.apiKey) {
-      return new Response('Missing AI configuration', { status: 400 });
+    // S2: strictly validate the body before touching it. Rejection messages
+    // are static and never echo request values, since config can carry
+    // credentials; the body is never logged.
+    const parsed = parseChatRequest(await req.json());
+    if (!parsed.ok) {
+      return new Response(parsed.message, { status: 400 });
     }
+    const { config, messages, context, prompt, userInput, selectedText } = parsed.value;
 
-    const history = Array.isArray(messages) ? messages : [];
+    const history: ChatMessage[] = messages;
     const currentInput = (userInput || prompt || '').trim();
     if (!currentInput && history.length === 0) {
       return new Response('Missing user input', { status: 400 });
@@ -33,13 +29,17 @@ export async function POST(req: Request) {
       history: baseHistory,
       userInput: latestUserInput,
       readingContent: context,
+      selectedText,
     });
     const { endpoint, headers, body } = buildOutgoingRequest(config, assembled);
 
+    // S3: bound the upstream call. A timeout aborts the fetch and surfaces as
+    // a distinct 504 so the client streaming state can close cleanly.
     const response = await fetch(endpoint, {
       method: 'POST',
       headers,
       body,
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -118,6 +118,14 @@ export async function POST(req: Request) {
       },
     });
   } catch (error) {
+    // S3: a timeout must be distinguishable from other failures and must not
+    // echo request data. The message text stays free of request values.
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      return new Response(JSON.stringify({ error: 'Upstream request timeout' }), {
+        status: 504,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
     console.error('AI chat error:', error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),

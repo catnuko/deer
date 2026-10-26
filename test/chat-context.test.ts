@@ -232,6 +232,116 @@ describe('buildChatMessages', () => {
   });
 });
 
+describe('S4: reading-truncation constant single source', () => {
+  it('exposes the reading slice budget as CONTEXT_LIMITS.maxReadingChars', () => {
+    expect(CONTEXT_LIMITS.maxReadingChars).toBe(2000);
+  });
+
+  it('frontend reading slice and system prompt share the same limit', () => {
+    const long = 'r'.repeat(CONTEXT_LIMITS.maxReadingChars + 999);
+    const messages = buildChatMessages({
+      history: [],
+      userInput: '总结',
+      readingContent: long,
+    });
+    const contextInPrompt = messages[0].content.indexOf(long.slice(0, CONTEXT_LIMITS.maxReadingChars));
+    expect(contextInPrompt).toBeGreaterThanOrEqual(0);
+    expect(messages[0].content).not.toContain(long);
+  });
+});
+
+describe('S5: explicit selectedText protocol', () => {
+  it('annotates the selection from the explicit selectedText field, not from text sniffing', () => {
+    const messages = buildChatMessages({
+      history: [],
+      userInput: '这段讲了什么？',
+      selectedText: '被选中的句子',
+    });
+    const last = messages[messages.length - 1];
+    expect(last.role).toBe('user');
+    expect(last.content).toContain('【选中文本】');
+    expect(last.content).toContain('被选中的句子');
+    expect(last.content).toContain('这段讲了什么？');
+  });
+
+  it('annotates a legacy prefix-form selection prompt even without the field', () => {
+    const messages = buildChatMessages({
+      history: [],
+      userInput: formatSelectionPrompt('旧格式的选区'),
+    });
+    expect(messages[messages.length - 1].content).toContain('【选中文本】');
+  });
+
+  it('leaves a plain question untouched when no selection field is present', () => {
+    const messages = buildChatMessages({ history: [], userInput: '自由提问，不带选区' });
+    expect(messages[messages.length - 1].content).toBe('自由提问，不带选区');
+  });
+
+  it('does not double-annotate a selection block that is already annotated', () => {
+    const messages = buildChatMessages({
+      history: [],
+      userInput: '这段讲了什么？',
+      selectedText: '选区',
+      readingContent: '正文',
+    });
+    const last = messages[messages.length - 1].content;
+    expect(last.split('【选中文本】').length - 1).toBe(1);
+  });
+});
+
+describe('S6: adjacent user messages merge after sanitization', () => {
+  it('merges adjacent user messages into one when an empty assistant is dropped', () => {
+    const history: ChatMessage[] = [
+      { role: 'user', content: '第一问' },
+      { role: 'assistant', content: '答' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: '第二问' },
+      { role: 'user', content: '第三问' },
+    ];
+    const trimmed = trimHistoryMessages(history);
+    const users = trimmed.filter((m) => m.role === 'user');
+    expect(users).toHaveLength(2);
+    expect(users[1].content).toContain('第二问');
+    expect(users[1].content).toContain('第三问');
+    for (let i = 1; i < trimmed.length; i += 1) {
+      expect(`${trimmed[i - 1].role}>${trimmed[i].role}`).not.toBe('user>user');
+    }
+  });
+
+  it('keeps the role sequence valid: no adjacent user messages and never assistant-first', () => {
+    const history: ChatMessage[] = [
+      { role: 'assistant', content: '孤立回答' },
+      { role: 'user', content: '' },
+      { role: 'user', content: '问一' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: '问二' },
+    ];
+    const trimmed = trimHistoryMessages(history);
+    expect(trimmed.length).toBeGreaterThan(0);
+    expect(trimmed[0].role).toBe('user');
+    for (let i = 1; i < trimmed.length; i += 1) {
+      expect(`${trimmed[i - 1].role}>${trimmed[i].role}`).not.toBe('user>user');
+    }
+  });
+
+  it('does not merge user messages across distinct turns when no empty message intervenes', () => {
+    const history = multiTurn(2);
+    const trimmed = trimHistoryMessages(history);
+    expect(trimmed).toEqual(history);
+  });
+
+  it('merged content never exceeds the character budget', () => {
+    const history: ChatMessage[] = [
+      { role: 'user', content: 'u'.repeat(1200) },
+      { role: 'user', content: 'u'.repeat(1200) },
+    ];
+    const trimmed = trimHistoryMessages(history);
+    const total = trimmed.reduce((sum, m) => sum + m.content.length, 0);
+    expect(total).toBeLessThanOrEqual(CONTEXT_LIMITS.maxHistoryChars);
+    expect(trimmed.filter((m) => m.role === 'user')).toHaveLength(1);
+  });
+});
+
 describe('buildOutgoingRequest', () => {
   const messages = buildChatMessages({ history: multiTurn(1), userInput: '追问' });
 

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { type AIModelConfig, getStoredConfig } from '@/src/lib/ai-config';
-import { formatSelectionPrompt, trimHistoryMessages } from '@/src/lib/chat-context';
+import { CONTEXT_LIMITS, formatSelectionPrompt, trimHistoryMessages } from '@/src/lib/chat-context';
 import {
   clearSessionToUndo,
   getReadingContentId,
@@ -55,6 +55,10 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   const [pendingUndo, setPendingUndo] = useState<StoredSession | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sessionsEntryRef = useRef<HTMLButtonElement>(null);
+  // S5: the current turn's selection, when the question came from a text
+  // selection. The visible prompt keeps its user-facing wording, but the
+  // protocol no longer depends on sniffing that wording.
+  const selectionRef = useRef<{ active: boolean; text: string }>({ active: false, text: '' });
 
   // Opening the panel (or switching the reading text) derives the visible
   // conversation and the pending undo entry from storage, so both survive a
@@ -102,6 +106,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   // When selectedText changes, send it as a message
   useEffect(() => {
     if (selectedText && config && isOpen) {
+      selectionRef.current = { active: true, text: selectedText };
       sendMessage(formatSelectionPrompt(selectedText));
       stableOnClearSelection();
     }
@@ -135,7 +140,9 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
           config,
           messages: history,
           userInput: content,
-          context: readingContent.slice(0, 2000),
+          context: readingContent.slice(0, CONTEXT_LIMITS.maxReadingChars),
+          // S5: the selection travels as an explicit protocol field.
+          selectedText: selectionRef.current.active ? selectionRef.current.text : undefined,
         }),
       });
 
@@ -200,6 +207,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   function handleSummarizeChapter() {
     if (!config || isLoading) return;
     const summaryPrompt = '请总结本章的主要内容（前500字）：';
+    selectionRef.current = { active: false, text: '' };
     sendMessage(summaryPrompt);
   }
 
@@ -244,6 +252,7 @@ export default function AIPanel({ isOpen, onClose, readingContent, selectedText,
   function onFormSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!config || isLoading || showList || !input.trim()) return;
+    selectionRef.current = { active: false, text: '' };
     sendMessage(input);
   }
 
