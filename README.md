@@ -39,11 +39,11 @@ Deer doesn't read for you; it helps you read better, think further, and enjoy th
 Deer is built with Next.js (App Router) and TypeScript.
 
 ```bash
-npm install
-npm run dev
-npm run lint
-npm test
-npm run build
+pnpm install
+pnpm dev
+pnpm lint
+pnpm test
+pnpm build
 ```
 
 Delivery follows the GitHub DevOps flow: requirement → PR → review → human merge → independent verification → release PR → human merge → tag and GitHub Release.
