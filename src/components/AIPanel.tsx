@@ -37,6 +37,16 @@ import {
 import { createDraftController } from '@/src/lib/note-drafts';
 import { getSelectionText, isCaptureAvailable } from '@/src/lib/selection';
 import { COMMAND_EVENT, type CommandTarget } from '@/src/lib/command-events';
+import { commandTextFilter } from '@/src/lib/command-filter';
+import {
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/src/components/ui/command';
 
 interface Message {
   id: string;
@@ -56,9 +66,25 @@ const SESSION_LIST_ID = 'ai-session-list';
 const NOTES_LIST_ID = 'ai-notes-list';
 const HINT_VISIBLE_MS = 1500;
 const EDIT_DEBOUNCE_MS = 300;
-const SEARCH_DEBOUNCE_MS = 200;
 // How often a command of the ⌘K palette is retried while an answer runs.
 const COMMAND_RETRY_MS = 250;
+
+/**
+ * The rows of the panel lists keep the geometry of the rows they replace.
+ *
+ * The Command component styles its rows with Tailwind utilities, and the
+ * utilities layer wins over Deer's own layer: the few utilities that
+ * disagree with `.session-row` and `.notes-connect-row` are named here, so
+ * the rows keep their old measurements while the matching, the keyboard
+ * and the empty state come from the Command component.
+ *
+ * `[&>svg]:hidden` hides the tick the Command component draws at the end
+ * of a row: it belongs to rows that are ticked, and these rows are not.
+ */
+const LIST_ROW_CLASS =
+  'session-row items-stretch gap-1 rounded-md px-3 py-2.5 cursor-pointer [&>svg]:hidden';
+const CONNECT_ROW_CLASS =
+  'notes-connect-row items-stretch gap-1 rounded-md px-3 py-2 cursor-pointer [&>svg]:hidden';
 
 function noteSourceTitle(note: StoredNote): string {
   return note.sourceLabel || note.sourceContentId || '未知来源';
@@ -101,7 +127,7 @@ export default function AIPanel({
   // Notes view state: `showNotes` is mutually exclusive with `showList`.
   const [showNotes, setShowNotes] = useState(false);
   const [noteSearch, setNoteSearch] = useState('');
-  const [noteFilter, setNoteFilter] = useState('');
+  const [sessionSearch, setSessionSearch] = useState('');
   const [openNoteId, setOpenNoteId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftUnderstanding, setDraftUnderstanding] = useState<string | null>(null);
@@ -128,7 +154,6 @@ export default function AIPanel({
   const [liveSelection, setLiveSelection] = useState('');
   const notesEntryRef = useRef<HTMLButtonElement>(null);
   const connectEntryRef = useRef<HTMLButtonElement>(null);
-  const connectSearchRef = useRef<HTMLInputElement>(null);
   // The command of the ⌘K palette that is waiting to be applied, and the
   // timer that retries it while an answer is running.
   const pendingTargetRef = useRef<CommandTarget | null>(null);
@@ -141,7 +166,6 @@ export default function AIPanel({
     capHint?: ReturnType<typeof setTimeout>;
     quotaHint?: ReturnType<typeof setTimeout>;
     linked?: ReturnType<typeof setTimeout>;
-    search?: ReturnType<typeof setTimeout>;
   }>({});
   // S5: the current turn's selection, when the question came from a text
   // selection. The visible prompt keeps its user-facing wording, but the
@@ -307,7 +331,6 @@ export default function AIPanel({
         setShowList(false);
         setShowNotes(true);
         setNoteSearch('');
-        setNoteFilter('');
         setNoteVersion((v) => v + 1);
         setOpenNoteId(note.id);
         setDraftTitle(null);
@@ -498,6 +521,7 @@ export default function AIPanel({
     if (!showList) {
       setShowNotes(false);
       setOpenNoteId(null);
+      setSessionSearch('');
     }
   }
 
@@ -508,7 +532,6 @@ export default function AIPanel({
       setShowList(false);
       setOpenNoteId(null);
       setNoteSearch('');
-      setNoteFilter('');
       setNoteVersion((v) => v + 1);
     }
   }
@@ -593,16 +616,8 @@ export default function AIPanel({
     setNoteVersion((v) => v + 1);
   }
 
-  function handleNoteSearch(value: string) {
-    setNoteSearch(value);
-    if (timersRef.current.search) clearTimeout(timersRef.current.search);
-    timersRef.current.search = setTimeout(() => setNoteFilter(value.trim().toLowerCase()), SEARCH_DEBOUNCE_MS);
-  }
-
   function clearNoteSearch() {
     setNoteSearch('');
-    setNoteFilter('');
-    if (timersRef.current.search) clearTimeout(timersRef.current.search);
   }
 
   function onFormSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -626,13 +641,6 @@ export default function AIPanel({
   }
 
   const sessions = showList ? listSessions() : [];
-  const shownNotes = noteFilter
-    ? allNotes.filter(
-        (n) =>
-          n.title.toLowerCase().includes(noteFilter) ||
-          n.excerpt.toLowerCase().includes(noteFilter),
-      )
-    : allNotes;
   const captureLabel = captureFeedback ? '✓ 已收藏' : '🔖 收藏笔记';
   const captureAria = selectedTextAvailable
     ? '收藏选中内容为概念笔记'
@@ -642,14 +650,11 @@ export default function AIPanel({
         .map((id) => allNotes.find((n) => n.id === id))
         .filter((n): n is StoredNote => n !== undefined)
     : [];
+  // The candidates of the connection picker. The query is not applied
+  // here: the Command list matches it, with the rule the search used
+  // before it moved onto the component.
   const connectCandidates = detailNote
-    ? allNotes
-        .filter((n) => n.id !== detailNote.id)
-        .filter((n) => {
-          const q = connectFilter.trim().toLowerCase();
-          if (!q) return true;
-          return n.title.toLowerCase().includes(q) || n.excerpt.toLowerCase().includes(q);
-        })
+    ? allNotes.filter((n) => n.id !== detailNote.id)
     : [];
 
   return (
@@ -755,57 +760,70 @@ export default function AIPanel({
             <button
               ref={connectEntryRef}
               className="action-btn"
-              onClick={() => {
-                setConnectOpen(!connectOpen);
-                if (!connectOpen) setTimeout(() => connectSearchRef.current?.focus(), 0);
-              }}
+              onClick={() => setConnectOpen(true)}
               disabled={isLoading}
               type="button"
-              aria-expanded={connectOpen}
+              aria-haspopup="dialog"
             >
               🔗 连接概念
             </button>
 
-            {connectOpen && (
-              <div className="notes-stack" style={{ gap: 4 }}>
-                <input
-                  ref={connectSearchRef}
-                  className="notes-edit-input"
-                  type="search"
-                  placeholder="搜索要连接的概念…"
-                  value={connectFilter}
-                  onChange={(e) => setConnectFilter(e.target.value)}
-                  disabled={isLoading}
-                  aria-label="搜索要连接的概念"
-                />
-                {connectCandidates.length === 0 && (
-                  <p className="ai-empty-state">没有可连接的其他概念</p>
-                )}
-                {connectCandidates.map((n) => {
-                  const linked = detailNote.links.includes(n.id);
-                  return (
-                    <button
-                      key={n.id}
-                      className="notes-connect-row"
-                      onClick={() => handleToggleConnect(n.id)}
-                      disabled={isLoading}
-                      type="button"
-                      aria-label={`${linked ? '解除连接' : '连接'}「${n.title}」`}
-                    >
-                      <span className="session-title">{n.title}</span>
-                      <span className="session-meta">
-                        {linked && <span className="badge-current">已连接 ✓</span>}
-                        <span>{noteSourceTitle(n)}</span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
             {linkedHint && (
               <p className="notes-muted" role="status" aria-live="polite">已解除</p>
             )}
           </div>
+
+          {/* The connection picker is a second layer over the note: it covers
+              the note it belongs to, and it is dismissed on purpose (Esc or
+              the backdrop), so it lives in a dialog and not in the panel. */}
+          <CommandDialog
+            open={connectOpen}
+            onOpenChange={(next) => {
+              setConnectOpen(next);
+              if (!next) setConnectFilter('');
+            }}
+            title="连接概念"
+            description="搜索并选择要连接的概念"
+            className="top-1/4 translate-y-0 sm:max-w-md"
+          >
+            <Command filter={commandTextFilter} label="搜索要连接的概念">
+              <CommandInput
+                value={connectFilter}
+                onValueChange={setConnectFilter}
+                placeholder="搜索要连接的概念…"
+                aria-label="搜索要连接的概念"
+              />
+              <CommandList>
+                <CommandEmpty>
+                  <div className="ai-empty-state">
+                    <p>没有可连接的其他概念</p>
+                  </div>
+                </CommandEmpty>
+                <CommandGroup>
+                  {connectCandidates.map((n) => {
+                    const linked = detailNote.links.includes(n.id);
+                    return (
+                      <CommandItem
+                        key={n.id}
+                        value={n.id}
+                        keywords={[n.title, n.excerpt]}
+                        onSelect={() => handleToggleConnect(n.id)}
+                        disabled={isLoading}
+                        className={CONNECT_ROW_CLASS}
+                        aria-label={`${linked ? '解除连接' : '连接'}「${n.title}」`}
+                      >
+                        <span className="session-title">{n.title}</span>
+                        <span className="session-meta">
+                          {linked && <span className="badge-current">已连接 ✓</span>}
+                          <span>{noteSourceTitle(n)}</span>
+                        </span>
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </CommandDialog>
 
           {detailPeers.length > 0 && (
             <div className="notes-stack" style={{ gap: 4 }}>
@@ -838,46 +856,58 @@ export default function AIPanel({
         </div>
       ) : showNotes ? (
         <div className="session-list" id={NOTES_LIST_ID}>
-          <input
-            className="notes-edit-input"
-            type="search"
-            placeholder="搜索概念名或摘录"
-            value={noteSearch}
-            onChange={(e) => handleNoteSearch(e.target.value)}
-            disabled={isLoading}
-            aria-label="搜索概念名或摘录"
-          />
-          {allNotes.length === 0 ? (
-            <div className="ai-empty-state">
-              <p>还没有概念笔记。在阅读区划选一段文字，点『🔖 收藏笔记』把重要概念留下来。</p>
-            </div>
-          ) : shownNotes.length === 0 ? (
-            <div className="ai-empty-state">
-              <p>没有匹配「{noteSearch.trim()}」的笔记。</p>
-              <button className="notes-text-btn" onClick={clearNoteSearch} type="button">清除搜索</button>
-            </div>
-          ) : (
-            shownNotes.map((n) => (
-              <button
-                key={n.id}
-                className="session-row"
-                onClick={() => openDetail(n.id)}
-                disabled={isLoading}
-                type="button"
-                title={`${n.title}｜${fullNoteTime(n.updatedAt)}`}
-                aria-label={`打开笔记「${n.title}」，${fullNoteTime(n.updatedAt)}`}
-              >
-                <span className="session-title">{n.title}</span>
-                <span className="notes-muted">{n.excerpt}</span>
-                <span className="session-meta">
-                  {n.links.length > 0 && <span>🔗 {n.links.length}</span>}
-                  <time dateTime={new Date(n.updatedAt).toISOString()} title={fullNoteTime(n.updatedAt)}>
-                    {formatNoteTime(n.updatedAt)}
-                  </time>
-                </span>
-              </button>
-            ))
-          )}
+          {/* The list is the view itself: the search filters it in place,
+              so the Command lives inline and the panel keeps its shape. */}
+          <Command
+            className="h-auto! shrink-0 p-0"
+            filter={commandTextFilter}
+            label="搜索概念名或摘录"
+          >
+            <CommandInput
+              value={noteSearch}
+              onValueChange={setNoteSearch}
+              placeholder="搜索概念名或摘录"
+              aria-label="搜索概念名或摘录"
+              disabled={isLoading}
+            />
+            <CommandList className="max-h-none">
+              <CommandEmpty>
+                {allNotes.length === 0 ? (
+                  <div className="ai-empty-state">
+                    <p>还没有概念笔记。在阅读区划选一段文字，点『🔖 收藏笔记』把重要概念留下来。</p>
+                  </div>
+                ) : (
+                  <div className="ai-empty-state">
+                    <p>没有匹配「{noteSearch.trim()}」的笔记。</p>
+                    <button className="notes-text-btn" onClick={clearNoteSearch} type="button">清除搜索</button>
+                  </div>
+                )}
+              </CommandEmpty>
+              <CommandGroup className="p-0">
+                {allNotes.map((n) => (
+                  <CommandItem
+                    key={n.id}
+                    value={n.id}
+                    keywords={[n.title, n.excerpt]}
+                    onSelect={() => openDetail(n.id)}
+                    disabled={isLoading}
+                    className={LIST_ROW_CLASS}
+                    title={`${n.title}｜${fullNoteTime(n.updatedAt)}`}
+                    aria-label={`打开笔记「${n.title}」，${fullNoteTime(n.updatedAt)}`}
+                  >
+                    <span className="session-title">{n.title}</span>
+                    <span className="notes-muted">{n.excerpt}</span>
+                    <span className="session-meta">
+                      {n.links.length > 0 && <span>🔗 {n.links.length}</span>}
+                      <time dateTime={new Date(n.updatedAt).toISOString()} title={fullNoteTime(n.updatedAt)}>
+                        {formatNoteTime(n.updatedAt)}
+                      </time>
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
           <p
             className="list-footer"
             style={allNotes.length >= MAX_NOTES - 20 ? { color: 'var(--moss)' } : undefined}
@@ -890,36 +920,63 @@ export default function AIPanel({
         </div>
       ) : showList ? (
         <div className="session-list" id={SESSION_LIST_ID}>
-          {sessions.length === 0 && (
-            <div className="ai-empty-state">
-              <p>还没有历史会话</p>
-            </div>
-          )}
-          {sessions.map((item) => {
-            const current = item.contentId === activeContentId;
-            const summary = sessionSummary(item.messages);
-            const full = fullSessionSummary(item.messages);
-            return (
-              <button
-                key={item.contentId}
-                className="session-row"
-                onClick={() => handleSelectSession(item)}
-                disabled={isLoading}
-                type="button"
-                title={`${full}｜${fullSessionTime(item.updatedAt)}`}
-                aria-label={`打开会话「${full}」，${fullSessionTime(item.updatedAt)}${current ? '，当前会话' : ''}`}
-                aria-current={current ? 'true' : undefined}
-              >
-                <span className="session-title">{summary}</span>
-                <span className="session-meta">
-                  {current && <span className="badge-current">当前</span>}
-                  <time dateTime={isoSessionTime(item.updatedAt)} title={fullSessionTime(item.updatedAt)}>
-                    {formatSessionTime(item.updatedAt)}
-                  </time>
-                </span>
-              </button>
-            );
-          })}
+          {/* The session list is a view of its own: the search filters it
+              in place, like the search of the notes list. */}
+          <Command
+            className="h-auto! shrink-0 p-0"
+            filter={commandTextFilter}
+            label="搜索历史会话"
+          >
+            <CommandInput
+              value={sessionSearch}
+              onValueChange={setSessionSearch}
+              placeholder="搜索历史会话"
+              aria-label="搜索历史会话"
+              disabled={isLoading}
+            />
+            <CommandList className="max-h-none">
+              <CommandEmpty>
+                {sessions.length === 0 ? (
+                  <div className="ai-empty-state">
+                    <p>还没有历史会话</p>
+                  </div>
+                ) : (
+                  <div className="ai-empty-state">
+                    <p>没有匹配「{sessionSearch.trim()}」的会话。</p>
+                    <button className="notes-text-btn" onClick={() => setSessionSearch('')} type="button">清除搜索</button>
+                  </div>
+                )}
+              </CommandEmpty>
+              <CommandGroup className="p-0">
+                {sessions.map((item) => {
+                  const current = item.contentId === activeContentId;
+                  const summary = sessionSummary(item.messages);
+                  const full = fullSessionSummary(item.messages);
+                  return (
+                    <CommandItem
+                      key={item.contentId}
+                      value={item.contentId}
+                      keywords={[summary, full]}
+                      onSelect={() => handleSelectSession(item)}
+                      disabled={isLoading}
+                      className={LIST_ROW_CLASS}
+                      title={`${full}｜${fullSessionTime(item.updatedAt)}`}
+                      aria-label={`打开会话「${full}」，${fullSessionTime(item.updatedAt)}${current ? '，当前会话' : ''}`}
+                      aria-current={current ? 'true' : undefined}
+                    >
+                      <span className="session-title">{summary}</span>
+                      <span className="session-meta">
+                        {current && <span className="badge-current">当前</span>}
+                        <time dateTime={isoSessionTime(item.updatedAt)} title={fullSessionTime(item.updatedAt)}>
+                          {formatSessionTime(item.updatedAt)}
+                        </time>
+                      </span>
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            </CommandList>
+          </Command>
           <p className="list-footer">最多保留 20 个会话，超出自动淘汰最早使用的</p>
         </div>
       ) : (

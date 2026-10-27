@@ -876,6 +876,13 @@
     margin: 8px 20px 4px;
   }
 
+  /* The search of a panel list is a Command input now. It keeps the place
+     the old search input had in the list, and only in the panel: the
+     search of the ⌘K palette lives in a dialog and keeps its own place. */
+  .session-list [data-slot='command-input-wrapper'] {
+    margin: 8px 20px 4px;
+  }
+
   .notes-text-btn {
     background: none;
     border: none;
