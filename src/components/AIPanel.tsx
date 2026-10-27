@@ -47,6 +47,17 @@ import {
   CommandItem,
   CommandList,
 } from '@/src/components/ui/command';
+import { Bubble, BubbleContent } from '@/src/components/ui/bubble';
+import { Message, MessageContent, MessageHeader } from '@/src/components/ui/message';
+import {
+  MessageScroller,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '@/src/components/ui/message-scroller';
+import { Button } from '@/src/components/ui/button';
+import { Input } from '@/src/components/ui/input';
 
 interface Message {
   id: string;
@@ -1068,36 +1079,50 @@ export default function AIPanel({
             )}
           </div>
 
-          <div className="ai-messages">
-            {isForeignSession && (
-              <p className="ai-hint">此会话来自另一段阅读内容</p>
-            )}
-            {messages.length === 0 && (
-              <div className="ai-empty-state">
-                <p>{clearedNotice ? '对话已清空，可点「撤销恢复」找回' : '选中文本或输入问题，开始与 Deer 对话'}</p>
-              </div>
-            )}
-            {clearedNotice && (
-              <p className="ai-hint" role="status" aria-live="polite">
-                对话已清空，可点「撤销恢复」找回
-              </p>
-            )}
-            {messages.map((m) => (
-              <div key={m.id} className={`ai-message ${m.role}`}>
-                <div className="message-role">{m.role === 'user' ? '你' : 'Deer'}</div>
-                <div className="message-content">{m.content || (isLoading ? '正在思考…' : '')}</div>
-              </div>
-            ))}
-            {error && (
-              <div className="ai-error">
-                <p>出错了：{error}</p>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
+          <MessageScrollerProvider>
+            <MessageScroller className="ai-messages flex-1">
+              <MessageScrollerViewport>
+                <MessageScrollerContent className="gap-3 p-5">
+                  {isForeignSession && (
+                    <p className="ai-hint">此会话来自另一段阅读内容</p>
+                  )}
+                  {messages.length === 0 && (
+                    <div className="ai-empty-state">
+                      <p>{clearedNotice ? '对话已清空，可点「撤销恢复」找回' : '选中文本或输入问题，开始与 Deer 对话'}</p>
+                    </div>
+                  )}
+                  {clearedNotice && (
+                    <p className="ai-hint" role="status" aria-live="polite">
+                      对话已清空，可点「撤销恢复」找回
+                    </p>
+                  )}
+                  {messages.map((m) => (
+                    <MessageScrollerItem key={m.id} messageId={m.id} scrollAnchor={m.role === 'user'}>
+                      <Message align={m.role === 'user' ? 'end' : 'start'}>
+                        <MessageContent>
+                          <MessageHeader className="px-0">{m.role === 'user' ? '你' : 'Deer'}</MessageHeader>
+                          <Bubble variant={m.role === 'user' ? 'default' : 'muted'} align={m.role === 'user' ? 'end' : 'start'}>
+                            <BubbleContent>
+                              {m.content || (isLoading ? '正在思考…' : '')}
+                            </BubbleContent>
+                          </Bubble>
+                        </MessageContent>
+                      </Message>
+                    </MessageScrollerItem>
+                  ))}
+                  {error && (
+                    <div className="ai-error">
+                      <p>出错了：{error}</p>
+                    </div>
+                  )}
+                  <div ref={messagesEndRef} />
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+            </MessageScroller>
+          </MessageScrollerProvider>
 
           <form className="ai-input-form" onSubmit={onFormSubmit}>
-            <input
+            <Input
               className="ai-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -1105,9 +1130,9 @@ export default function AIPanel({
               disabled={isLoading || showList}
               aria-label="AI 对话输入框"
             />
-            <button className="ai-send-btn" type="submit" disabled={isLoading || showList || !input.trim()}>
+            <Button className="ai-send-btn" type="submit" disabled={isLoading || showList || !input.trim()}>
               发送
-            </button>
+            </Button>
           </form>
         </>
       )}

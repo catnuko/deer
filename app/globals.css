@@ -182,6 +182,7 @@
     display: flex;
     flex-direction: column;
     min-height: 100vh;
+    height: 100vh;
   }
 
   .read-header {
@@ -243,6 +244,7 @@
   .read-body {
     display: flex;
     flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
 
@@ -317,6 +319,7 @@
   /* AI Panel */
   .ai-panel {
     width: 0;
+    min-height: 0;
     overflow: hidden;
     border-left: 1px solid var(--sand);
     background: var(--card);
@@ -695,13 +698,12 @@
     cursor: not-allowed;
   }
 
+  /* The transcript is a shadcn MessageScroller now. This class only sizes the
+     scroller inside the panel; the viewport owns scrolling and the content
+     owns padding, so a second scroll container never appears here. */
   .ai-messages {
     flex: 1;
-    overflow-y: auto;
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
+    min-height: 0;
   }
 
   .ai-empty-state {
@@ -777,45 +779,10 @@
     text-align: center;
   }
 
-  .ai-message {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .ai-message.user {
-    align-items: flex-end;
-  }
-
-  .ai-message.assistant {
-    align-items: flex-start;
-  }
-
-  .message-role {
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-    font-weight: 500;
-  }
-
-  .message-content {
-    background: var(--card);
-    padding: 10px 14px;
-    border-radius: 12px;
-    max-width: 85%;
-    font-size: 0.9rem;
-    line-height: 1.5;
-    white-space: pre-wrap;
-  }
-
-  .ai-message.user .message-content {
-    background: var(--moss);
-    color: #fffdf8;
-  }
-
-  .ai-message.assistant .message-content.typing {
-    color: var(--muted-foreground);
-    font-style: italic;
-  }
+  /* Message bubbles are shadcn Bubble/Message now: the bubble surface, the
+     alignment and the role row all come from the component. The `.typing`
+     modifier went with them — an empty assistant turn renders the same
+     "正在思考…" text inside its bubble. */
 
   .ai-error {
     background: #f8d7da;
