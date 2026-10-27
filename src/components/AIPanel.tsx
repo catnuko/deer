@@ -799,6 +799,10 @@ export default function AIPanel({
                     <p>没有可连接的其他概念</p>
                   </div>
                 </CommandEmpty>
+                {/* The group keeps its own padding here: it lives in a dialog,
+                    like the group of the ⌘K palette, so the rows stay lined
+                    up with the search box above them. The inline lists of
+                    the panel are flush instead, and drop it. */}
                 <CommandGroup>
                   {connectCandidates.map((n) => {
                     const linked = detailNote.links.includes(n.id);
