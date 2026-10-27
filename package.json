@@ -18,6 +18,9 @@
     "@ai-sdk/anthropic": "^4.0.85",
     "@ai-sdk/openai": "^4.0.99",
     "@ai-sdk/react": "^4.0.152",
+    "@assistant-ui/ai-sdk": "^0.0.15",
+    "@assistant-ui/react": "^0.15.31",
+    "@assistant-ui/react-markdown": "^0.14.24",
     "@base-ui/react": "^1.9.0",
     "@shadcn/react": "^0.3.1",
     "ai": "^7.0.148",
@@ -28,7 +31,10 @@
     "next": "^16.4.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tw-shimmer": "^0.4.14",
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

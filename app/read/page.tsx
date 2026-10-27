@@ -8,6 +8,7 @@ import SettingsPanel from '@/src/components/SettingsPanel';
 import AIPanel from '@/src/components/AIPanel';
 import FloatingToolbar from '@/src/components/FloatingToolbar';
 import { getStoredConfig } from '@/src/lib/ai-config';
+import { getReadingContentId } from '@/src/lib/chat-storage';
 import {
   READING_CONTENT_KEY,
   READING_TITLE_KEY,
@@ -174,6 +175,8 @@ export default function ReadPage() {
             <FloatingToolbar
               onAskDeer={handleAskDeer}
               containerRef={readingAreaRef}
+              contentId={getReadingContentId(content)}
+              sourceLabel={title}
             />
           )}
         </main>

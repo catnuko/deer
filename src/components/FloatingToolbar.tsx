@@ -1,15 +1,30 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createNote } from '@/src/lib/notes';
 
 interface FloatingToolbarProps {
   onAskDeer: (selectedText: string) => void;
   containerRef: React.RefObject<HTMLElement | null>;
+  /** The id Deer derives from the reading text; the captured note is tagged with it. */
+  contentId: string;
+  /** The reading title, used as the note's source label. */
+  sourceLabel: string;
 }
 
-export default function FloatingToolbar({ onAskDeer, containerRef }: FloatingToolbarProps) {
+type CaptureState = 'idle' | 'saved' | 'cap' | 'quota';
+
+export default function FloatingToolbar({
+  onAskDeer,
+  containerRef,
+  contentId,
+  sourceLabel,
+}: FloatingToolbarProps) {
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [selectedText, setSelectedText] = useState('');
+  const [captureState, setCaptureState] = useState<CaptureState>('idle');
+  // The hint outlives the render that set it, so the reset timer is kept in a ref.
+  const captureTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     function handleMouseUp() {
@@ -62,6 +77,19 @@ export default function FloatingToolbar({ onAskDeer, containerRef }: FloatingToo
     };
   }, [containerRef]);
 
+  // A capture hint (saved / cap / quota) clears itself after a beat.
+  function flashCapture(next: CaptureState) {
+    setCaptureState(next);
+    if (captureTimer.current) clearTimeout(captureTimer.current);
+    captureTimer.current = setTimeout(() => setCaptureState('idle'), 1500);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (captureTimer.current) clearTimeout(captureTimer.current);
+    };
+  }, []);
+
   function handleAskDeer() {
     if (selectedText) {
       onAskDeer(selectedText);
@@ -69,6 +97,21 @@ export default function FloatingToolbar({ onAskDeer, containerRef }: FloatingToo
       setSelectedText('');
       window.getSelection()?.removeAllRanges();
     }
+  }
+
+  function handleCapture() {
+    if (!selectedText.trim()) return;
+    const result = createNote({
+      selection: selectedText,
+      sourceContentId: contentId,
+      sourceLabel,
+    });
+    if (!result.ok) {
+      // The library reports why: the 200-note cap, or a quota write failure.
+      flashCapture(result.reason === 'cap' ? 'cap' : 'quota');
+      return;
+    }
+    flashCapture('saved');
   }
 
   if (!position) return null;
@@ -83,14 +126,33 @@ export default function FloatingToolbar({ onAskDeer, containerRef }: FloatingToo
         transform: 'translate(-50%, -100%)',
       }}
     >
-      <button
-        className="ask-deer-btn"
-        onClick={handleAskDeer}
-        type="button"
-        aria-label="问 Deer"
-      >
-        🦌 问 Deer
-      </button>
+      <div className="floating-toolbar-actions">
+        <button
+          className="ask-deer-btn"
+          onClick={handleAskDeer}
+          type="button"
+          aria-label="问 Deer"
+        >
+          🦌 问 Deer
+        </button>
+        <button
+          className="capture-btn"
+          onClick={handleCapture}
+          type="button"
+          aria-label="收藏笔记"
+        >
+          🔖 收藏笔记
+        </button>
+      </div>
+      {captureState !== 'idle' && (
+        <p className="floating-toolbar-hint" role="status" aria-live="polite">
+          {captureState === 'saved'
+            ? '✓ 已收藏'
+            : captureState === 'cap'
+              ? `已达上限，删除一些笔记后才能继续收藏`
+              : '收藏失败，笔记未保存'}
+        </p>
+      )}
     </div>
   );
 }

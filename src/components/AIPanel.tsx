@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { useAuiState, AssistantRuntimeProvider } from '@assistant-ui/react';
 import { type AIModelConfig, getStoredConfig } from '@/src/lib/ai-config';
-import { CONTEXT_LIMITS, formatSelectionPrompt, trimHistoryMessages } from '@/src/lib/chat-context';
 import {
   clearSessionToUndo,
   getReadingContentId,
@@ -12,7 +12,6 @@ import {
   restoreUndo,
   saveChatHistory,
   touchSession,
-  withCompletedTurn,
   type StoredSession,
 } from '@/src/lib/chat-storage';
 import {
@@ -21,12 +20,10 @@ import {
   fullSessionTime,
   isoSessionTime,
   sessionSummary,
-  undoButtonLabel,
 } from '@/src/lib/session-display';
 import {
   MAX_NOTES,
   connectNotes,
-  createNote,
   deleteNote,
   disconnectNotes,
   listNotes,
@@ -35,7 +32,6 @@ import {
   type StoredNote,
 } from '@/src/lib/notes';
 import { createDraftController } from '@/src/lib/note-drafts';
-import { getSelectionText, isCaptureAvailable } from '@/src/lib/selection';
 import { COMMAND_EVENT, type CommandTarget } from '@/src/lib/command-events';
 import { commandTextFilter } from '@/src/lib/command-filter';
 import {
@@ -47,23 +43,13 @@ import {
   CommandItem,
   CommandList,
 } from '@/src/components/ui/command';
-import { Bubble, BubbleContent } from '@/src/components/ui/bubble';
-import { Message, MessageContent, MessageHeader } from '@/src/components/ui/message';
+import { Thread } from '@/src/components/assistant-ui/elements/thread.aui';
 import {
-  MessageScroller,
-  MessageScrollerContent,
-  MessageScrollerItem,
-  MessageScrollerProvider,
-  MessageScrollerViewport,
-} from '@/src/components/ui/message-scroller';
-import { Button } from '@/src/components/ui/button';
-import { Input } from '@/src/components/ui/input';
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-}
+  SUMMARIZE_CHAPTER_PROMPT,
+  toThreadMessageLikes,
+  useDeerRuntime,
+  type StoredChatMessage,
+} from '@/src/lib/deer-runtime';
 
 interface AIPanelProps {
   isOpen: boolean;
@@ -75,23 +61,10 @@ interface AIPanelProps {
 
 const SESSION_LIST_ID = 'ai-session-list';
 const NOTES_LIST_ID = 'ai-notes-list';
-const HINT_VISIBLE_MS = 1500;
 const EDIT_DEBOUNCE_MS = 300;
 // How often a command of the ⌘K palette is retried while an answer runs.
 const COMMAND_RETRY_MS = 250;
 
-/**
- * The rows of the panel lists keep the geometry of the rows they replace.
- *
- * The Command component styles its rows with Tailwind utilities, and the
- * utilities layer wins over Deer's own layer: the few utilities that
- * disagree with `.session-row` and `.notes-connect-row` are named here, so
- * the rows keep their old measurements while the matching, the keyboard
- * and the empty state come from the Command component.
- *
- * `[&>svg]:hidden` hides the tick the Command component draws at the end
- * of a row: it belongs to rows that are ticked, and these rows are not.
- */
 const LIST_ROW_CLASS =
   'session-row items-stretch gap-1 rounded-md px-3 py-2.5 cursor-pointer [&>svg]:hidden';
 const CONNECT_ROW_CLASS =
@@ -114,6 +87,12 @@ function fullNoteTime(updatedAt: number): string {
   return new Date(updatedAt).toLocaleString();
 }
 
+/**
+ * The visible chat conversation layered onto Deer's storage. The assistant-ui
+ * runtime owns the live messages; this component mirrors them into localStorage
+ * on every finished turn and drives the header panels (sessions, notes, undo)
+ * around the `<Thread>` it hosts.
+ */
 export default function AIPanel({
   isOpen,
   onClose,
@@ -125,17 +104,22 @@ export default function AIPanel({
   const contentId = getReadingContentId(readingContent);
   // The conversation on screen, identified by the session it belongs to. The
   // messages typed in this panel session are layered on top of it.
-  const [active, setActive] = useState<{ contentId: string; messages: Message[] } | null>(null);
-  const [loadedReadingId, setLoadedReadingId] = useState('');
-  const [session, setSession] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showList, setShowList] = useState(false);
-  const [pendingUndo, setPendingUndo] = useState<StoredSession | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [initial] = useState(() => ({
+    active: { contentId, messages: loadChatHistory(contentId) } as {
+      contentId: string;
+      messages: StoredChatMessage[];
+    },
+    pendingUndo: peekUndo(),
+  }));
+  const [active, setActive] = useState(initial.active);
+  const [visibleMessages, setVisibleMessages] = useState<readonly StoredChatMessage[]>(
+    initial.active.messages,
+  );
+  const [pendingUndo, setPendingUndo] = useState<StoredSession | null>(initial.pendingUndo);
   const sessionsEntryRef = useRef<HTMLButtonElement>(null);
-  // Notes view state: `showNotes` is mutually exclusive with `showList`.
+  // The two side views: the session list and the notes view, mutually
+  // exclusive, layered over the conversation.
+  const [showList, setShowList] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [noteSearch, setNoteSearch] = useState('');
   const [sessionSearch, setSessionSearch] = useState('');
@@ -145,62 +129,57 @@ export default function AIPanel({
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectFilter, setConnectFilter] = useState('');
   const [noteVersion, setNoteVersion] = useState(0);
+  const [linkedHint, setLinkedHint] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   // The pending edit draft lives outside React state: the debounce timer must
   // persist the values typed most recently, not the ones captured by the
   // render that armed it.
-  const [draftController] = useState(() => createDraftController({
-    delayMs: EDIT_DEBOUNCE_MS,
-    persist: (target, patch) => {
-      if (updateNote(target.id, patch)) setNoteVersion((v) => v + 1);
-    },
-  }));
-  const [captureFeedback, setCaptureFeedback] = useState(false);
-  const [capHint, setCapHint] = useState(false);
-  const [quotaHint, setQuotaHint] = useState(false);
-  const [linkedHint, setLinkedHint] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  // Bug #30: the capture entry is driven by the browser's live selection, so
-  // it stays enabled while a selection exists regardless of the 「问 Deer」
-  // conversation flow that consumes its own selectedText copy.
-  const [liveSelection, setLiveSelection] = useState('');
+  const [draftController] = useState(() =>
+    createDraftController({
+      delayMs: EDIT_DEBOUNCE_MS,
+      persist: (target, patch) => {
+        if (updateNote(target.id, patch)) setNoteVersion((v) => v + 1);
+      },
+    }),
+  );
   const notesEntryRef = useRef<HTMLButtonElement>(null);
   const connectEntryRef = useRef<HTMLButtonElement>(null);
   // The command of the ⌘K palette that is waiting to be applied, and the
   // timer that retries it while an answer is running.
   const pendingTargetRef = useRef<CommandTarget | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // The loading state as the command handler sees it: the handler outlives
-  // the render it was created in.
+  // The loading state as the command handler and the header buttons see it:
+  // the runtime manages it, and an inner component reports it up.
   const isLoadingRef = useRef(false);
+  const [isRunning, setIsRunning] = useState(false);
   const timersRef = useRef<{
-    capture?: ReturnType<typeof setTimeout>;
-    capHint?: ReturnType<typeof setTimeout>;
-    quotaHint?: ReturnType<typeof setTimeout>;
     linked?: ReturnType<typeof setTimeout>;
   }>({});
   // S5: the current turn's selection, when the question came from a text
   // selection. The visible prompt keeps its user-facing wording, but the
   // protocol no longer depends on sniffing that wording.
   const selectionRef = useRef<{ active: boolean; text: string }>({ active: false, text: '' });
+  // Switching the reading text reloads the matching session into the live
+  // runtime, so the conversation never belongs to two books at once.
+  const prevContentIdRef = useRef(contentId);
 
-  // Opening the panel (or switching the reading text) derives the visible
-  // conversation and the pending undo entry from storage, so both survive a
-  // refresh. A stored conversation of another text is never overwritten here.
-  if (loadedReadingId !== contentId) {
-    setLoadedReadingId(contentId);
-    setActive({ contentId, messages: loadChatHistory(contentId) });
-    setSession([]);
-    setError(null);
-    setShowList(false);
-    setPendingUndo(peekUndo());
-  }
+  const runtime = useDeerRuntime({
+    config,
+    readingContent,
+    initialMessages: active.messages,
+    getSelectedText: () => (selectionRef.current.active ? selectionRef.current.text : undefined),
+    onTurnComplete: (messages) => {
+      // Persist only once the reply is complete, mirroring the legacy panel's
+      // behavior: a refresh mid-stream restores the conversation without the
+      // half-written message. The conversation keeps the id of the session it
+      // belongs to, so continuing a foreign session appends to that session.
+      setVisibleMessages(messages);
+      saveChatHistory(activeContentId, messages);
+    },
+  });
 
-  const activeContentId = active?.contentId ?? contentId;
-  const activeMessages = useMemo(() => (active ? active.messages : []), [active]);
-  const messages = useMemo(() => [...activeMessages, ...session], [activeMessages, session]);
-  const isForeignSession = activeContentId !== contentId;
+  const activeContentId = active.contentId;
   const undoAvailable = pendingUndo !== null;
-  const clearedNotice = messages.length === 0 && pendingUndo?.contentId === activeContentId;
 
   const allNotes = useMemo(() => {
     void noteVersion;
@@ -212,29 +191,6 @@ export default function AIPanel({
     return openNoteId ? allNotes.find((n) => n.id === openNoteId) ?? null : null;
   }, [allNotes, openNoteId, noteVersion]);
 
-  const selectedTextAvailable = isCaptureAvailable(liveSelection);
-
-  // The command handler of the ⌘K palette outlives the render it was created
-  // in, so it reads the loading state from here.
-  useEffect(() => {
-    isLoadingRef.current = isLoading;
-  }, [isLoading]);
-
-  // Track the browser's live selection so the capture button reflects the
-  // real-time reading-area selection. Asking a question consumes only the
-  // panel's own selectedText prop; it never clears the browser selection and
-  // must not disable capture.
-  useEffect(() => {
-    function syncSelection() {
-      setLiveSelection(getSelectionText());
-    }
-    syncSelection();
-    document.addEventListener('selectionchange', syncSelection);
-    return () => {
-      document.removeEventListener('selectionchange', syncSelection);
-    };
-  }, []);
-
   useEffect(() => {
     const timers = timersRef.current;
     return () => {
@@ -244,10 +200,6 @@ export default function AIPanel({
       draftController.flush();
     };
   }, [draftController]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
 
   // Esc leaves the session list and hands focus back to its entry button.
   useEffect(() => {
@@ -311,10 +263,10 @@ export default function AIPanel({
     };
   }, [connectOpen]);
 
-  // A command from the ⌘K palette: show the picked session, or the picked
-  // note in the notes view. The command is applied from the event itself, so
-  // it never waits for a render to pick it up. A command that arrives while
-  // an answer is running waits for it to end: the conversation on screen must
+  // A command from the ⌘K palette: show the picked session, or the picked note
+  // in the notes view. The command is applied from the event itself, so it
+  // never waits for a render to pick it up. A command that arrives while an
+  // answer is running waits for it to end: the conversation on screen must
   // never belong to two sessions at once.
   useEffect(() => {
     function applyCommand(target: CommandTarget): boolean {
@@ -328,18 +280,17 @@ export default function AIPanel({
         // Switching protects the session from eviction and makes it the current one.
         touchSession(session.contentId);
         setActive({ contentId: session.contentId, messages: session.messages });
-        setSession([]);
-        setError(null);
+        setVisibleMessages(session.messages);
         setShowList(false);
         setShowNotes(false);
         setOpenNoteId(null);
+        runtime.thread.reset(toThreadMessageLikes(session.messages));
         return true;
       }
 
       if (target.kind === 'note') {
         const note = target.id ? listNotes().find((n) => n.id === target.id) : undefined;
         if (!note) return true;
-        setShowList(false);
         setShowNotes(true);
         setNoteSearch('');
         setNoteVersion((v) => v + 1);
@@ -348,7 +299,6 @@ export default function AIPanel({
         setDraftUnderstanding(null);
         setConnectOpen(false);
         setConnectFilter('');
-        setConfirmDelete(false);
         return true;
       }
 
@@ -379,152 +329,87 @@ export default function AIPanel({
       window.removeEventListener(COMMAND_EVENT, onCommand);
       if (retryTimerRef.current !== undefined) clearTimeout(retryTimerRef.current);
     };
-  }, []);
+    // `runtime.thread` is a stable handle; re-registering the listener when it
+    // changes is harmless because the cleanup removes the old one.
+  }, [runtime.thread]);
 
   const stableOnClearSelection = useCallback(() => {
     onClearSelection?.();
   }, [onClearSelection]);
 
-  // When selectedText changes, send it as a message
+  // When selectedText changes, send it as a message.
   useEffect(() => {
     if (selectedText && config && isOpen) {
       selectionRef.current = { active: true, text: selectedText };
-      sendMessage(formatSelectionPrompt(selectedText));
+      sendQuestion(`请解释这段内容：\n\n"${selectedText}"`);
       stableOnClearSelection();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedText, config, isOpen, stableOnClearSelection]);
 
-  async function sendMessage(content: string) {
-    if (!config || isLoading || !content.trim()) return;
+  // Switching the reading text reloads the matching session into the live
+  // runtime. The runtime's seed is read once at construction, so a switch must
+  // drive the change through `reset` rather than props.
+  useEffect(() => {
+    if (prevContentIdRef.current === contentId) return;
+    prevContentIdRef.current = contentId;
+    const restored = loadChatHistory(contentId);
+    setActive({ contentId, messages: restored });
+    setVisibleMessages(restored);
+    setShowList(false);
+    setPendingUndo(peekUndo());
+    runtime.thread.reset(toThreadMessageLikes(restored));
+  }, [contentId, runtime]);
 
-    // The full in-memory conversation; only finished messages reach storage.
-    const allMessages = [
-      ...activeMessages,
-      ...session,
-      { id: Date.now().toString(), role: 'user' as const, content },
-    ];
-    const history = trimHistoryMessages([...activeMessages, ...session]);
-
-    setSession([...session, allMessages[allMessages.length - 1]]);
-    setIsLoading(true);
-    setError(null);
-    setInput('');
-
-    let pendingId: string | null = null;
-    let assistantContent = '';
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          config,
-          messages: history,
-          userInput: content,
-          context: readingContent.slice(0, CONTEXT_LIMITS.maxReadingChars),
-          // S5: the selection travels as an explicit protocol field.
-          selectedText: selectionRef.current.active ? selectionRef.current.text : undefined,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('Empty response body');
-      const decoder = new TextDecoder();
-
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: '',
-      };
-      pendingId = assistantMessage.id;
-
-      setSession((prev) => [...prev, assistantMessage]);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        assistantContent += chunk;
-
-        setSession((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessage.id ? { ...m, content: assistantContent } : m
-          )
-        );
-      }
-
-      // A reply cut short by the network may end mid-character.
-      assistantContent += decoder.decode();
-
-      // Persist only once the reply is complete, so a refresh mid-stream
-      // restores the conversation without the half-written message. A turn
-      // that never received text adds nothing to the stored history. The
-      // conversation keeps the id of the session it belongs to, so continuing
-      // a foreign session appends to that session instead of the open text.
-      const completed = withCompletedTurn(
-        allMessages.slice(0, -1),
-        allMessages[allMessages.length - 1],
-        { ...assistantMessage, content: assistantContent },
-      );
-      setSession(completed.slice(activeMessages.length));
-      saveChatHistory(activeContentId, completed);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-      setSession((prev) =>
-        // Drop an empty assistant placeholder so failures never enter the
-        // multi-turn history the next request is built from.
-        prev.filter((m) => m.id !== pendingId || m.content.trim().length > 0)
-      );
-    } finally {
-      setIsLoading(false);
-    }
+  function sendQuestion(content: string) {
+    if (!config || !content.trim()) return;
+    runtime.thread.composer.setText(content);
+    runtime.thread.composer.send();
   }
 
   function handleSummarizeChapter() {
-    if (!config || isLoading) return;
-    const summaryPrompt = '请总结本章的主要内容（前500字）：';
+    if (!config) return;
     selectionRef.current = { active: false, text: '' };
-    sendMessage(summaryPrompt);
+    sendQuestion(SUMMARIZE_CHAPTER_PROMPT);
   }
 
   function handleClearConversation() {
-    if (isLoading) return;
+    if (isRunning) return;
     const cleared = clearSessionToUndo(activeContentId);
     setPendingUndo(cleared ?? peekUndo());
     setActive({ contentId: activeContentId, messages: [] });
-    setSession([]);
-    setError(null);
+    setVisibleMessages([]);
+    runtime.thread.reset();
   }
 
   function handleRestoreUndo() {
-    if (isLoading) return;
+    if (isRunning) return;
     const restored = restoreUndo();
     if (!restored) return;
     setPendingUndo(peekUndo());
-    setSession([]);
-    setError(null);
+    setVisibleMessages([]);
     setActive({ contentId: restored.contentId, messages: restored.messages });
-    if (restored.contentId === contentId) setLoadedReadingId(contentId);
+    prevContentIdRef.current = restored.contentId;
+    runtime.thread.reset(toThreadMessageLikes(restored.messages));
+  }
+
+  function loadSession(contentId: string) {
+    const session = listSessions().find((s) => s.contentId === contentId);
+    if (!session) return;
+    touchSession(contentId);
+    setActive({ contentId: session.contentId, messages: session.messages });
+    setVisibleMessages(session.messages);
+    setShowList(false);
+    setShowNotes(false);
+    setOpenNoteId(null);
+    runtime.thread.reset(toThreadMessageLikes(session.messages));
   }
 
   function handleSelectSession(target: StoredSession) {
-    if (isLoading) return;
-    // Switching protects the session from eviction and makes it the current one.
-    touchSession(target.contentId);
-    setActive({ contentId: target.contentId, messages: target.messages });
-    setSession([]);
-    setError(null);
-    setShowList(false);
+    loadSession(target.contentId);
   }
 
   function handleToggleSessionList() {
-    if (isLoading) return;
     // The updater must stay pure, so the fresh undo slot is read here in the
     // event handler rather than inside a state updater.
     setPendingUndo(peekUndo());
@@ -537,7 +422,6 @@ export default function AIPanel({
   }
 
   function handleToggleNotes() {
-    if (isLoading) return;
     setShowNotes(!showNotes);
     if (!showNotes) {
       setShowList(false);
@@ -547,41 +431,10 @@ export default function AIPanel({
     }
   }
 
-  function flashHint(set: (v: boolean) => void, key: 'capHint' | 'quotaHint' | 'linked') {
-    set(true);
-    if (timersRef.current[key]) clearTimeout(timersRef.current[key]);
-    timersRef.current[key] = setTimeout(() => set(false), HINT_VISIBLE_MS);
-  }
-
-  function handleCaptureNote() {
-    if (isLoading || !selectedTextAvailable) return;
-    // Capture reads the live selection at click time; it neither consumes nor
-    // clears it, so capturing and asking stay independent actions.
-    const selection = getSelectionText();
-    if (!isCaptureAvailable(selection)) {
-      setLiveSelection(selection);
-      return;
-    }
-    const result = createNote({
-      selection,
-      sourceContentId: contentId,
-      sourceLabel: document.title || '阅读内容',
-    });
-    if (!result.ok) {
-      // The library reports why the capture failed, so the 200-note cap and a
-      // quota write failure get their own hint. The cap hint carries the way
-      // out of the limit; the count it needs is the real one, never a view
-      // dependent one.
-      if (result.reason === 'cap') flashHint(setCapHint, 'capHint');
-      else if (result.reason === 'quota' || result.reason === 'unavailable') {
-        flashHint(setQuotaHint, 'quotaHint');
-      }
-      return;
-    }
-    setCaptureFeedback(true);
-    setNoteVersion((v) => v + 1);
-    if (timersRef.current.capture) clearTimeout(timersRef.current.capture);
-    timersRef.current.capture = setTimeout(() => setCaptureFeedback(false), HINT_VISIBLE_MS);
+  function flashLinked() {
+    setLinkedHint(true);
+    if (timersRef.current.linked) clearTimeout(timersRef.current.linked);
+    timersRef.current.linked = setTimeout(() => setLinkedHint(false), 1500);
   }
 
   function openDetail(id: string) {
@@ -594,9 +447,8 @@ export default function AIPanel({
   }
 
   function flushEdits() {
-    // The controller owns the pending values and the note they belong to, so
-    // a flush always persists what was typed last, whichever render armed the
-    // timer.
+    // The controller owns the pending values and the note they belong to, so a
+    // flush always persists what was typed last, whichever render armed the timer.
     draftController.flush();
     setDraftTitle(null);
     setDraftUnderstanding(null);
@@ -620,7 +472,7 @@ export default function AIPanel({
     if (!detailNote) return;
     if (detailNote.links.includes(peerId)) {
       disconnectNotes(detailNote.id, peerId);
-      flashHint(setLinkedHint, 'linked');
+      flashLinked();
     } else {
       connectNotes(detailNote.id, peerId);
     }
@@ -629,13 +481,6 @@ export default function AIPanel({
 
   function clearNoteSearch() {
     setNoteSearch('');
-  }
-
-  function onFormSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!config || isLoading || showList || showNotes || !input.trim()) return;
-    selectionRef.current = { active: false, text: '' };
-    sendMessage(input);
   }
 
   if (!isOpen) return null;
@@ -652,21 +497,312 @@ export default function AIPanel({
   }
 
   const sessions = showList ? listSessions() : [];
-  const captureLabel = captureFeedback ? '✓ 已收藏' : '🔖 收藏笔记';
-  const captureAria = selectedTextAvailable
-    ? '收藏选中内容为概念笔记'
-    : '收藏笔记（先在阅读区划选文本）';
   const detailPeers = detailNote
     ? detailNote.links
         .map((id) => allNotes.find((n) => n.id === id))
         .filter((n): n is StoredNote => n !== undefined)
     : [];
-  // The candidates of the connection picker. The query is not applied
-  // here: the Command list matches it, with the rule the search used
-  // before it moved onto the component.
-  const connectCandidates = detailNote
-    ? allNotes.filter((n) => n.id !== detailNote.id)
-    : [];
+  // The candidates of the connection picker. The query is not applied here:
+  // the Command list matches it, with the rule the search used before it moved
+  // onto the component.
+  const connectCandidates = detailNote ? allNotes.filter((n) => n.id !== detailNote.id) : [];
+
+  const overlay = showNotes
+    ? detailNote
+      ? renderNoteDetail()
+      : renderNotesList()
+    : showList
+      ? renderSessionList()
+      : null;
+
+  function renderNotesList() {
+    return (
+      <div className="session-list" id={NOTES_LIST_ID}>
+        {/* The list is the view itself: the search filters it in place, so the
+            Command lives inline and the panel keeps its shape. */}
+        <Command className="h-auto! shrink-0 p-0" filter={commandTextFilter} label="搜索概念名或摘录">
+          <CommandInput
+            value={noteSearch}
+            onValueChange={setNoteSearch}
+            placeholder="搜索概念名或摘录"
+            aria-label="搜索概念名或摘录"
+            disabled={isRunning}
+          />
+          <CommandList className="max-h-none">
+            <CommandEmpty>
+              {allNotes.length === 0 ? (
+                <div className="ai-empty-state">
+                  <p>还没有概念笔记。在阅读区划选一段文字，点『🔖 收藏笔记』把重要概念留下来。</p>
+                </div>
+              ) : (
+                <div className="ai-empty-state">
+                  <p>没有匹配「{noteSearch.trim()}」的笔记。</p>
+                  <button className="notes-text-btn" onClick={clearNoteSearch} type="button">
+                    清除搜索
+                  </button>
+                </div>
+              )}
+            </CommandEmpty>
+            <CommandGroup className="p-0">
+              {allNotes.map((n) => (
+                <CommandItem
+                  key={n.id}
+                  value={n.id}
+                  keywords={[n.title, n.excerpt]}
+                  onSelect={() => openDetail(n.id)}
+                  disabled={isRunning}
+                  className={LIST_ROW_CLASS}
+                  title={`${n.title}｜${fullNoteTime(n.updatedAt)}`}
+                  aria-label={`打开笔记「${n.title}」，${fullNoteTime(n.updatedAt)}`}
+                >
+                  <span className="session-title">{n.title}</span>
+                  <span className="notes-muted">{n.excerpt}</span>
+                  <span className="session-meta">
+                    {n.links.length > 0 && <span>🔗 {n.links.length}</span>}
+                    <time dateTime={new Date(n.updatedAt).toISOString()} title={fullNoteTime(n.updatedAt)}>
+                      {formatNoteTime(n.updatedAt)}
+                    </time>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+        <p
+          className="list-footer"
+          style={allNotes.length >= MAX_NOTES - 20 ? { color: 'var(--moss)' } : undefined}
+        >
+          {allNotes.length} / {MAX_NOTES}
+        </p>
+        {wasLastParseCorrupt() && <p className="notes-muted" role="status">笔记数据无法读取，已重置为空</p>}
+      </div>
+    );
+  }
+
+  function renderNoteDetail() {
+    if (!detailNote) return null;
+    return (
+      <div className="notes-detail">
+        <div className="notes-hint">
+          <button
+            className="notes-text-btn"
+            onClick={() => {
+              flushEdits();
+              setOpenNoteId(null);
+              setConnectOpen(false);
+            }}
+            type="button"
+          >
+            ← 返回列表
+          </button>
+          {confirmDelete ? (
+            <span className="notes-muted">
+              <span>删除后相关连接一并移除，确定？</span>
+              <button className="notes-text-btn" onClick={() => handleDeleteNote(detailNote.id)} type="button">
+                删除
+              </button>
+              <button className="notes-text-btn" onClick={() => setConfirmDelete(false)} type="button">
+                取消
+              </button>
+            </span>
+          ) : (
+            <button className="notes-text-btn" onClick={() => setConfirmDelete(true)} type="button">
+              🗑️ 删除
+            </button>
+          )}
+        </div>
+
+        <label className="notes-muted" htmlFor="note-title-input">概念名</label>
+        <input
+          id="note-title-input"
+          className="notes-edit-input"
+          value={draftTitle ?? detailNote.title}
+          onChange={(e) => queueEdit(detailNote, 'title', e.target.value)}
+          onBlur={() => flushEdits()}
+          disabled={isRunning}
+        />
+
+        <label className="notes-muted" htmlFor="note-understanding-input">我的理解</label>
+        <textarea
+          id="note-understanding-input"
+          className="notes-edit-input"
+          style={{ minHeight: 72, resize: 'vertical' }}
+          value={draftUnderstanding ?? detailNote.understanding}
+          placeholder="用自己的话写下对它的理解…"
+          onChange={(e) => queueEdit(detailNote, 'understanding', e.target.value)}
+          onBlur={() => flushEdits()}
+          disabled={isRunning}
+        />
+
+        <p className="notes-muted">摘录</p>
+        <blockquote className="notes-excerpt">{detailNote.excerpt}</blockquote>
+        <p className="notes-muted" title={detailNote.sourceContentId}>来源：{noteSourceTitle(detailNote)}</p>
+
+        <div className="notes-stack">
+          <button
+            ref={connectEntryRef}
+            className="action-btn"
+            onClick={() => setConnectOpen(true)}
+            disabled={isRunning}
+            type="button"
+            aria-haspopup="dialog"
+          >
+            🔗 连接概念
+          </button>
+
+          {linkedHint && <p className="notes-muted" role="status" aria-live="polite">已解除</p>}
+        </div>
+
+        {/* The connection picker is a second layer over the note: it covers the
+            note it belongs to, and it is dismissed on purpose (Esc or the
+            backdrop), so it lives in a dialog and not in the panel. */}
+        <CommandDialog
+          open={connectOpen}
+          onOpenChange={(next) => {
+            setConnectOpen(next);
+            if (!next) setConnectFilter('');
+          }}
+          title="连接概念"
+          description="搜索并选择要连接的概念"
+          className="top-1/4 translate-y-0 sm:max-w-md"
+        >
+          <Command filter={commandTextFilter} label="搜索要连接的概念">
+            <CommandInput
+              value={connectFilter}
+              onValueChange={setConnectFilter}
+              placeholder="搜索要连接的概念…"
+              aria-label="搜索要连接的概念"
+            />
+            <CommandList>
+              <CommandEmpty>
+                <div className="ai-empty-state">
+                  <p>没有可连接的其他概念</p>
+                </div>
+              </CommandEmpty>
+              {/* The group keeps its own padding here: it lives in a dialog, like
+                  the group of the ⌘K palette, so the rows stay lined up with the
+                  search box above them. The inline lists of the panel are flush
+                  instead, and drop it. */}
+              <CommandGroup>
+                {connectCandidates.map((n) => {
+                  const linked = detailNote.links.includes(n.id);
+                  return (
+                    <CommandItem
+                      key={n.id}
+                      value={n.id}
+                      keywords={[n.title, n.excerpt]}
+                      onSelect={() => handleToggleConnect(n.id)}
+                      disabled={isRunning}
+                      className={CONNECT_ROW_CLASS}
+                      aria-label={`${linked ? '解除连接' : '连接'}「${n.title}」`}
+                    >
+                      <span className="session-title">{n.title}</span>
+                      <span className="session-meta">
+                        {linked && <span className="badge-current">已连接 ✓</span>}
+                        <span>{noteSourceTitle(n)}</span>
+                      </span>
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </CommandDialog>
+
+        {detailPeers.length > 0 && (
+          <div className="notes-stack" style={{ gap: 4 }}>
+            <p className="notes-muted">相关概念</p>
+            {detailPeers.map((p) => (
+              <div key={p.id} className="notes-hint">
+                <button
+                  className="notes-text-btn"
+                  style={{ color: 'var(--ink)' }}
+                  onClick={() => {
+                    flushEdits();
+                    openDetail(p.id);
+                  }}
+                  type="button"
+                >
+                  {p.title}
+                </button>
+                <button
+                  className="notes-text-btn"
+                  onClick={() => handleToggleConnect(p.id)}
+                  type="button"
+                  aria-label={`解除与「${p.title}」的连接`}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderSessionList() {
+    return (
+      <div className="session-list" id={SESSION_LIST_ID}>
+        {/* The session list is a view of its own: the search filters it in
+            place, like the search of the notes list. */}
+        <Command className="h-auto! shrink-0 p-0" filter={commandTextFilter} label="搜索历史会话">
+          <CommandInput
+            value={sessionSearch}
+            onValueChange={setSessionSearch}
+            placeholder="搜索历史会话"
+            aria-label="搜索历史会话"
+            disabled={isRunning}
+          />
+          <CommandList className="max-h-none">
+            <CommandEmpty>
+              {sessions.length === 0 ? (
+                <div className="ai-empty-state">
+                  <p>还没有历史会话</p>
+                </div>
+              ) : (
+                <div className="ai-empty-state">
+                  <p>没有匹配「{sessionSearch.trim()}」的会话。</p>
+                  <button className="notes-text-btn" onClick={() => setSessionSearch('')} type="button">
+                    清除搜索
+                  </button>
+                </div>
+              )}
+            </CommandEmpty>
+            <CommandGroup className="p-0">
+              {sessions.map((item) => {
+                const current = item.contentId === activeContentId;
+                const summary = sessionSummary(item.messages);
+                const full = fullSessionSummary(item.messages);
+                return (
+                  <CommandItem
+                    key={item.contentId}
+                    value={item.contentId}
+                    keywords={[summary, full]}
+                    onSelect={() => handleSelectSession(item)}
+                    disabled={isRunning}
+                    className={LIST_ROW_CLASS}
+                    title={`${full}｜${fullSessionTime(item.updatedAt)}`}
+                    aria-label={`打开会话「${full}」，当前会话`}
+                    aria-current={current ? 'true' : undefined}
+                  >
+                    <span className="session-title">{summary}</span>
+                    <span className="session-meta">
+                      {current && <span className="badge-current">当前</span>}
+                      <time dateTime={isoSessionTime(item.updatedAt)} title={fullSessionTime(item.updatedAt)}>
+                        {formatSessionTime(item.updatedAt)}
+                      </time>
+                    </span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+        <p className="list-footer">最多保留 20 个会话，超出自动淘汰最早使用的</p>
+      </div>
+    );
+  }
 
   return (
     <aside className="ai-panel open" role="complementary" aria-label="AI 助手面板">
@@ -680,462 +816,163 @@ export default function AIPanel({
               ? `历史会话 (${sessions.length})`
               : '🦌 AI 助手'}
         </h3>
-        <button
-          className="close-btn"
-          onClick={
-            showNotes
-              ? detailNote
-                ? () => {
-                    flushEdits();
-                    setOpenNoteId(null);
-                    setConnectOpen(false);
-                  }
-                : () => setShowNotes(false)
-              : showList
-                ? () => setShowList(false)
-                : onClose
-          }
-          type="button"
-          aria-label={
-            showNotes
-              ? detailNote
-                ? '返回笔记列表'
-                : '关闭概念笔记列表'
-              : showList
-                ? '关闭历史会话列表'
-                : '关闭 AI 面板'
-          }
-        >
-          ✕
-        </button>
+        <div className="ai-panel-header-actions">
+          {!showNotes && !showList && (
+            <>
+              <button
+                className="icon-btn"
+                onClick={handleToggleNotes}
+                disabled={isRunning}
+                type="button"
+                aria-expanded={showNotes}
+                aria-controls={NOTES_LIST_ID}
+                aria-label="概念笔记"
+                title="概念笔记"
+              >
+                📔
+              </button>
+              <button
+                className="icon-btn"
+                onClick={handleToggleSessionList}
+                disabled={isRunning}
+                type="button"
+                aria-expanded={showList}
+                aria-controls={SESSION_LIST_ID}
+                aria-label="历史会话"
+                title="历史会话"
+              >
+                🗂️
+              </button>
+              <button
+                className="icon-btn"
+                onClick={handleClearConversation}
+                disabled={isRunning || visibleMessages.length === 0}
+                type="button"
+                aria-label="清空对话"
+                title="清空对话"
+              >
+                🗑️
+              </button>
+              {undoAvailable && (
+                <button
+                  className="icon-btn"
+                  onClick={handleRestoreUndo}
+                  disabled={isRunning}
+                  type="button"
+                  aria-label={`撤销上次清空，恢复「${fullSessionSummary(pendingUndo?.messages ?? [])}」`}
+                  title={`撤销恢复：${fullSessionSummary(pendingUndo?.messages ?? [])}`}
+                >
+                  ↩️
+                </button>
+              )}
+            </>
+          )}
+          <button
+            className="close-btn"
+            onClick={
+              showNotes
+                ? detailNote
+                  ? () => {
+                      flushEdits();
+                      setOpenNoteId(null);
+                      setConnectOpen(false);
+                    }
+                  : () => setShowNotes(false)
+                : showList
+                  ? () => setShowList(false)
+                  : onClose
+            }
+            type="button"
+            aria-label={
+              showNotes
+                ? detailNote
+                  ? '返回笔记列表'
+                  : '关闭概念笔记列表'
+                : showList
+                  ? '关闭历史会话列表'
+                  : '关闭 AI 面板'
+            }
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
-      {showNotes && detailNote ? (
-        <div className="notes-detail">
-          <div className="notes-hint">
-            <button
-              className="notes-text-btn"
-              onClick={() => {
-                flushEdits();
-                setOpenNoteId(null);
-                setConnectOpen(false);
+      <div className="ai-panel-body">
+        <div className="ai-chat">
+          <AssistantRuntimeProvider runtime={runtime}>
+            <ChatArea
+              onRunningChange={(running) => {
+                isLoadingRef.current = running;
+                setIsRunning(running);
               }}
-              type="button"
-            >
-              ← 返回列表
-            </button>
-            {confirmDelete ? (
-              <span className="notes-muted">
-                <span>删除后相关连接一并移除，确定？</span>
-                <button className="notes-text-btn" onClick={() => handleDeleteNote(detailNote.id)} type="button">
-                  删除
-                </button>
-                <button className="notes-text-btn" onClick={() => setConfirmDelete(false)} type="button">
-                  取消
-                </button>
-              </span>
-            ) : (
-              <button className="notes-text-btn" onClick={() => setConfirmDelete(true)} type="button">
-                🗑️ 删除
-              </button>
-            )}
-          </div>
-
-          <label className="notes-muted" htmlFor="note-title-input">概念名</label>
-          <input
-            id="note-title-input"
-            className="notes-edit-input"
-            value={draftTitle ?? detailNote.title}
-            onChange={(e) => queueEdit(detailNote, 'title', e.target.value)}
-            onBlur={() => flushEdits()}
-            disabled={isLoading}
-          />
-
-          <label className="notes-muted" htmlFor="note-understanding-input">我的理解</label>
-          <textarea
-            id="note-understanding-input"
-            className="notes-edit-input"
-            style={{ minHeight: 72, resize: 'vertical' }}
-            value={draftUnderstanding ?? detailNote.understanding}
-            placeholder="用自己的话写下对它的理解…"
-            onChange={(e) => queueEdit(detailNote, 'understanding', e.target.value)}
-            onBlur={() => flushEdits()}
-            disabled={isLoading}
-          />
-
-          <p className="notes-muted">摘录</p>
-          <blockquote className="notes-excerpt">{detailNote.excerpt}</blockquote>
-          <p className="notes-muted" title={detailNote.sourceContentId}>来源：{noteSourceTitle(detailNote)}</p>
-
-          <div className="notes-stack">
-            <button
-              ref={connectEntryRef}
-              className="action-btn"
-              onClick={() => setConnectOpen(true)}
-              disabled={isLoading}
-              type="button"
-              aria-haspopup="dialog"
-            >
-              🔗 连接概念
-            </button>
-
-            {linkedHint && (
-              <p className="notes-muted" role="status" aria-live="polite">已解除</p>
-            )}
-          </div>
-
-          {/* The connection picker is a second layer over the note: it covers
-              the note it belongs to, and it is dismissed on purpose (Esc or
-              the backdrop), so it lives in a dialog and not in the panel. */}
-          <CommandDialog
-            open={connectOpen}
-            onOpenChange={(next) => {
-              setConnectOpen(next);
-              if (!next) setConnectFilter('');
-            }}
-            title="连接概念"
-            description="搜索并选择要连接的概念"
-            className="top-1/4 translate-y-0 sm:max-w-md"
-          >
-            <Command filter={commandTextFilter} label="搜索要连接的概念">
-              <CommandInput
-                value={connectFilter}
-                onValueChange={setConnectFilter}
-                placeholder="搜索要连接的概念…"
-                aria-label="搜索要连接的概念"
-              />
-              <CommandList>
-                <CommandEmpty>
-                  <div className="ai-empty-state">
-                    <p>没有可连接的其他概念</p>
-                  </div>
-                </CommandEmpty>
-                {/* The group keeps its own padding here: it lives in a dialog,
-                    like the group of the ⌘K palette, so the rows stay lined
-                    up with the search box above them. The inline lists of
-                    the panel are flush instead, and drop it. */}
-                <CommandGroup>
-                  {connectCandidates.map((n) => {
-                    const linked = detailNote.links.includes(n.id);
-                    return (
-                      <CommandItem
-                        key={n.id}
-                        value={n.id}
-                        keywords={[n.title, n.excerpt]}
-                        onSelect={() => handleToggleConnect(n.id)}
-                        disabled={isLoading}
-                        className={CONNECT_ROW_CLASS}
-                        aria-label={`${linked ? '解除连接' : '连接'}「${n.title}」`}
-                      >
-                        <span className="session-title">{n.title}</span>
-                        <span className="session-meta">
-                          {linked && <span className="badge-current">已连接 ✓</span>}
-                          <span>{noteSourceTitle(n)}</span>
-                        </span>
-                      </CommandItem>
-                    );
-                  })}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </CommandDialog>
-
-          {detailPeers.length > 0 && (
-            <div className="notes-stack" style={{ gap: 4 }}>
-              <p className="notes-muted">相关概念</p>
-              {detailPeers.map((p) => (
-                <div key={p.id} className="notes-hint">
-                  <button
-                    className="notes-text-btn"
-                    style={{ color: 'var(--ink)' }}
-                    onClick={() => {
-                      flushEdits();
-                      openDetail(p.id);
-                    }}
-                    type="button"
-                  >
-                    {p.title}
-                  </button>
-                  <button
-                    className="notes-text-btn"
-                    onClick={() => handleToggleConnect(p.id)}
-                    type="button"
-                    aria-label={`解除与「${p.title}」的连接`}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : showNotes ? (
-        <div className="session-list" id={NOTES_LIST_ID}>
-          {/* The list is the view itself: the search filters it in place,
-              so the Command lives inline and the panel keeps its shape. */}
-          <Command
-            className="h-auto! shrink-0 p-0"
-            filter={commandTextFilter}
-            label="搜索概念名或摘录"
-          >
-            <CommandInput
-              value={noteSearch}
-              onValueChange={setNoteSearch}
-              placeholder="搜索概念名或摘录"
-              aria-label="搜索概念名或摘录"
-              disabled={isLoading}
+              onSummarize={handleSummarizeChapter}
             />
-            <CommandList className="max-h-none">
-              <CommandEmpty>
-                {allNotes.length === 0 ? (
-                  <div className="ai-empty-state">
-                    <p>还没有概念笔记。在阅读区划选一段文字，点『🔖 收藏笔记』把重要概念留下来。</p>
-                  </div>
-                ) : (
-                  <div className="ai-empty-state">
-                    <p>没有匹配「{noteSearch.trim()}」的笔记。</p>
-                    <button className="notes-text-btn" onClick={clearNoteSearch} type="button">清除搜索</button>
-                  </div>
-                )}
-              </CommandEmpty>
-              <CommandGroup className="p-0">
-                {allNotes.map((n) => (
-                  <CommandItem
-                    key={n.id}
-                    value={n.id}
-                    keywords={[n.title, n.excerpt]}
-                    onSelect={() => openDetail(n.id)}
-                    disabled={isLoading}
-                    className={LIST_ROW_CLASS}
-                    title={`${n.title}｜${fullNoteTime(n.updatedAt)}`}
-                    aria-label={`打开笔记「${n.title}」，${fullNoteTime(n.updatedAt)}`}
-                  >
-                    <span className="session-title">{n.title}</span>
-                    <span className="notes-muted">{n.excerpt}</span>
-                    <span className="session-meta">
-                      {n.links.length > 0 && <span>🔗 {n.links.length}</span>}
-                      <time dateTime={new Date(n.updatedAt).toISOString()} title={fullNoteTime(n.updatedAt)}>
-                        {formatNoteTime(n.updatedAt)}
-                      </time>
-                    </span>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-          <p
-            className="list-footer"
-            style={allNotes.length >= MAX_NOTES - 20 ? { color: 'var(--moss)' } : undefined}
-          >
-            {allNotes.length} / {MAX_NOTES}
-          </p>
-          {wasLastParseCorrupt() && (
-            <p className="notes-muted" role="status">笔记数据无法读取，已重置为空</p>
-          )}
+          </AssistantRuntimeProvider>
         </div>
-      ) : showList ? (
-        <div className="session-list" id={SESSION_LIST_ID}>
-          {/* The session list is a view of its own: the search filters it
-              in place, like the search of the notes list. */}
-          <Command
-            className="h-auto! shrink-0 p-0"
-            filter={commandTextFilter}
-            label="搜索历史会话"
-          >
-            <CommandInput
-              value={sessionSearch}
-              onValueChange={setSessionSearch}
-              placeholder="搜索历史会话"
-              aria-label="搜索历史会话"
-              disabled={isLoading}
-            />
-            <CommandList className="max-h-none">
-              <CommandEmpty>
-                {sessions.length === 0 ? (
-                  <div className="ai-empty-state">
-                    <p>还没有历史会话</p>
-                  </div>
-                ) : (
-                  <div className="ai-empty-state">
-                    <p>没有匹配「{sessionSearch.trim()}」的会话。</p>
-                    <button className="notes-text-btn" onClick={() => setSessionSearch('')} type="button">清除搜索</button>
-                  </div>
-                )}
-              </CommandEmpty>
-              <CommandGroup className="p-0">
-                {sessions.map((item) => {
-                  const current = item.contentId === activeContentId;
-                  const summary = sessionSummary(item.messages);
-                  const full = fullSessionSummary(item.messages);
-                  return (
-                    <CommandItem
-                      key={item.contentId}
-                      value={item.contentId}
-                      keywords={[summary, full]}
-                      onSelect={() => handleSelectSession(item)}
-                      disabled={isLoading}
-                      className={LIST_ROW_CLASS}
-                      title={`${full}｜${fullSessionTime(item.updatedAt)}`}
-                      aria-label={`打开会话「${full}」，${fullSessionTime(item.updatedAt)}${current ? '，当前会话' : ''}`}
-                      aria-current={current ? 'true' : undefined}
-                    >
-                      <span className="session-title">{summary}</span>
-                      <span className="session-meta">
-                        {current && <span className="badge-current">当前</span>}
-                        <time dateTime={isoSessionTime(item.updatedAt)} title={fullSessionTime(item.updatedAt)}>
-                          {formatSessionTime(item.updatedAt)}
-                        </time>
-                      </span>
-                    </CommandItem>
-                  );
-                })}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-          <p className="list-footer">最多保留 20 个会话，超出自动淘汰最早使用的</p>
-        </div>
-      ) : (
-        <>
-          <div className="ai-panel-actions">
+
+        {overlay && <div className="ai-overlay">{overlay}</div>}
+      </div>
+    </aside>
+  );
+}
+
+/**
+ * Hosts the assistant-ui `<Thread>` inside the runtime provider and reports the
+ * run state upward so the header buttons can disable themselves while a reply
+ * streams. The `<Thread>` stays mounted under the list/notes overlays so an
+ * in-flight answer is never aborted by opening them.
+ */
+function ChatArea({
+  onRunningChange,
+  onSummarize,
+}: {
+  onRunningChange: (running: boolean) => void;
+  onSummarize: () => void;
+}) {
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  useEffect(() => {
+    onRunningChange(isRunning);
+  }, [isRunning, onRunningChange]);
+
+  // The preset sits just above the composer, where a reader decides what to
+  // ask next, rather than in the panel header.
+  const composerHeader = useMemo(
+    () =>
+      function ComposerHeader() {
+        return (
+          <div className="ai-composer-head">
             <button
-              className="action-btn"
-              onClick={handleSummarizeChapter}
-              disabled={isLoading}
+              className="action-btn summarize-btn"
+              onClick={onSummarize}
+              disabled={isRunning}
               type="button"
             >
               📝 总结本章
             </button>
-            <button
-              className="action-btn"
-              onClick={handleCaptureNote}
-              disabled={isLoading || !selectedTextAvailable}
-              aria-disabled={!selectedTextAvailable}
-              type="button"
-              aria-label={captureAria}
-            >
-              {captureLabel}
-            </button>
-            <button
-              className="action-btn"
-              onClick={handleClearConversation}
-              disabled={isLoading || messages.length === 0}
-              type="button"
-              aria-label="清空对话"
-            >
-              🗑️ 清空
-            </button>
-            <button
-              ref={notesEntryRef}
-              className="action-btn"
-              onClick={handleToggleNotes}
-              disabled={isLoading}
-              type="button"
-              aria-expanded={showNotes}
-              aria-controls={NOTES_LIST_ID}
-            >
-              📔 概念笔记
-            </button>
-            <button
-              className="action-btn"
-              onClick={handleToggleSessionList}
-              disabled={isLoading}
-              type="button"
-              aria-expanded={showList}
-              aria-controls={SESSION_LIST_ID}
-            >
-              🗂️ 历史会话
-            </button>
-            {undoAvailable && (
-              <button
-                className="action-btn"
-                onClick={handleRestoreUndo}
-                disabled={isLoading}
-                type="button"
-                aria-label={`撤销上次清空，恢复「${fullSessionSummary(pendingUndo?.messages ?? [])}」`}
-              >
-                {undoButtonLabel(pendingUndo?.messages ?? [])}
-              </button>
-            )}
-            {quotaHint && (
-              <p className="notes-hint" role="status" aria-live="polite">
-                收藏失败，笔记未保存
-              </p>
-            )}
-            {capHint && (
-              <p className="notes-hint" role="status" aria-live="polite">
-                已达 {MAX_NOTES} 条上限，删除一些笔记后才能继续收藏
-                <button
-                  className="notes-text-btn"
-                  onClick={() => {
-                    setShowList(false);
-                    setShowNotes(true);
-                    setNoteVersion((v) => v + 1);
-                  }}
-                  type="button"
-                >
-                  打开笔记面板
-                </button>
-              </p>
-            )}
           </div>
+        );
+      },
+    [isRunning, onSummarize],
+  );
 
-          <MessageScrollerProvider>
-            <MessageScroller className="ai-messages flex-1">
-              <MessageScrollerViewport>
-                <MessageScrollerContent className="gap-3 p-5">
-                  {isForeignSession && (
-                    <p className="ai-hint">此会话来自另一段阅读内容</p>
-                  )}
-                  {messages.length === 0 && (
-                    <div className="ai-empty-state">
-                      <p>{clearedNotice ? '对话已清空，可点「撤销恢复」找回' : '选中文本或输入问题，开始与 Deer 对话'}</p>
-                    </div>
-                  )}
-                  {clearedNotice && (
-                    <p className="ai-hint" role="status" aria-live="polite">
-                      对话已清空，可点「撤销恢复」找回
-                    </p>
-                  )}
-                  {messages.map((m) => (
-                    <MessageScrollerItem key={m.id} messageId={m.id} scrollAnchor={m.role === 'user'}>
-                      <Message align={m.role === 'user' ? 'end' : 'start'}>
-                        <MessageContent>
-                          <MessageHeader className="px-0">{m.role === 'user' ? '你' : 'Deer'}</MessageHeader>
-                          <Bubble variant={m.role === 'user' ? 'default' : 'muted'} align={m.role === 'user' ? 'end' : 'start'}>
-                            <BubbleContent>
-                              {m.content || (isLoading ? '正在思考…' : '')}
-                            </BubbleContent>
-                          </Bubble>
-                        </MessageContent>
-                      </Message>
-                    </MessageScrollerItem>
-                  ))}
-                  {error && (
-                    <div className="ai-error">
-                      <p>出错了：{error}</p>
-                    </div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </MessageScrollerContent>
-              </MessageScrollerViewport>
-            </MessageScroller>
-          </MessageScrollerProvider>
+  return (
+    <Thread
+      components={{
+        Welcome: ChatWelcome,
+        ComposerHeader: composerHeader,
+      }}
+    />
+  );
+}
 
-          <form className="ai-input-form" onSubmit={onFormSubmit}>
-            <Input
-              className="ai-input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="输入问题…"
-              disabled={isLoading || showList}
-              aria-label="AI 对话输入框"
-            />
-            <Button className="ai-send-btn" type="submit" disabled={isLoading || showList || !input.trim()}>
-              发送
-            </Button>
-          </form>
-        </>
-      )}
-    </aside>
+/** Welcome screen shown when the conversation is empty. */
+function ChatWelcome() {
+  return (
+    <div className="aui-thread-welcome-root mb-6 flex flex-col px-2">
+      <p className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-medium tracking-tight duration-200">
+        🦌 有什么可以帮你？
+      </p>
+    </div>
   );
 }
