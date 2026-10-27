@@ -10,7 +10,7 @@ import {
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
-import { type FC, memo, useMemo, useRef } from "react";
+import { type FC, memo, useMemo, useState } from "react";
 import type { TextMessagePartProps } from "@assistant-ui/react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
@@ -23,20 +23,24 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
   componentsByLanguage?: MarkdownTextPrimitiveProps["componentsByLanguage"];
 };
 
+const shallowEqualRecords = (
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown> | undefined,
+): boolean => {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  if (Object.keys(a).length !== Object.keys(b).length) return false;
+  return Object.keys(a).every((key) => a[key] === b[key]);
+};
+
+/* 浅比较持稳对象引用。用渲染期 setState（React 认可的 adjust-state-during-render
+   模式）替代 latest-ref，避免渲染期读写 ref。 */
 const useShallowStable = <T extends Record<string, unknown> | undefined>(
   value: T,
 ): T => {
-  const ref = useRef(value);
-  if (value !== ref.current) {
-    const prev = ref.current;
-    const stable =
-      value !== undefined &&
-      prev !== undefined &&
-      Object.keys(prev).length === Object.keys(value).length &&
-      Object.keys(value).every((key) => prev[key] === value[key]);
-    if (!stable) ref.current = value;
-  }
-  return ref.current;
+  const [stable, setStable] = useState(value);
+  if (!shallowEqualRecords(stable, value)) setStable(value);
+  return stable;
 };
 
 const MarkdownTextImpl: FC<MarkdownTextProps> = ({

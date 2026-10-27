@@ -11,25 +11,73 @@
   :root,
   [data-theme='light'] {
     color-scheme: light;
-    --paper: #fbf8f1;
-    --ink: #2c2a25;
-    --moss: #5d7455;
-    --sand: #e9e2d3;
-    --input-bg: #fffdf8;
-    --hover-bg: #f5f0e6;
+    /* 琥珀金 token（design-handoff/tokens.md v2.1，任务 0 回填） */
+    --primary: #d97706;
+    --primary-deep: #b45309;
+    --primary-light: #fbefdd;
+    --primary-hover: #c26a05;
+    --primary-active: #a85e04;
+    --bg: #faf7f2;
+    --surface: #ffffff;
+    --text: #292524;
+    --text-2: #78716c;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --error: #dc2626;
+    /* 圆角分层 */
+    --radius-control: 8px;
+    --radius-card: 12px;
+    --radius-overlay: 16px;
+    --radius-menu: 10px;
+    /* 动效分层 */
+    --dur-micro: 150ms;
+    --dur-overlay: 200ms;
+    --ease-in: cubic-bezier(0.2, 0, 0, 1);
+    --ease-out: cubic-bezier(0.4, 0, 1, 1);
+    --dur-shimmer: 1.5s;
+    --dur-cursor: 600ms;
+    /* 旧变量名保留为别名，取值已换琥珀金 */
+    --paper: #faf7f2;
+    --ink: #292524;
+    --moss: #d97706;
+    --sand: #e7e0d6;
+    --input-bg: #ffffff;
+    --hover-bg: #f4f1ea;
   }
 
   [data-theme='dark'] {
     color-scheme: dark;
-    --paper: #1a1a1a;
-    --ink: #e8e6e1;
-    --moss: #8fa886;
-    --sand: #3a3a3a;
-    --input-bg: #2a2a2a;
-    --hover-bg: #333333;
+    --primary: #f59e0b;
+    --primary-deep: #f59e0b; /* 暗色下正文级主色文字也用提亮档，对比 ≥4.5:1 */
+    --primary-light: #3a2a12;
+    --primary-hover: #fbbf24;
+    --primary-active: #d97706;
+    --bg: #1c1917;
+    --surface: #292524;
+    --text: #e7e5e4;
+    --text-2: #a8a29e;
+    --danger: #dc2626;
+    --danger-bg: #4a1c1c;
+    --error: #dc2626;
+    --radius-control: 8px;
+    --radius-card: 12px;
+    --radius-overlay: 16px;
+    --radius-menu: 10px;
+    --dur-micro: 150ms;
+    --dur-overlay: 200ms;
+    --ease-in: cubic-bezier(0.2, 0, 0, 1);
+    --ease-out: cubic-bezier(0.4, 0, 1, 1);
+    --dur-shimmer: 1.5s;
+    --dur-cursor: 600ms;
+    --paper: #1c1917;
+    --ink: #e7e5e4;
+    --moss: #f59e0b;
+    --sand: #44403c;
+    --input-bg: #292524;
+    --hover-bg: #292524;
   }
 
-  * {
+    * {
     box-sizing: border-box;
   }
 
@@ -42,8 +90,7 @@
   body {
     background: var(--paper);
     color: var(--ink);
-    font-family:
-      'Iowan Old Style', 'Songti SC', 'Noto Serif SC', Georgia, serif;
+    font-family: var(--font-sans);
     line-height: 1.7;
     text-rendering: optimizeLegibility;
     transition: background 0.3s ease, color 0.3s ease;
@@ -89,7 +136,7 @@
   .cta {
     background: var(--moss);
     border-radius: 999px;
-    color: #fffdf8;
+    color: #ffffff;
     display: inline-block;
     font-size: 0.95rem;
     padding: 12px 26px;
@@ -101,7 +148,7 @@
 
   .cta:hover,
   .cta:focus-visible {
-    background: #4a5f44;
+    background: var(--primary-hover);
   }
 
   .cta:focus-visible {
@@ -255,6 +302,11 @@
     padding: 48px 24px;
     max-width: 720px;
     margin: 0 auto;
+  }
+
+  .text-content,
+  .markdown-content {
+    font-family: 'Iowan Old Style', 'Songti SC', 'Noto Serif SC', Georgia, serif;
   }
 
   .text-content p,
@@ -629,11 +681,11 @@
 
   .save-btn {
     background: var(--moss);
-    color: #fffdf8;
+    color: #ffffff;
   }
 
   .save-btn:hover:not(:disabled) {
-    background: #4a5f44;
+    background: var(--primary-hover);
   }
 
   .test-btn:disabled,
@@ -645,7 +697,7 @@
   .ai-config-btn {
     margin-top: 16px;
     background: var(--moss);
-    color: #fffdf8;
+    color: #ffffff;
     border: none;
     border-radius: 8px;
     padding: 10px 20px;
@@ -655,7 +707,7 @@
   }
 
   .ai-config-btn:hover {
-    background: #4a5f44;
+    background: var(--primary-hover);
   }
 
   /* AI Panel - Full implementation */
@@ -1003,7 +1055,7 @@
 
   .ai-send-btn {
     background: var(--moss);
-    color: #fffdf8;
+    color: #ffffff;
     border: none;
     border-radius: 8px;
     padding: 10px 16px;
@@ -1013,7 +1065,7 @@
   }
 
   .ai-send-btn:hover:not(:disabled) {
-    background: #4a5f44;
+    background: var(--primary-hover);
   }
 
   .ai-send-btn:disabled {
@@ -1029,7 +1081,7 @@
 
   .ask-deer-btn {
     background: var(--moss);
-    color: #fffdf8;
+    color: #ffffff;
     border: none;
     border-radius: 20px;
     padding: 8px 16px;
@@ -1041,7 +1093,7 @@
   }
 
   .ask-deer-btn:hover {
-    background: #4a5f44;
+    background: var(--primary-hover);
     transform: scale(1.05);
   }
 
@@ -1087,7 +1139,7 @@
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
+    'Source Sans Pro', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -1165,72 +1217,72 @@
  * from here on, so a component can rely on them directly.
  */
 :root {
-  --background: #fbf8f1;
-  --foreground: #2c2a25;
-  --card: #fffdf8;
-  --card-foreground: #2c2a25;
-  --popover: #fffdf8;
-  --popover-foreground: #2c2a25;
-  --primary: #5d7455;
-  --primary-foreground: #fffdf8;
-  --secondary: #f5f0e6;
-  --secondary-foreground: #2c2a25;
-  --muted: #f5f0e6;
-  --muted-foreground: #6f6a5f;
-  --accent: #f5f0e6;
-  --accent-foreground: #2c2a25;
-  --destructive: #a8402f;
-  --border: #d9d3c7;
-  --input: #d9d3c7;
-  --ring: #5d7455;
-  --chart-1: #8fa886;
-  --chart-2: #6f6a5f;
-  --chart-3: #5d7455;
-  --chart-4: #d9d3c7;
-  --chart-5: #e9e2d3;
+  --background: #faf7f2;
+  --foreground: #292524;
+  --card: #ffffff;
+  --card-foreground: #292524;
+  --popover: #ffffff;
+  --popover-foreground: #292524;
+  --primary: #d97706;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f1ea;
+  --secondary-foreground: #292524;
+  --muted: #f4f1ea;
+  --muted-foreground: #78716c;
+  --accent: #f4f1ea;
+  --accent-foreground: #292524;
+  --destructive: #dc2626;
+  --border: #e7e0d6;
+  --input: #e7e0d6;
+  --ring: #d97706;
+  --chart-1: #f59e0b;
+  --chart-2: #b45309;
+  --chart-3: #f59e0b;
+  --chart-4: #e7e0d6;
+  --chart-5: #fbefdd;
   --radius: 0.625rem;
-  --sidebar: #f5f0e6;
-  --sidebar-foreground: #2c2a25;
-  --sidebar-primary: #5d7455;
-  --sidebar-primary-foreground: #fffdf8;
-  --sidebar-accent: #e9e2d3;
-  --sidebar-accent-foreground: #2c2a25;
-  --sidebar-border: #d9d3c7;
-  --sidebar-ring: #5d7455;
+  --sidebar: #faf7f2;
+  --sidebar-foreground: #292524;
+  --sidebar-primary: #d97706;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f4f1ea;
+  --sidebar-accent-foreground: #292524;
+  --sidebar-border: #e7e0d6;
+  --sidebar-ring: #d97706;
 }
 
 [data-theme='dark'] {
-  --background: #1a1a1a;
-  --foreground: #e8e6e1;
-  --card: #242424;
-  --card-foreground: #e8e6e1;
-  --popover: #242424;
-  --popover-foreground: #e8e6e1;
-  --primary: #8fa886;
-  --primary-foreground: #1a1a1a;
-  --secondary: #333333;
-  --secondary-foreground: #e8e6e1;
-  --muted: #333333;
+  --background: #1c1917;
+  --foreground: #e7e5e4;
+  --card: #292524;
+  --card-foreground: #e7e5e4;
+  --popover: #292524;
+  --popover-foreground: #e7e5e4;
+  --primary: #f59e0b;
+  --primary-foreground: #1c1917;
+  --secondary: #292524;
+  --secondary-foreground: #e7e5e4;
+  --muted: #292524;
   --muted-foreground: #a8a29e;
-  --accent: #333333;
-  --accent-foreground: #e8e6e1;
-  --destructive: #d4705c;
-  --border: #404040;
-  --input: #404040;
-  --ring: #8fa886;
-  --chart-1: #8fa886;
+  --accent: #292524;
+  --accent-foreground: #e7e5e4;
+  --destructive: #dc2626;
+  --border: #44403c;
+  --input: #44403c;
+  --ring: #f59e0b;
+  --chart-1: #f59e0b;
   --chart-2: #a8a29e;
-  --chart-3: #5d7455;
-  --chart-4: #404040;
-  --chart-5: #3a3a3a;
-  --sidebar: #333333;
-  --sidebar-foreground: #e8e6e1;
-  --sidebar-primary: #8fa886;
-  --sidebar-primary-foreground: #1a1a1a;
-  --sidebar-accent: #3a3a3a;
-  --sidebar-accent-foreground: #e8e6e1;
-  --sidebar-border: #404040;
-  --sidebar-ring: #8fa886;
+  --chart-3: #f59e0b;
+  --chart-4: #44403c;
+  --chart-5: #292524;
+  --sidebar: #292524;
+  --sidebar-foreground: #e7e5e4;
+  --sidebar-primary: #f59e0b;
+  --sidebar-primary-foreground: #1c1917;
+  --sidebar-accent: #292524;
+  --sidebar-accent-foreground: #e7e5e4;
+  --sidebar-border: #44403c;
+  --sidebar-ring: #f59e0b;
 }
 
 @layer base {
