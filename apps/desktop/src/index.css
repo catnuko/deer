@@ -39,97 +39,75 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  /* 品牌色（只用于大字、图标、图形，不用于正文） */
-  --color-brand: var(--brand);
-  /* 圆角层级：控件 8 / 卡片 12 / 弹层 16 / 菜单 10 */
-  --radius-card: 12px;
-  --radius-popover: 16px;
-  --default-transition-duration: 150ms;
 }
 
-/* 琥珀金 v2.1（docs/design-handoff/tokens.md）· Light */
 :root {
-  --radius: 10px; /* 菜单/气泡 */
-  --brand: #d97706; /* 主色：只用于大字、图标、图形 */
-  --brand-deep: #b45309; /* 白字按钮底、强调文字（5.0:1） */
-  --brand-light: #fbefdd; /* 选中底色、封面占位、引用高亮 */
-  --brand-hover: #c26a05;
-  --brand-active: #a85e04;
-
-  --background: #faf7f2;
-  --foreground: #292524;
-  --card: #ffffff;
-  --card-foreground: #292524;
-  --popover: #ffffff;
-  --popover-foreground: #292524;
-  --primary: #b45309;
-  --primary-foreground: #ffffff;
-  --secondary: #fbefdd;
-  --secondary-foreground: #292524;
-  --muted: #f1ebe2;
-  --muted-foreground: #78716c;
-  --accent: #fbefdd;
-  --accent-foreground: #292524;
-  --destructive: #dc2626;
-  --destructive-foreground: #ffffff;
-  --border: #e7e0d6;
-  --input: #e7e0d6;
-  --ring: #d97706;
-  --chart-1: #d97706;
-  --chart-2: #b45309;
-  --chart-3: #78716c;
-  --chart-4: #f59e0b;
-  --chart-5: #fbefdd;
-  --sidebar: #faf7f2;
-  --sidebar-foreground: #292524;
-  --sidebar-primary: #b45309;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #fbefdd;
-  --sidebar-accent-foreground: #292524;
-  --sidebar-border: #e7e0d6;
-  --sidebar-ring: #d97706;
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* 琥珀金 v2.1 · Dark */
 .dark {
-  --brand: #f59e0b;
-  --brand-deep: #f59e0b;
-  --brand-light: #3a3025;
-  --brand-hover: #fbbf24;
-  --brand-active: #d97706;
-
-  --background: #1c1917;
-  --foreground: #e7e5e4;
-  --card: #292524;
-  --card-foreground: #e7e5e4;
-  --popover: #292524;
-  --popover-foreground: #e7e5e4;
-  --primary: #f59e0b;
-  --primary-foreground: #1c1917;
-  --secondary: #332e2a;
-  --secondary-foreground: #e7e5e4;
-  --muted: #332e2a;
-  --muted-foreground: #a8a29e;
-  --accent: #3a3025;
-  --accent-foreground: #e7e5e4;
-  --destructive: #ef4444;
-  --destructive-foreground: #1c1917;
-  --border: #44403c;
-  --input: #44403c;
-  --ring: #f59e0b;
-  --chart-1: #f59e0b;
-  --chart-2: #d97706;
-  --chart-3: #a8a29e;
-  --chart-4: #fbbf24;
-  --chart-5: #3a3025;
-  --sidebar: #1c1917;
-  --sidebar-foreground: #e7e5e4;
-  --sidebar-primary: #f59e0b;
-  --sidebar-primary-foreground: #1c1917;
-  --sidebar-accent: #332e2a;
-  --sidebar-accent-foreground: #e7e5e4;
-  --sidebar-border: #44403c;
-  --sidebar-ring: #f59e0b;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
 }
 
 @layer base {
@@ -138,19 +116,5 @@
   }
   body {
     @apply bg-background text-foreground;
-  }
-}
-
-/* 常规过渡（100–250ms），不使用旧版主题动效 */
-@layer base {
-  a,
-  button,
-  [role="button"],
-  input,
-  textarea,
-  select {
-    transition-property: color, background-color, border-color, opacity, box-shadow;
-    transition-duration: 150ms;
-    transition-timing-function: ease-out;
   }
 }

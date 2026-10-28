@@ -15,7 +15,7 @@ export function AiPanelSlot({ className }: { className?: string }) {
       )}
     >
       <div className="border-border flex h-10 items-center gap-2 border-b px-4">
-        <Sparkles className="text-brand size-3.5" />
+        <Sparkles className="text-primary size-3.5" />
         <span className="text-xs font-medium">AI 伴读</span>
         <Badge variant="outline" className="ml-auto">
           预留
