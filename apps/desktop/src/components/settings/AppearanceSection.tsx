@@ -9,7 +9,11 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { SettingRow } from "@/components/settings/SettingRow";
 import { useReadingSettings } from "@/store/readingSettings";
-import type { ReadingTheme } from "@/lib/theme";
+import {
+  resolveTheme,
+  systemPrefersDark,
+  type ReadingTheme,
+} from "@/lib/theme";
 
 const THEME_LABELS: Record<"light" | "dark", string> = {
   light: "浅色",
@@ -21,7 +25,8 @@ export function AppearanceSection() {
   const setTheme = useReadingSettings((state) => state.setTheme);
 
   const followSystem = theme === "system";
-  const currentTheme: "light" | "dark" = theme === "dark" ? "dark" : "light";
+  // 跟随系统时显示实际生效的明暗，关掉开关就从当前观感继续。
+  const currentTheme = resolveTheme(theme, systemPrefersDark());
 
   return (
     <div className="max-w-xl">
