@@ -24,13 +24,14 @@ export type BookStoreExtras = {
 
 export type BookStore = BookStoreState & BookStoreExtras;
 
-let persistedStore: Store | null = null;
+let persistedStorePromise: Promise<Store> | null = null;
 
 async function getPersistedStore(): Promise<Store> {
-  persistedStore ??= await loadPersistedStore(LIBRARY_FILE, {
+  // 用 Promise 记忆化：StrictMode 下 load() 会跑两次，避免创建两个实例互相覆盖。
+  persistedStorePromise ??= loadPersistedStore(LIBRARY_FILE, {
     autoSave: false,
   });
-  return persistedStore;
+  return persistedStorePromise;
 }
 
 type AppDirs = { root: string; books: string; covers: string };
