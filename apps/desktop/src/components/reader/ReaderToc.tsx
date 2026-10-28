@@ -2,10 +2,15 @@ import { List } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import type { DemoChapter } from "@/routes/reader/demoBook";
+
+/** 目录条目最小形状：演示书章节与真实 EPUB 目录都能满足。 */
+export type ReaderTocEntry = {
+  index: number;
+  title: string;
+};
 
 type ReaderTocProps = {
-  chapters: DemoChapter[];
+  chapters: ReaderTocEntry[];
   currentIndex: number;
   onSelect: (index: number) => void;
   className?: string;

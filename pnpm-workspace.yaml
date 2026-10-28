@@ -2,6 +2,8 @@ packages:
   - 'apps/*'
 
 allowBuilds:
+  core-js: set this to true or false
+  es5-ext: set this to true or false
   unrs-resolver: true
 
 minimumReleaseAgeExclude:
