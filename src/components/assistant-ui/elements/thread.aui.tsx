@@ -50,6 +50,7 @@ import {
   AudioLinesIcon,
   CheckIcon,
   ChevronLeftIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
@@ -58,6 +59,7 @@ import {
   PencilIcon,
   PhoneIcon,
   RefreshCwIcon,
+  SearchIcon,
   SquareIcon,
   PlayIcon,
   ThumbsDownIcon,
@@ -67,7 +69,9 @@ import {
   createContext,
   useContext,
   useLayoutEffect,
+  useMemo,
   useRef,
+  useState,
   type ComponentType,
   type FC,
   type PropsWithChildren,
@@ -77,6 +81,91 @@ export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
 
 const shouldShowComposerResume = (s: AssistantState) =>
   !!s.thread.canResume && s.composer.type === "thread" && s.composer.isEmpty;
+
+/** Hostname without the `www.` prefix, for the 「🔍 来源」 rows' site column. */
+function sourceSiteName(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+interface DeerSourceEntry {
+  id: string;
+  title: string;
+  url?: string;
+}
+
+/**
+ * 「🔍 来源」折叠条（§4.4 占位样式规范）：消息携带来源（source parts）时在
+ * 消息底部折叠列出「站点名 + 链接标题」。真实搜索接入后直接使用；没有来源
+ * 的消息不渲染。列表按来源在消息中首次出现的顺序编号，与正文 [1][2] 角标
+ * 的 CSS counter 顺序一致。
+ */
+const DeerSourcesFooter: FC = () => {
+  const content = useAuiState((s) => s.message.content);
+  const [open, setOpen] = useState(false);
+
+  const sources = useMemo(() => {
+    const seen = new Set<string>();
+    const list: DeerSourceEntry[] = [];
+    for (const part of content) {
+      if (part.type !== "source" || seen.has(part.id)) continue;
+      seen.add(part.id);
+      list.push({
+        id: part.id,
+        title: part.title || (part.sourceType === "url" ? part.url : "来源文档"),
+        url: part.sourceType === "url" ? part.url : undefined,
+      });
+    }
+    return list;
+  }, [content]);
+
+  if (sources.length === 0) return null;
+
+  return (
+    <div className="aui-sources-footer" data-open={open}>
+      <button
+        type="button"
+        className="aui-sources-trigger"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <SearchIcon aria-hidden className="size-3.5" />
+        <span>来源 · {sources.length} 个</span>
+        <span className="badge-placeholder">占位</span>
+        <ChevronDownIcon aria-hidden className="size-3.5 aui-sources-chevron" />
+      </button>
+      {open && (
+        <ol className="aui-sources-list">
+          {sources.map((source, index) => (
+            <li key={source.id} className="aui-sources-row">
+              <span className="aui-sources-index" aria-hidden>
+                [{index + 1}]
+              </span>
+              {source.url ? (
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="aui-sources-link"
+                >
+                  <span className="aui-sources-site">{sourceSiteName(source.url)}</span>
+                  <span className="aui-sources-title">{source.title}</span>
+                </a>
+              ) : (
+                <span className="aui-sources-link">
+                  <span className="aui-sources-title">{source.title}</span>
+                </span>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+};
 
 const reasoningDuration = (timing: ThreadGroupPart["timing"]) =>
   timing?.completedAt === undefined
@@ -566,6 +655,8 @@ const AssistantMessage: FC = () => {
   // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`;
 
+  const isRunning = useAuiState((s) => s.message.status?.type === "running");
+
   return (
     <MessagePrimitive.Root
       data-slot="aui_assistant-message-root"
@@ -684,8 +775,13 @@ const AssistantMessage: FC = () => {
             }
           }}
         </MessagePrimitive.GroupedParts>
+        {/* 流式光标（设计档 msg 尺寸 2×16px，600ms steps 闪烁）：回复结束随
+            操作条一起淡出。 */}
+        {isRunning && <span data-slot="aui_stream_cursor" className="stream-cursor" aria-hidden />}
         <MessageError />
       </div>
+
+      <DeerSourcesFooter />
 
       <div
         data-slot="aui_assistant-message-footer"
@@ -752,6 +848,63 @@ const UserFilePart: FileMessagePartComponent = (part) => (
   </div>
 );
 
+/**
+ * 当前书籍的标题，由宿主（AIPanel）通过 `DeerBookProvider` 提供，用于引用
+ * 上下文卡的来源行「《书名》· 来源」。没有宿主时缺省为空，卡片仍可渲染。
+ */
+const DeerBookContext = createContext<string | undefined>(undefined);
+
+export function DeerBookProvider({
+  bookTitle,
+  children,
+}: PropsWithChildren<{ bookTitle: string | undefined }>) {
+  return <DeerBookContext.Provider value={bookTitle}>{children}</DeerBookContext.Provider>;
+}
+
+const SELECTION_PROMPT_PREFIX = "请解释这段内容：";
+
+/**
+ * 划选提问的消息把选中文本带在正文里（「请解释这段内容：\n\n"…"」）。渲染
+ * 时拆开：选中文本上升为引用上下文卡（左侧 3px 主色竖条 + 浅暖灰底），只
+ * 显示前两行，点「点击展开全文」展开；其余文字照常作为消息正文。
+ */
+const UserSelectionText: TextMessagePartComponent = ({ text }) => {
+  const bookTitle = useContext(DeerBookContext);
+  const [expanded, setExpanded] = useState(false);
+  const match = text.startsWith(SELECTION_PROMPT_PREFIX)
+    ? text.slice(SELECTION_PROMPT_PREFIX.length).trim().match(/^"([\s\S]*?)"\s*$/)
+    : null;
+
+  if (!match) {
+    return <p className="m-0 wrap-break-word">{text}</p>;
+  }
+
+  const quoted = match[1];
+  const lines = quoted.split("\n");
+  const collapsed = lines.length <= 2 && quoted.length <= 80;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="msg-quote-card" data-expanded={expanded || collapsed}>
+        <p className="msg-quote-text">{expanded || collapsed ? quoted : `${lines.slice(0, 2).join("\n")}…`}</p>
+        <div className="msg-quote-meta">
+          <span className="msg-quote-source">{bookTitle ? `《${bookTitle}》· 选中文本` : "选中文本"}</span>
+          {!collapsed && (
+            <button
+              type="button"
+              className="msg-quote-expand"
+              onClick={() => setExpanded((value) => !value)}
+            >
+              {expanded ? "收起" : "点击展开全文"}
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="m-0 wrap-break-word">{SELECTION_PROMPT_PREFIX}</p>
+    </div>
+  );
+};
+
 const UserImagePart: ImageMessagePartComponent = (part) => (
   <div data-slot="aui_user-message-image" className="py-1">
     <Image {...part} />
@@ -770,7 +923,11 @@ const UserMessage: FC = () => {
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer bg-muted text-foreground rounded-(--composer-radius) px-4 py-2 wrap-break-word empty:hidden">
           <MessagePrimitive.Parts
-            components={{ File: UserFilePart, Image: UserImagePart }}
+            components={{
+              File: UserFilePart,
+              Image: UserImagePart,
+              Text: UserSelectionText,
+            }}
           />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
