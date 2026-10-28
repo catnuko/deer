@@ -8,9 +8,23 @@ export interface StoredChatMessage {
 
 export interface StoredSession {
   contentId: string;
+  /**
+   * 书籍独立空间标识（P0，catnuko 2026-10-28 拍板）。每本书的会话只落进
+   * 自己的空间；空字符串是留给历史数据的「无归属」档位。
+   */
+  bookId: string;
   messages: StoredChatMessage[];
   updatedAt: number;
 }
+
+/**
+ * 旧数据兼容归档策略：`deer-chat-sessions` 里没有 `bookId` 的条目（本字段
+ * 引入之前写入的会话）一律归档为 `LEGACY_BOOK_ID`（空字符串）。它们**不会**
+ * 出现在任何书籍空间的会话列表里——真实书籍标识永远非空，所以按书过滤天然
+ * 把它们挡在外面；数据本身保留在存储中，只随 LRU 淘汰自然清出，不做破坏性
+ * 迁移。面板在未传 `bookId` 时以阅读文本指纹作为空间标识，行为与旧版一致。
+ */
+export const LEGACY_BOOK_ID = '';
 
 export const LEGACY_CHAT_STORAGE_KEY = 'deer-chat-history';
 export const SESSIONS_STORAGE_KEY = 'deer-chat-sessions';
@@ -120,7 +134,17 @@ function toSession(value: unknown): StoredSession | null {
   const updatedAt = typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
     ? record.updatedAt
     : 0;
-  return { contentId: record.contentId, messages, updatedAt };
+  const bookId = typeof record.bookId === 'string' ? record.bookId : LEGACY_BOOK_ID;
+  return { contentId: record.contentId, bookId, messages, updatedAt };
+}
+
+/**
+ * 会话匹配在「文本指纹 + 书籍空间」上：给出 `bookId` 时只认该书空间里的
+ * 会话，旧档位（`LEGACY_BOOK_ID`）与别的书都匹配不上；不传 `bookId` 保持
+ * 旧调用方的全局语义。
+ */
+function sameSpace(session: StoredSession, bookId: string | undefined): boolean {
+  return bookId === undefined || session.bookId === bookId;
 }
 
 /**
@@ -197,7 +221,11 @@ export function migrateLegacyHistory(): boolean {
     // copy is older, so the existing one wins and only the old key is removed.
     return true;
   }
-  sessions.push({ ...legacy, updatedAt: legacy.updatedAt > 0 ? legacy.updatedAt : Date.now() });
+  sessions.push({
+    ...legacy,
+    bookId: legacy.bookId || LEGACY_BOOK_ID,
+    updatedAt: legacy.updatedAt > 0 ? legacy.updatedAt : Date.now(),
+  });
   writeSessions(keepNewest(sortAscending(sessions)));
   return true;
 }
@@ -210,61 +238,77 @@ function ensureMigration(): void {
  * Persist the conversation of one reading text without touching the others:
  * the session is upserted, capped, and the list is trimmed to the newest
  * `MAX_STORED_SESSIONS` entries by `updatedAt`.
+ *
+ * `bookId` tags the session into one book's independent space; when given, the
+ * upsert only replaces a session of the same text *in the same space*, so two
+ * books that happen to share a text fingerprint never overwrite each other.
  */
-export function saveChatHistory(contentId: string, messages: readonly StoredChatMessage[]): void {
+export function saveChatHistory(
+  contentId: string,
+  messages: readonly StoredChatMessage[],
+  bookId: string = LEGACY_BOOK_ID,
+): void {
   if (!hasLocalStorage()) return;
   ensureMigration();
 
   const sanitized = sanitizeStoredMessages(messages);
   const others = parseSessions(readItem(SESSIONS_STORAGE_KEY))
-    .filter((s) => s.contentId !== contentId);
+    .filter((s) => !(s.contentId === contentId && s.bookId === bookId));
   if (sanitized.length === 0) {
     writeSessions(others);
     return;
   }
   // The written session goes last so it is the newest when timestamps collide.
-  writeSessions(keepNewest(sortAscending([...others, { contentId, messages: sanitized, updatedAt: Date.now() }])));
+  writeSessions(
+    keepNewest(sortAscending([...others, { contentId, bookId, messages: sanitized, updatedAt: Date.now() }])),
+  );
 }
 
 /**
- * Restore the conversation that belongs to the given reading text. Any other
- * session is left in place, and an unknown or corrupt id yields an empty
- * session instead of an error.
+ * Restore the conversation that belongs to the given reading text. When
+ * `bookId` is given, only a session inside that book's space matches — the
+ * conversation of another book (or a legacy unattributed one) is never
+ * returned. Any other session is left in place, and an unknown or corrupt id
+ * yields an empty session instead of an error.
  */
-export function loadChatHistory(contentId: string): StoredChatMessage[] {
+export function loadChatHistory(contentId: string, bookId?: string): StoredChatMessage[] {
   if (!hasLocalStorage()) return [];
   ensureMigration();
 
-  const session = parseSessions(readItem(SESSIONS_STORAGE_KEY)).find((s) => s.contentId === contentId);
+  const session = parseSessions(readItem(SESSIONS_STORAGE_KEY))
+    .find((s) => s.contentId === contentId && sameSpace(s, bookId));
   return session ? session.messages : [];
 }
 
 /**
  * List the stored sessions with messages, newest activity first, for the
- * 「历史会话」 view.
+ * 「历史会话」 view. With `bookId`, only that book's sessions come back —
+ * the list of one book's space can never contain another book's session, and
+ * legacy unattributed entries stay archived out of every book's list.
  */
-export function listSessions(): StoredSession[] {
+export function listSessions(bookId?: string): StoredSession[] {
   if (!hasLocalStorage()) return [];
   ensureMigration();
 
   return sortAscending(parseSessions(readItem(SESSIONS_STORAGE_KEY)))
-    .filter((s) => s.messages.length > 0)
+    .filter((s) => s.messages.length > 0 && sameSpace(s, bookId))
     .reverse();
 }
 
 /**
  * Mark a session as most recently used, keeping its messages. Used when the
  * reader switches to a session, so viewing it protects it from eviction.
+ * With `bookId`, only a session of that space is touched.
  */
-export function touchSession(contentId: string): void {
+export function touchSession(contentId: string, bookId?: string): void {
   if (!hasLocalStorage()) return;
   ensureMigration();
 
   const sessions = parseSessions(readItem(SESSIONS_STORAGE_KEY));
-  const target = sessions.find((s) => s.contentId === contentId);
+  const target = sessions.find((s) => s.contentId === contentId && sameSpace(s, bookId));
   if (!target) return;
   const touched: StoredSession = { ...target, updatedAt: Date.now() };
-  const others = sessions.filter((s) => s.contentId !== contentId);
+  const others = sessions.filter((s) => s !== target);
   writeSessions(keepNewest(sortAscending([...others, touched])));
 }
 
@@ -291,23 +335,25 @@ function readUndo(): StoredSession | null {
  * and the session only leaves the list once that write succeeded, so a failed
  * slot write degrades to "the clear did not happen" instead of losing the
  * conversation; a later clear replaces the slot, which is the documented
- * one-step undo.
+ * one-step undo. With `bookId`, only a session of that space is cleared, so a
+ * book's conversation can never be wiped from inside another book's space.
  */
-export function clearSessionToUndo(contentId: string): StoredSession | null {
+export function clearSessionToUndo(contentId: string, bookId?: string): StoredSession | null {
   if (!hasLocalStorage()) return null;
   ensureMigration();
 
   const sessions = parseSessions(readItem(SESSIONS_STORAGE_KEY));
-  const target = sessions.find((s) => s.contentId === contentId);
+  const target = sessions.find((s) => s.contentId === contentId && sameSpace(s, bookId));
   if (!target) return null;
 
   const cleared: StoredSession = {
     contentId: target.contentId,
+    bookId: target.bookId,
     messages: target.messages,
     updatedAt: target.updatedAt > 0 ? target.updatedAt : Date.now(),
   };
   if (!writeItem(UNDO_STORAGE_KEY, JSON.stringify(cleared))) return null;
-  writeSessions(sessions.filter((s) => s.contentId !== contentId));
+  writeSessions(sessions.filter((s) => !(s.contentId === contentId && s.bookId === target.bookId)));
   return cleared;
 }
 
@@ -330,8 +376,10 @@ export function restoreUndo(): StoredSession | null {
   if (!hasLocalStorage()) return null;
 
   const restored: StoredSession = { ...pending, updatedAt: Date.now() };
+  // The restore replaces the cleared session inside its own space only; the
+  // same text fingerprint in another book's space is left untouched.
   const sessions = sortAscending(parseSessions(readItem(SESSIONS_STORAGE_KEY)))
-    .filter((s) => s.contentId !== pending.contentId);
+    .filter((s) => !(s.contentId === pending.contentId && s.bookId === pending.bookId));
   sessions.push(restored);
   if (!writeSessions(keepNewest(sessions))) return null;
   removeItem(UNDO_STORAGE_KEY);

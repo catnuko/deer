@@ -1,11 +1,13 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
-import { useAuiState, AssistantRuntimeProvider } from '@assistant-ui/react';
+import { useAui, useAuiState, AssistantRuntimeProvider, type AssistantRuntime } from '@assistant-ui/react';
+import { GlobeIcon } from 'lucide-react';
 import { type AIModelConfig, getStoredConfig } from '@/src/lib/ai-config';
 import {
   clearSessionToUndo,
   getReadingContentId,
+  LEGACY_BOOK_ID,
   listSessions,
   loadChatHistory,
   peekUndo,
@@ -14,6 +16,7 @@ import {
   touchSession,
   type StoredSession,
 } from '@/src/lib/chat-storage';
+import { pickLatestSpaceSession } from '@/src/lib/book-space';
 import {
   formatSessionTime,
   fullSessionSummary,
@@ -43,10 +46,9 @@ import {
   CommandItem,
   CommandList,
 } from '@/src/components/ui/command';
-import { Thread } from '@/src/components/assistant-ui/elements/thread.aui';
+import { Thread, DeerBookProvider } from '@/src/components/assistant-ui/elements/thread.aui';
 import {
   SUMMARIZE_CHAPTER_PROMPT,
-  toThreadMessageLikes,
   useDeerRuntime,
   type StoredChatMessage,
 } from '@/src/lib/deer-runtime';
@@ -57,6 +59,14 @@ interface AIPanelProps {
   readingContent: string;
   selectedText?: string;
   onClearSelection?: () => void;
+  /**
+   * 书籍独立空间（P0）：当前书籍的标识。传入后面板的会话保存、恢复与
+   * 「历史会话」列表都只在该书的空间里进行；不传时退回旧版行为（每个
+   * 阅读文本一个会话位）。阅读页接入时务必传书架里的稳定书籍 id。
+   */
+  bookId?: string;
+  /** 当前书籍的标题，用于面板头的空间标识「《书名》· AI 伴读」。 */
+  bookTitle?: string;
 }
 
 const SESSION_LIST_ID = 'ai-session-list';
@@ -99,18 +109,37 @@ export default function AIPanel({
   readingContent,
   selectedText,
   onClearSelection,
+  bookId,
+  bookTitle,
 }: AIPanelProps) {
   const [config] = useState<AIModelConfig | null>(() => getStoredConfig());
   const contentId = getReadingContentId(readingContent);
   // The conversation on screen, identified by the session it belongs to. The
-  // messages typed in this panel session are layered on top of it.
-  const [initial] = useState(() => ({
-    active: { contentId, messages: loadChatHistory(contentId) } as {
-      contentId: string;
-      messages: StoredChatMessage[];
-    },
-    pendingUndo: peekUndo(),
-  }));
+  // messages typed in this panel session are layered on top of it. Inside a
+  // book's space the initial session is that book's most recently active one
+  // (a fresh space starts empty); without a bookId the legacy per-text slot
+  // applies.
+  const [initial] = useState(() => {
+    if (bookId) {
+      const latest = pickLatestSpaceSession(listSessions(bookId), bookId);
+      if (latest) {
+        return {
+          active: { contentId: latest.contentId, messages: latest.messages } as {
+            contentId: string;
+            messages: StoredChatMessage[];
+          },
+          pendingUndo: peekUndo(),
+        };
+      }
+    }
+    return {
+      active: { contentId, messages: loadChatHistory(contentId, bookId) } as {
+        contentId: string;
+        messages: StoredChatMessage[];
+      },
+      pendingUndo: peekUndo(),
+    };
+  });
   const [active, setActive] = useState(initial.active);
   const [visibleMessages, setVisibleMessages] = useState<readonly StoredChatMessage[]>(
     initial.active.messages,
@@ -162,24 +191,24 @@ export default function AIPanel({
   // Switching the reading text reloads the matching session into the live
   // runtime, so the conversation never belongs to two books at once.
   const prevContentIdRef = useRef(contentId);
-
-  const runtime = useDeerRuntime({
-    config,
-    readingContent,
-    initialMessages: active.messages,
-    getSelectedText: () => (selectionRef.current.active ? selectionRef.current.text : undefined),
-    onTurnComplete: (messages) => {
-      // Persist only once the reply is complete, mirroring the legacy panel's
-      // behavior: a refresh mid-stream restores the conversation without the
-      // half-written message. The conversation keeps the id of the session it
-      // belongs to, so continuing a foreign session appends to that session.
-      setVisibleMessages(messages);
-      saveChatHistory(activeContentId, messages);
-    },
-  });
+  const prevSpaceRef = useRef(bookId);
 
   const activeContentId = active.contentId;
-  const undoAvailable = pendingUndo !== null;
+  // The live runtime lives inside the keyed <DeerRuntimeScope> below; the
+  // panel reaches it imperatively through this ref. Restoring a conversation
+  // is a remount with a fresh seed (the scope's key), NOT `thread.reset()`:
+  // the AI SDK runtime's reset converts restored messages through the
+  // external-store round trip and loses them on the way back into the AI SDK
+  // chat, leaving the conversation on screen empty.
+  const runtimeRef = useRef<AssistantRuntime | null>(null);
+  // Bumped on every conversation identity change (book switch, session pick,
+  // clear, undo restore) so the scope remounts and reseeds from storage.
+  const [threadEpoch, setThreadEpoch] = useState(0);
+  // 撤销档属于某个空间：只有当被清空的会话与当前空间同书（或同为旧档位）
+  // 时才给出撤销入口，别书的撤销档不会出现在本书的面板里。
+  const undoAvailable =
+    pendingUndo !== null &&
+    (bookId ? pendingUndo.bookId === bookId : pendingUndo.bookId === LEGACY_BOOK_ID);
 
   const allNotes = useMemo(() => {
     void noteVersion;
@@ -274,17 +303,17 @@ export default function AIPanel({
 
       if (target.kind === 'session') {
         const session = target.id
-          ? listSessions().find((s) => s.contentId === target.id)
+          ? listSessions(bookId).find((s) => s.contentId === target.id)
           : undefined;
         if (!session) return true;
         // Switching protects the session from eviction and makes it the current one.
-        touchSession(session.contentId);
+        touchSession(session.contentId, bookId);
         setActive({ contentId: session.contentId, messages: session.messages });
         setVisibleMessages(session.messages);
+        setThreadEpoch((epoch) => epoch + 1);
         setShowList(false);
         setShowNotes(false);
         setOpenNoteId(null);
-        runtime.thread.reset(toThreadMessageLikes(session.messages));
         return true;
       }
 
@@ -329,9 +358,9 @@ export default function AIPanel({
       window.removeEventListener(COMMAND_EVENT, onCommand);
       if (retryTimerRef.current !== undefined) clearTimeout(retryTimerRef.current);
     };
-    // `runtime.thread` is a stable handle; re-registering the listener when it
-    // changes is harmless because the cleanup removes the old one.
-  }, [runtime.thread]);
+    // applyCommand works on panel state and storage only, so the listener is
+    // registered once for the panel's lifetime.
+  }, []);
 
   const stableOnClearSelection = useCallback(() => {
     onClearSelection?.();
@@ -347,22 +376,37 @@ export default function AIPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedText, config, isOpen, stableOnClearSelection]);
 
-  // Switching the reading text reloads the matching session into the live
-  // runtime. The runtime's seed is read once at construction, so a switch must
-  // drive the change through `reset` rather than props.
+  // 切书自动切换（P0，无弹窗无确认）：书籍标识或阅读文本变化时，把目标书
+  // 空间里最近活跃的会话装进面板；该书还没有会话就呈现空会话。空间里的
+  // 会话列表、当前会话和建议一起换，各书的会话互不可见。恢复走 scope 的
+  // 重挂载种子（threadEpoch），不是 thread.reset()。
   useEffect(() => {
-    if (prevContentIdRef.current === contentId) return;
+    if (prevSpaceRef.current === bookId && prevContentIdRef.current === contentId) return;
+    const bookChanged = prevSpaceRef.current !== bookId;
+    prevSpaceRef.current = bookId;
     prevContentIdRef.current = contentId;
-    const restored = loadChatHistory(contentId);
-    setActive({ contentId, messages: restored });
+    let restored: StoredChatMessage[] = [];
+    let sessionContentId = contentId;
+    if (bookId) {
+      const latest = pickLatestSpaceSession(listSessions(bookId), bookId);
+      if (latest) {
+        sessionContentId = latest.contentId;
+        restored = loadChatHistory(latest.contentId, bookId);
+      }
+    } else if (!bookChanged) {
+      restored = loadChatHistory(contentId);
+    }
+    setActive({ contentId: sessionContentId, messages: restored });
     setVisibleMessages(restored);
+    setThreadEpoch((epoch) => epoch + 1);
     setShowList(false);
     setPendingUndo(peekUndo());
-    runtime.thread.reset(toThreadMessageLikes(restored));
-  }, [contentId, runtime]);
+  }, [bookId, contentId]);
 
   function sendQuestion(content: string) {
     if (!config || !content.trim()) return;
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
     runtime.thread.composer.setText(content);
     runtime.thread.composer.send();
   }
@@ -375,34 +419,39 @@ export default function AIPanel({
 
   function handleClearConversation() {
     if (isRunning) return;
-    const cleared = clearSessionToUndo(activeContentId);
+    const cleared = clearSessionToUndo(activeContentId, bookId);
     setPendingUndo(cleared ?? peekUndo());
     setActive({ contentId: activeContentId, messages: [] });
     setVisibleMessages([]);
-    runtime.thread.reset();
+    setThreadEpoch((epoch) => epoch + 1);
   }
 
   function handleRestoreUndo() {
     if (isRunning) return;
     const restored = restoreUndo();
     if (!restored) return;
+    // 撤销档只恢复属于本书空间的会话；别书的会话留在档里不动。
+    if (bookId && restored.bookId !== bookId) {
+      setPendingUndo(peekUndo());
+      return;
+    }
     setPendingUndo(peekUndo());
     setVisibleMessages([]);
     setActive({ contentId: restored.contentId, messages: restored.messages });
     prevContentIdRef.current = restored.contentId;
-    runtime.thread.reset(toThreadMessageLikes(restored.messages));
+    setThreadEpoch((epoch) => epoch + 1);
   }
 
-  function loadSession(contentId: string) {
-    const session = listSessions().find((s) => s.contentId === contentId);
+  function loadSession(targetContentId: string) {
+    const session = listSessions(bookId).find((s) => s.contentId === targetContentId);
     if (!session) return;
-    touchSession(contentId);
+    touchSession(targetContentId, bookId);
     setActive({ contentId: session.contentId, messages: session.messages });
     setVisibleMessages(session.messages);
+    setThreadEpoch((epoch) => epoch + 1);
     setShowList(false);
     setShowNotes(false);
     setOpenNoteId(null);
-    runtime.thread.reset(toThreadMessageLikes(session.messages));
   }
 
   function handleSelectSession(target: StoredSession) {
@@ -496,7 +545,7 @@ export default function AIPanel({
     );
   }
 
-  const sessions = showList ? listSessions() : [];
+  const sessions = showList ? listSessions(bookId) : [];
   const detailPeers = detailNote
     ? detailNote.links
         .map((id) => allNotes.find((n) => n.id === id))
@@ -744,6 +793,12 @@ export default function AIPanel({
   function renderSessionList() {
     return (
       <div className="session-list" id={SESSION_LIST_ID}>
+        {/* 空间标识（P0）：这一层列表只属于当前书，顶部一行小字说明归属。 */}
+        {bookTitle && (
+          <p className="session-space-label" aria-label={`当前空间：${bookTitle}的会话`}>
+            《{bookTitle}》的会话
+          </p>
+        )}
         {/* The session list is a view of its own: the search filters it in
             place, like the search of the notes list. */}
         <Command className="h-auto! shrink-0 p-0" filter={commandTextFilter} label="搜索历史会话">
@@ -758,7 +813,7 @@ export default function AIPanel({
             <CommandEmpty>
               {sessions.length === 0 ? (
                 <div className="ai-empty-state">
-                  <p>还没有历史会话</p>
+                  <p>{bookTitle ? '这本书还没有会话' : '还没有历史会话'}</p>
                 </div>
               ) : (
                 <div className="ai-empty-state">
@@ -814,7 +869,9 @@ export default function AIPanel({
               : `概念笔记 (${allNotes.length}/${MAX_NOTES})`
             : showList
               ? `历史会话 (${sessions.length})`
-              : '🦌 AI 助手'}
+              : bookTitle
+                ? `《${bookTitle}》· AI 伴读`
+                : '🦌 AI 助手'}
         </h3>
         <div className="ai-panel-header-actions">
           {!showNotes && !showList && (
@@ -900,20 +957,85 @@ export default function AIPanel({
 
       <div className="ai-panel-body">
         <div className="ai-chat">
-          <AssistantRuntimeProvider runtime={runtime}>
-            <ChatArea
-              onRunningChange={(running) => {
-                isLoadingRef.current = running;
-                setIsRunning(running);
-              }}
-              onSummarize={handleSummarizeChapter}
-            />
-          </AssistantRuntimeProvider>
+          <DeerRuntimeScope
+            key={`${bookId ?? ''}:${threadEpoch}`}
+            config={config}
+            readingContent={readingContent}
+            initialMessages={active.messages}
+            bookTitle={bookTitle}
+            getSelectedText={() => (selectionRef.current.active ? selectionRef.current.text : undefined)}
+            onTurnComplete={(messages) => {
+              // Persist only once the reply is complete, mirroring the legacy panel's
+              // behavior: a refresh mid-stream restores the conversation without the
+              // half-written message. The conversation keeps the id of the session it
+              // belongs to, so continuing a foreign session appends to that session,
+              // and the turn lands in this book's space.
+              setVisibleMessages(messages);
+              saveChatHistory(activeContentId, messages, bookId);
+            }}
+            onRuntimeReady={(runtime) => {
+              runtimeRef.current = runtime;
+            }}
+            onRunningChange={(running) => {
+              isLoadingRef.current = running;
+              setIsRunning(running);
+            }}
+            onSummarize={handleSummarizeChapter}
+          />
         </div>
 
         {overlay && <div className="ai-overlay">{overlay}</div>}
       </div>
     </aside>
+  );
+}
+
+/**
+ * Hosts the assistant-ui runtime and `<Thread>` for one conversation identity.
+ * The key from the host ties the scope to the active session: switching books
+ * or sessions remounts this component, which is how a conversation is
+ * restored — the runtime seeds from `initialMessages` at construction, the
+ * one channel the AI SDK runtime keeps intact (see the note on runtimeRef).
+ */
+function DeerRuntimeScope({
+  config,
+  readingContent,
+  initialMessages,
+  bookTitle,
+  getSelectedText,
+  onTurnComplete,
+  onRuntimeReady,
+  onRunningChange,
+  onSummarize,
+}: {
+  config: AIModelConfig | null;
+  readingContent: string;
+  initialMessages: readonly StoredChatMessage[];
+  bookTitle: string | undefined;
+  getSelectedText: () => string | undefined;
+  onTurnComplete: (messages: readonly StoredChatMessage[]) => void;
+  onRuntimeReady: (runtime: AssistantRuntime) => void;
+  onRunningChange: (running: boolean) => void;
+  onSummarize: () => void;
+}) {
+  const runtime = useDeerRuntime({
+    config,
+    readingContent,
+    initialMessages,
+    getSelectedText,
+    onTurnComplete,
+  });
+
+  useEffect(() => {
+    onRuntimeReady(runtime);
+  }, [runtime, onRuntimeReady]);
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <DeerBookProvider bookTitle={bookTitle}>
+        <ChatArea onRunningChange={onRunningChange} onSummarize={onSummarize} />
+      </DeerBookProvider>
+    </AssistantRuntimeProvider>
   );
 }
 
@@ -961,18 +1083,66 @@ function ChatArea({
       components={{
         Welcome: ChatWelcome,
         ComposerHeader: composerHeader,
+        ComposerExtra: DeerComposerTools,
       }}
     />
   );
 }
 
+/**
+ * 空态建议 chips（§4.7）：没有会话内容时给出可直接发送的话题。点击即以该
+ * 话题发起提问。
+ */
+const SUGGESTION_CHIPS: { label: string; prompt: string }[] = [
+  { label: '总结本章', prompt: SUMMARIZE_CHAPTER_PROMPT },
+  { label: '这段在讲什么', prompt: '这段在讲什么？' },
+  { label: '作者的核心论点', prompt: '作者的核心论点是什么？' },
+];
+
 /** Welcome screen shown when the conversation is empty. */
 function ChatWelcome() {
+  const aui = useAui();
   return (
-    <div className="aui-thread-welcome-root mb-6 flex flex-col px-2">
+    <div className="aui-thread-welcome-root mb-6 flex flex-col gap-3 px-2">
       <p className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-medium tracking-tight duration-200">
         🦌 有什么可以帮你？
       </p>
+      <p className="text-muted-foreground text-sm">
+        你可以选中正文任意文字直接提问，或从下面选一个话题
+      </p>
+      <div className="flex flex-wrap gap-2" role="list" aria-label="建议话题">
+        {SUGGESTION_CHIPS.map((chip) => (
+          <button
+            key={chip.label}
+            type="button"
+            role="listitem"
+            className="suggestion-chip"
+            onClick={() => {
+              aui.thread.composer().setText(chip.prompt);
+              aui.thread.composer().send();
+            }}
+          >
+            {chip.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Composer 左下工具行（§4.5）：「🌐 联网搜索」只保留位置，置灰禁用并挂
+ * 「占位」badge 与 tooltip——真实搜索等接口接入后再启用；旁边是键盘 hint。
+ */
+function DeerComposerTools() {
+  return (
+    <div className="deer-composer-tools">
+      <span className="deer-net-search" aria-disabled="true" title="搜索接口待接入">
+        <GlobeIcon className="size-3.5" aria-hidden />
+        联网搜索
+        <span className="badge-placeholder">占位</span>
+      </span>
+      <span className="deer-composer-hint">Enter 发送 · Shift+Enter 换行</span>
     </div>
   );
 }

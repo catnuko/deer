@@ -101,7 +101,8 @@ describe('chat-storage - saveChatHistory (multi slot)', () => {
       expect(raw).not.toContain(forbidden);
     }
     const sessions = rawSessions();
-    expect(Object.keys(sessions[0]).sort().join(',')).toBe('contentId,messages,updatedAt');
+    // bookId 是书籍独立空间（P0）批准的契约字段，非模型配置数据。
+    expect(Object.keys(sessions[0]).sort().join(',')).toBe('bookId,contentId,messages,updatedAt');
     expect(
       sessions[0].messages.every((m) => Object.keys(m).sort().join(',') === 'content,id,role'),
     ).toBe(true);
@@ -428,7 +429,8 @@ describe('chat-storage - clearSessionToUndo and restoreUndo', () => {
       expect(raw).not.toContain(forbidden);
     }
     const parsed = JSON.parse(raw) as { contentId: string; messages: Record<string, unknown>[] };
-    expect(Object.keys(parsed).sort().join(',')).toBe('contentId,messages,updatedAt');
+    // bookId 是书籍独立空间（P0）批准的契约字段，非模型配置数据。
+    expect(Object.keys(parsed).sort().join(',')).toBe('bookId,contentId,messages,updatedAt');
     expect(Object.keys(parsed.messages[0]).sort().join(',')).toBe('content,id,role');
   });
 
