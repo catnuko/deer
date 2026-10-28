@@ -1134,6 +1134,77 @@
     white-space: nowrap;
   }
 
+  /* lane-a */
+  .deer-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .deer-shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.55),
+      transparent
+    );
+    animation: deer-shimmer var(--dur-shimmer, 1.5s) infinite;
+  }
+
+  [data-theme='dark'] .deer-shimmer::after {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.12),
+      transparent
+    );
+  }
+
+  @keyframes deer-shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  /* 排版弹层滑杆（components-inspect：20px 圆形 thumb + 主色描边） */
+  .deer-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--sand);
+    outline: none;
+  }
+
+  .deer-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid var(--primary);
+    cursor: pointer;
+  }
+
+  .deer-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid var(--primary);
+    cursor: pointer;
+  }
+
+  .floating-toolbar .floating-toolbar-hint {
+    color: #fff;
+    background: #111827;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
 }
 
 @theme inline {
