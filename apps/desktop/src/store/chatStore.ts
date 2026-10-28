@@ -13,6 +13,8 @@ export type ChatStoreState = {
   activeThreadByBook: Record<string, string>;
   /** messageId -> 用户给过的反馈（仅本地）。 */
   feedback: Record<string, ChatFeedback>;
+  /** bookId -> 该书当前会话对应的 ACP session id（本地 claude 续接上下文用）。 */
+  claudeSessionByBook: Record<string, string>;
   ready: boolean;
 };
 
@@ -29,7 +31,13 @@ export type ChatStore = ChatStoreState & {
     role: ChatMessage["role"],
     content: string,
   ): ChatMessage;
+  /** 流式追加：给已有消息的正文追加一段增量。 */
+  appendToMessage(threadId: string, messageId: string, delta: string): void;
+  /** 整体替换某条消息的正文（失败提示、空回复兜底用）。 */
+  setMessageContent(threadId: string, messageId: string, content: string): void;
   setFeedback(messageId: string, value: ChatFeedback | undefined): void;
+  /** 记录/清除该书当前会话的 ACP session id（undefined = 清除，下一条开新会话）。 */
+  setClaudeSession(bookId: string, sessionId: string | undefined): void;
   clearThread(threadId: string): void;
 };
 
@@ -52,6 +60,7 @@ const EMPTY: ChatStoreState = {
   messages: {},
   activeThreadByBook: {},
   feedback: {},
+  claudeSessionByBook: {},
   ready: false,
 };
 
@@ -77,6 +86,7 @@ async function writePersisted(state: ChatStoreState): Promise<void> {
     messages: state.messages,
     activeThreadByBook: state.activeThreadByBook,
     feedback: state.feedback,
+    claudeSessionByBook: state.claudeSessionByBook,
     ready: true,
   };
   try {
@@ -212,8 +222,55 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     clearThread(threadId) {
-      set((s) => ({ messages: { ...s.messages, [threadId]: [] } }));
+      set((s) => {
+        const next: ChatStoreState = {
+          ...s,
+          messages: { ...s.messages, [threadId]: [] },
+        };
+        // 清空会话 = 该书重新开新 claude 会话：同步清掉 ACP session 映射。
+        for (const [bookId, threads] of Object.entries(next.threads)) {
+          if (threads.some((t) => t.id === threadId)) {
+            next.claudeSessionByBook = { ...next.claudeSessionByBook };
+            delete next.claudeSessionByBook[bookId];
+          }
+        }
+        return next;
+      });
       touchThread(threadId);
+      persist();
+    },
+
+    appendToMessage(threadId, messageId, delta) {
+      set((s) => ({
+        messages: {
+          ...s.messages,
+          [threadId]: (s.messages[threadId] ?? []).map((m) =>
+            m.id === messageId ? { ...m, content: m.content + delta } : m,
+          ),
+        },
+      }));
+    },
+
+    setMessageContent(threadId, messageId, content) {
+      set((s) => ({
+        messages: {
+          ...s.messages,
+          [threadId]: (s.messages[threadId] ?? []).map((m) =>
+            m.id === messageId ? { ...m, content } : m,
+          ),
+        },
+      }));
+      touchThread(threadId);
+      persist();
+    },
+
+    setClaudeSession(bookId, sessionId) {
+      set((s) => {
+        const next = { ...s.claudeSessionByBook };
+        if (sessionId === undefined) delete next[bookId];
+        else next[bookId] = sessionId;
+        return { claudeSessionByBook: next };
+      });
       persist();
     },
   };
