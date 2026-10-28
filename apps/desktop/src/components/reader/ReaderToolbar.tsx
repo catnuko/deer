@@ -1,0 +1,54 @@
+import { ArrowLeft, BookOpen } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import type { LineHeight } from "@/store/readingSettings";
+
+type ReaderToolbarProps = {
+  bookTitle: string;
+  author: string;
+  chapterIndex: number;
+  chapterCount: number;
+  fontSize: number;
+  lineHeight: LineHeight;
+};
+
+export function ReaderToolbar({
+  bookTitle,
+  author,
+  chapterIndex,
+  chapterCount,
+  fontSize,
+  lineHeight,
+}: ReaderToolbarProps) {
+  return (
+    <header className="border-border bg-background/95 flex h-14 shrink-0 items-center gap-3 border-b px-4">
+      <Button variant="ghost" size="sm" render={<Link to="/bookshelf" />}>
+        <ArrowLeft className="size-4" />
+        书架
+      </Button>
+
+      <div className="bg-border h-5 w-px" />
+
+      <div className="flex min-w-0 items-center gap-2">
+        <BookOpen className="text-muted-foreground size-4 shrink-0" />
+        <span className="truncate text-sm font-medium">{bookTitle}</span>
+        <span className="text-muted-foreground hidden truncate text-xs sm:inline">
+          {author}
+        </span>
+      </div>
+
+      <div className="ml-auto flex items-center gap-2">
+        <Badge variant="secondary">
+          第 {chapterIndex + 1} / {chapterCount} 章
+        </Badge>
+        <Badge variant="outline">
+          字号 {fontSize} · 行距 {lineHeight.toFixed(1)}
+        </Badge>
+        <Button variant="ghost" size="sm" render={<Link to="/settings" />}>
+          阅读设置
+        </Button>
+      </div>
+    </header>
+  );
+}
