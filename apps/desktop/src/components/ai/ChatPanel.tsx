@@ -11,6 +11,7 @@ import {
 import { ArrowUp, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
+import { claudeChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { GradientHeading } from "@/components/ui/gradient-heading";
@@ -121,7 +122,9 @@ function Composer() {
         </ComposerPrimitive.Send>
       </div>
       <p className="text-muted-foreground mt-2 text-[11px]">
-        未接入模型，发送后返回的是本地演示回复。
+        {isTauriRuntime()
+          ? "回复由你本机的 Claude Code 生成，仅在本机运行。"
+          : "未接入后端（浏览器预览），发送后返回的是本地演示回复。"}
       </p>
     </ComposerPrimitive.Root>
   );
@@ -147,6 +150,8 @@ export function ChatPanel({
 
   const [replying, setReplying] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // 运行时环境整个会话不会变，取一次即可。
+  const [tauri] = useState(() => isTauriRuntime());
 
   useEffect(() => {
     if (!ready) void load();
@@ -200,12 +205,46 @@ export function ChatPanel({
       const threadId = currentThreadId();
       appendMessage(threadId, "user", text);
       setReplying(true);
-      const timer = setTimeout(() => {
-        appendMessage(threadId, "assistant", mockReply(text));
+
+      // 浏览器预览（无 Tauri 后端）：写死的演示回复，不联网。
+      if (!tauri) {
+        const timer = setTimeout(() => {
+          appendMessage(threadId, "assistant", mockReply(text));
+          setReplying(false);
+          timers.current = timers.current.filter((t) => t !== timer);
+        }, MOCK_DELAY);
+        timers.current.push(timer);
+        return;
+      }
+
+      // 桌面端：走本地 claude（ACP），同书追问续接上一轮会话上下文。
+      const assistant = appendMessage(threadId, "assistant", "");
+      const resumeSessionId =
+        useChatStore.getState().claudeSessionByBook[book.id] ?? null;
+      try {
+        const result = await claudeChat({
+          prompt: `你是《${book.title}》这本书的伴读助手。\n\n${text}`,
+          messageId: assistant.id,
+          resumeSessionId,
+          onDelta: (delta) => {
+            useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
+          },
+        });
+        // 以 Rust 侧累计的完整正文为准落库（含持久化）。
+        useChatStore
+          .getState()
+          .setMessageContent(threadId, assistant.id, result.text);
+        useChatStore
+          .getState()
+          .setClaudeSession(book.id, result.sessionId);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        useChatStore
+          .getState()
+          .setMessageContent(threadId, assistant.id, `（出错了）${reason}`);
+      } finally {
         setReplying(false);
-        timers.current = timers.current.filter((t) => t !== timer);
-      }, MOCK_DELAY);
-      timers.current.push(timer);
+      }
     },
     adapters: {
       feedback: {
@@ -235,7 +274,7 @@ export function ChatPanel({
           </p>
         </div>
         <Badge variant="secondary" className="mt-1 shrink-0 text-[11px]">
-          未接模型
+          {tauri ? "本地 Claude Code" : "未接后端（浏览器预览）"}
         </Badge>
         <Button
           variant="ghost"
@@ -258,7 +297,9 @@ export function ChatPanel({
       </header>
 
       <div className="bg-secondary/60 text-secondary-foreground border-border border-b px-4 py-2 text-[11px] leading-relaxed">
-        本地演示：没有接入任何模型，回复是写死的占位文本，不会联网。
+        {tauri
+          ? "本地 Claude Code (ACP)：回复由你本机的 claude CLI 生成，会话按书隔离，追问自动续接上下文。"
+          : "浏览器预览：没有 Tauri 后端，回复是写死的占位文本，不会联网。"}
       </div>
 
       <AssistantRuntimeProvider runtime={runtime}>
