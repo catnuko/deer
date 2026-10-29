@@ -1,8 +1,11 @@
+/** foliate-js 支持的电子书格式。 */
+export type BookFormat = "epub" | "mobi" | "azw3" | "fb2" | "cbz" | "pdf";
+
 export type Book = {
   id: string; // 稳定 id（文件哈希或 nanoid，落地时定）
   title: string;
   author: string;
-  format: "epub";
+  format: BookFormat;
   filePath: string; // 导入后复制到 appDataDir/books 的路径
   coverPath?: string; // 复制到 appDataDir/covers 的路径
   sizeBytes: number;

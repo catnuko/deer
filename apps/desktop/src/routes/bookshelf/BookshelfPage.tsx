@@ -111,7 +111,12 @@ export function BookshelfPage() {
       const selection = await openFileDialog({
         multiple: true,
         directory: false,
-        filters: [{ name: "EPUB 电子书", extensions: ["epub"] }],
+        filters: [
+          {
+            name: "电子书",
+            extensions: ["epub", "mobi", "azw3", "fb2", "cbz", "pdf"],
+          },
+        ],
       });
       if (!selection) return;
       const paths = Array.isArray(selection) ? selection : [selection];
@@ -188,7 +193,7 @@ export function BookshelfPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="书架"
-        description="导入、整理与阅读你的本地 EPUB 书籍。"
+        description="导入、整理与阅读你的本地电子书。"
       />
 
       <div className="flex min-h-0 flex-1">
@@ -287,7 +292,7 @@ export function BookshelfPage() {
 
           <div className="mt-auto px-4 py-3">
             <p className="text-muted-foreground text-[11px] leading-relaxed">
-              EPUB 保存在应用数据目录
+              书籍文件保存在应用数据目录
             </p>
           </div>
         </aside>
@@ -302,7 +307,7 @@ export function BookshelfPage() {
               disabled={importing}
             >
               <BookPlus className="size-3.5" />
-              {importing ? "导入中…" : "导入 EPUB"}
+              {importing ? "导入中…" : "导入书籍"}
             </TextureButton>
 
             <span className="text-muted-foreground text-sm">
@@ -381,7 +386,7 @@ export function BookshelfPage() {
           <DialogHeader>
             <DialogTitle>删除《{bookToDelete?.title}》？</DialogTitle>
             <DialogDescription>
-              会同时删除应用数据目录里的 EPUB 文件与封面，此操作不可撤销。
+              会同时删除应用数据目录里的书籍文件与封面，此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -472,7 +477,8 @@ function EmptyState({
         <>
           <p className="text-sm">书库还是空的。</p>
           <p className="max-w-xs text-xs leading-relaxed">
-            导入本地 EPUB，自动读取书名、作者与封面，文件会复制到应用数据目录统一管理。
+            导入本地电子书（EPUB / MOBI / AZW3 / FB2 / CBZ / PDF），
+            自动读取书名、作者与封面，文件会复制到应用数据目录统一管理。
           </p>
           <TextureButton
             variant="secondary"
