@@ -189,9 +189,13 @@ export const useBookStore = create<BookStore>((set, get) => ({
         coverPath = coverDestination;
       }
 
+      // foliate 的 comic-book.js 直接拿 file.name 当书名（带扩展名），
+      // 与文件名相同的 title 视为未提供，退回 titleFromFileName 剥掉扩展名。
+      const metaTitle = meta?.title?.trim();
+      const fileName = fileNameOf(filePath);
       const book: Book = {
         id,
-        title: meta?.title?.trim() || titleFromFileName(filePath),
+        title: metaTitle && metaTitle !== fileName ? metaTitle : titleFromFileName(filePath),
         author: meta?.author?.trim() || "未知作者",
         format,
         filePath: fileDestination,

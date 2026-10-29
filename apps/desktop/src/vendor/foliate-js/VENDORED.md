@@ -30,6 +30,17 @@
 **已知副作用**：`reader.js` 仍 import 已删的 `./ui/tree.js` 与 `./ui/menu.js`，
 所以上游 demo 阅读器在本目录里跑不起来。这不影响本仓（我们不加载 `reader.js` / `reader.html`）。
 
+## 本仓相对上游的改动（deviation）
+
+唯一一处：`pdf.js` 第 1 行把 `` new URL(`vendor/pdfjs/${path}`, import.meta.url) `` 的
+模板字符串改成 `'vendor/pdfjs/' + path` 运行时拼接。路径语义完全不变（相对本文件），
+但 Vite 的 import-glob 插件不再把模板字面量当 glob 静态分析——上游写法在 Vite dev 下
+直接报 `Invalid glob: "vendor/pdfjs/*"` 整页炸掉。dev 下按运行时相对 `import.meta.url`
+解析到源码目录，build 下解析到 `dist/assets/vendor/pdfjs`（由 `vite.config.ts` 的
+copy 插件拷入），两者均为纯运行时行为。不能改成 `./` 前缀：那样 Vite 会在 build 时
+把它按 glob 重写成资产映射表，cmaps / standard_fonts 子目录资源不在表内，
+运行时变成 `new URL(undefined, …)` 而 404。bump 上游后需重新应用。
+
 ## 为什么是整仓快照而不是只拷核心文件
 
 `view.js` 在运行时用**动态 `import()`** 加载下列同目录模块，路径写死：
