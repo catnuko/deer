@@ -7,6 +7,12 @@ import {
 import { create } from "zustand";
 import { releaseCover } from "@/lib/covers";
 import { parseEpub } from "@/lib/epub";
+import {
+  ebookFormatOf,
+  fileExtensionOf,
+  makeBookFile,
+  readImportedMetadata,
+} from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
 import type { Book, BookStoreState, Shelf } from "@/lib/types";
 
@@ -70,7 +76,11 @@ function fileNameOf(path: string): string {
 }
 
 function titleFromFileName(path: string): string {
-  return fileNameOf(path).replace(/\.epub$/i, "").trim() || "未命名书籍";
+  return (
+    fileNameOf(path)
+      .replace(/\.(?:epub|mobi|azw3|fb2|cbz|pdf)$/i, "")
+      .trim() || "未命名书籍"
+  );
 }
 
 /** 去掉已删除书架留下的悬空 shelfIds。 */
@@ -134,22 +144,41 @@ export const useBookStore = create<BookStore>((set, get) => ({
   },
 
   async importEpub(filePath: string) {
-    if (!isTauri()) throw new Error("EPUB 导入只在桌面应用里可用");
+    if (!isTauri()) throw new Error("导入只在桌面应用里可用");
     set({ importing: true, error: null });
     try {
       const dirs = await ensureAppDirs();
+      const format = ebookFormatOf(filePath);
+      if (!format) {
+        throw new Error(
+          `不支持的文件格式：${fileExtensionOf(filePath) || "无扩展名"}`,
+        );
+      }
       const bytes = await readFile(filePath);
 
       // 元数据解析失败不阻断导入：降级为「文件名 + 未知作者 + 无封面」。
-      let meta: ReturnType<typeof parseEpub> | null = null;
+      let meta: {
+        title?: string;
+        author?: string;
+        coverBytes?: Uint8Array;
+        coverExtension?: string;
+      } | null = null;
       try {
-        meta = parseEpub(bytes);
+        if (format === "epub") {
+          meta = parseEpub(bytes);
+        } else {
+          const fileName = fileNameOf(filePath);
+          meta = await readImportedMetadata(
+            makeBookFile(bytes, fileName, format),
+          );
+        }
       } catch {
         meta = null;
       }
 
       const id = crypto.randomUUID();
-      const fileDestination = await join(dirs.books, `${id}.epub`);
+      // 保留原扩展名：foliate 的部分格式（如 PDF / CBZ）按扩展名分支。
+      const fileDestination = await join(dirs.books, `${id}.${format}`);
       await writeFile(fileDestination, bytes);
 
       let coverPath: string | undefined;
@@ -164,7 +193,7 @@ export const useBookStore = create<BookStore>((set, get) => ({
         id,
         title: meta?.title?.trim() || titleFromFileName(filePath),
         author: meta?.author?.trim() || "未知作者",
-        format: "epub",
+        format,
         filePath: fileDestination,
         coverPath,
         sizeBytes: bytes.byteLength,

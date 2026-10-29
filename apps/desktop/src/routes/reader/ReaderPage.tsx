@@ -1,22 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { readFile } from "@tauri-apps/plugin-fs";
-import ePub, { type Book as EpubBook, type Rendition } from "epubjs";
+// 导入即注册 <foliate-view> 自定义元素（view.js 末尾 customElements.define）。
+import "@/vendor/foliate-js/view.js";
+import type {
+  RelocateDetail,
+  View as FoliateView,
+} from "@/vendor/foliate-js/view.js";
 import { ChatPanel } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  bookToc,
+  ebookFormatOf,
+  makeBookFile,
+  readingStyles,
+} from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
 import { useBookStore } from "@/store/bookStore";
 import { useReadingSettings } from "@/store/readingSettings";
 import { getDemoBook } from "@/routes/reader/demoBook";
-import {
-  flattenToc,
-  matchTocIndex,
-  type RawTocNode,
-  type TocItem,
-} from "@/routes/reader/epubToc";
+import { matchTocIndex, type TocItem } from "@/routes/reader/epubToc";
+
+/** foliate 的 paginator 实现 setStyles，但 Renderer 接口没有声明它。 */
+type StyleableRenderer = HTMLElement & {
+  setStyles?: (styles: string) => void;
+};
 
 const VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
 
@@ -53,7 +64,7 @@ export function ReaderPage() {
   const [realPhase, setRealPhase] = useState<RealBookPhase>({ status: "loading" });
   const [scrollProgress, setScrollProgress] = useState(0);
   const viewerRef = useRef<HTMLDivElement>(null);
-  const renditionRef = useRef<Rendition | null>(null);
+  const viewRef = useRef<FoliateView | null>(null);
   const lastSavedProgressRef = useRef(0);
 
   // 换书即重置真实渲染状态：在渲染期比较上一本书 id（React 认可的模式，
@@ -68,84 +79,96 @@ export function ReaderPage() {
 
   useEffect(() => {
     // 依赖 book id 而非 book 对象：进度写回会更新 books 数组，
-    // 对象引用每次都变；依赖对象会让 rendition 频繁销毁重建（跳回封面）。
+    // 对象引用每次都变；依赖对象会让引擎频繁销毁重建（跳回封面）。
     if (!bookKey) return;
     const shelfBook = useBookStore
       .getState()
       .books.find((book) => book.id === bookKey);
     if (!shelfBook) return;
     let cancelled = false;
-    let epubBook: EpubBook | null = null;
+    let element: FoliateView | null = null;
     lastSavedProgressRef.current = 0;
+
+    const applyReadingStyles = () => {
+      const renderer = element?.renderer as StyleableRenderer | undefined;
+      const settings = useReadingSettings.getState();
+      renderer?.setStyles?.(
+        readingStyles(settings.fontSize, settings.lineHeight),
+      );
+    };
+
+    const onRelocate = (event: Event) => {
+      const detail = (event as CustomEvent<RelocateDetail>).detail ?? {};
+      // 打开后、首次布局前的 payload 没有有效 section 信息（0/0），
+      // 写进去会把进度压回 0，跳过。
+      const section = detail.section;
+      if (!section || section.total === 0) return;
+
+      const fraction = Number.isFinite(detail.fraction)
+        ? Math.min(1, Math.max(0, detail.fraction as number))
+        : 0;
+      setScrollProgress(fraction);
+      setRealPhase((phase) =>
+        phase.status === "ready"
+          ? {
+              ...phase,
+              currentIndex:
+                matchTocIndex(detail.tocItem?.href ?? undefined, phase.toc) ??
+                phase.currentIndex,
+            }
+          : phase,
+      );
+      // 阅读进度节流写回书库（失败不影响阅读）。
+      const last = lastSavedProgressRef.current;
+      if (Math.abs(fraction - last) >= PROGRESS_SAVE_STEP) {
+        lastSavedProgressRef.current = fraction;
+        void updateBook(shelfBook.id, { progress: fraction }).catch(
+          () => undefined,
+        );
+      }
+    };
 
     const run = async () => {
       try {
         const bytes = await readFile(shelfBook.filePath);
         if (cancelled) return;
-
-        // 直接喂字节（epub.js BINARY 路径，JSZip 本地解包）：WKWebView
-        // 对 blob: URL 的 XHR 会被拦，不能走 blob URL。
-        epubBook = ePub(bytes.buffer);
-        const nav = await epubBook.loaded.navigation;
-        if (cancelled || !epubBook) return;
-
-        const toc = flattenToc(nav.toc as unknown as RawTocNode[]);
         const viewer = viewerRef.current;
         if (!viewer) throw new Error("渲染容器未就绪");
 
-        const rendition = epubBook.renderTo(viewer, {
-          width: "100%",
-          height: "100%",
-          spread: "none",
-        });
-        renditionRef.current = rendition;
+        // File 直喂：foliate 的 makeBook 走 zip.js 的 BlobReader，且已关掉
+        // worker，不需要 blob: 的 XHR，也不需要 tauri assetProtocol。
+        const fileName =
+          shelfBook.filePath.split(/[\\/]/).pop() ?? `book.${shelfBook.format}`;
+        const file = makeBookFile(
+          bytes,
+          fileName,
+          ebookFormatOf(shelfBook.filePath) ?? shelfBook.format,
+        );
 
-        rendition.on("relocated", (location: {
-          start?: { href?: string; percentage?: number };
-        }) => {
-          const percentage = location.start?.percentage ?? 0;
-          setScrollProgress(Math.min(1, Math.max(0, percentage)));
-          setRealPhase((phase) =>
-            phase.status === "ready"
-              ? {
-                  ...phase,
-                  currentIndex:
-                    matchTocIndex(location.start?.href, phase.toc) ??
-                    phase.currentIndex,
-                }
-              : phase,
-          );
-          // 阅读进度节流写回书库（失败不影响阅读）。
-          const last = lastSavedProgressRef.current;
-          if (Math.abs(percentage - last) >= PROGRESS_SAVE_STEP) {
-            lastSavedProgressRef.current = percentage;
-            void updateBook(shelfBook.id, { progress: percentage }).catch(
-              () => undefined,
-            );
-          }
-        });
+        const view = document.createElement("foliate-view") as FoliateView;
+        view.style.cssText = "display:block;width:100%;height:100%";
+        view.addEventListener("relocate", onRelocate);
+        element = view;
+        viewRef.current = view;
 
+        await view.open(file);
+        if (cancelled) return;
+
+        // 渲染器在 open() 后才存在；挂进 DOM 再 init，否则量不到视口尺寸。
+        viewer.replaceChildren(view);
+
+        const toc = bookToc(view.book);
         setRealPhase({ status: "ready", toc, currentIndex: 0 });
-        await rendition.display();
 
-        // 底部进度条的百分比依赖分页定位表（不生成时 relocated 的
-        // percentage 恒为 0）。后台异步生成，完成后用当前位置刷新一次，
-        // 不阻塞首屏渲染；此后翻页/跳章的 relocated 自带准确百分比。
-        const locatedBook = epubBook;
-        void locatedBook.ready
-          .then(() => locatedBook.locations.generate(1024))
-          .then(() => renditionRef.current?.currentLocation())
-          .then((location) => {
-            const start = (
-              location as
-                | { start?: { percentage?: number } }
-                | undefined
-            )?.start;
-            if (cancelled || !start) return;
-            const percentage = start.percentage ?? 0;
-            setScrollProgress(Math.min(1, Math.max(0, percentage)));
-          })
-          .catch(() => undefined);
+        await view.init({ showTextStart: true });
+        if (cancelled) return;
+        applyReadingStyles();
+
+        // 首次 relocate 可能早于 init，补一次当前位置。
+        const fraction = view.lastLocation?.fraction;
+        if (Number.isFinite(fraction)) {
+          setScrollProgress(Math.min(1, Math.max(0, fraction as number)));
+        }
       } catch (error) {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : String(error);
@@ -155,12 +178,12 @@ export function ReaderPage() {
 
     // 分页模式默认没有翻页交互：方向键 / PgUp / PgDn 驱动 next/prev。
     const onKey = (event: KeyboardEvent) => {
-      const rendition = renditionRef.current;
-      if (!rendition) return;
+      const view = viewRef.current;
+      if (!view) return;
       if (event.key === "ArrowRight" || event.key === "PageDown") {
-        void rendition.next().catch(() => undefined);
+        void view.next().catch(() => undefined);
       } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
-        void rendition.prev().catch(() => undefined);
+        void view.prev().catch(() => undefined);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -170,47 +193,38 @@ export function ReaderPage() {
     return () => {
       cancelled = true;
       window.removeEventListener("keydown", onKey);
-      renditionRef.current?.destroy();
-      renditionRef.current = null;
-      epubBook?.destroy();
+      element?.removeEventListener("relocate", onRelocate);
+      element?.close();
+      element?.remove();
+      viewRef.current = null;
     };
   }, [bookKey, updateBook]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
   useEffect(() => {
-    const rendition = renditionRef.current;
-    if (!rendition || realPhase.status !== "ready") return;
-    rendition.themes.fontSize(`${fontSize}px`);
-    rendition.themes.default({
-      "html, body, p, div": { "line-height": String(lineHeight) },
-    });
-  }, [fontSize, lineHeight, realPhase]);
+    const renderer = viewRef.current?.renderer as StyleableRenderer | undefined;
+    if (!renderer || realPhase.status !== "ready") return;
+    renderer.setStyles?.(readingStyles(fontSize, lineHeight));
+  }, [fontSize, lineHeight, realPhase.status]);
 
   // 正文区左右边缘点击翻页（中间区域留给文字选择）。
-  const turnPage = useCallback(
-    (direction: "next" | "prev") => {
-      const rendition = renditionRef.current;
-      if (!rendition) return;
-      void (direction === "next"
-        ? rendition.next()
-        : rendition.prev()
-      ).catch(() => undefined);
-    },
-    [],
-  );
+  const turnPage = useCallback((direction: "next" | "prev") => {
+    const view = viewRef.current;
+    if (!view) return;
+    void (direction === "next" ? view.next() : view.prev()).catch(
+      () => undefined,
+    );
+  }, []);
 
-  const selectRealChapter = useCallback(
-    (item: TocItem) => {
-      const rendition = renditionRef.current;
-      if (!rendition) return;
-      void rendition
-        .display(item.href)
-        .catch((error: unknown) =>
-          console.warn("[reader] 跳章失败:", item.href, error),
-        );
-    },
-    [],
-  );
+  const selectRealChapter = useCallback((item: TocItem) => {
+    const view = viewRef.current;
+    if (!view) return;
+    void view
+      .goTo(item.href)
+      .catch((error: unknown) =>
+        console.warn("[reader] 跳章失败:", item.href, error),
+      );
+  }, []);
 
   if (isDesktop && shelfBook) {
     return (
@@ -298,7 +312,8 @@ function RealReader({
             }}
           >
             <div ref={viewerRef} className="h-full w-full" />
-            {/* epub.js iframe 内的点击不会冒泡到父文档，边缘翻页靠这两个透明捕获层。 */}
+            {/* 正文渲染在 foliate 的 iframe 里，点击不会冒泡到父文档，
+                所以边缘翻页靠这两个透明捕获层接住。 */}
             <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
             <div className="absolute inset-y-0 right-0 w-[15%]" aria-hidden="true" />
             {phase.status === "loading" ? (
