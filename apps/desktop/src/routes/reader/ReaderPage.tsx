@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { readFile } from "@tauri-apps/plugin-fs";
 import ePub, { type Book as EpubBook, type Rendition } from "epubjs";
-import { AiPanelSlot } from "@/components/reader/AiPanelSlot";
+import { ChatPanel } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
@@ -246,6 +246,7 @@ type RealReaderProps = {
 };
 
 function RealReader({
+  bookId,
   title,
   author,
   phase,
@@ -332,7 +333,12 @@ function RealReader({
           </footer>
         </div>
 
-        <AiPanelSlot className="hidden xl:flex" />
+        <ChatPanel
+          book={{ id: bookId, title }}
+          embedded
+          onClose={() => undefined}
+          className="hidden xl:flex"
+        />
       </div>
     </div>
   );
@@ -437,7 +443,12 @@ function DemoReader({ bookId, fontSize, lineHeight }: DemoReaderProps) {
           </footer>
         </div>
 
-        <AiPanelSlot className="hidden xl:flex" />
+        <ChatPanel
+          book={{ id: bookId ?? book.id, title: book.title }}
+          embedded
+          onClose={() => undefined}
+          className="hidden xl:flex"
+        />
       </div>
     </div>
   );

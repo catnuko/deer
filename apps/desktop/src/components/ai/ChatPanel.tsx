@@ -133,9 +133,14 @@ function Composer() {
 export function ChatPanel({
   book,
   onClose,
+  embedded = false,
+  className,
 }: {
   book: CurrentBook;
   onClose: () => void;
+  /** 内联常驻侧栏模式（阅读页用）；默认 false = 书架/首页的 fixed 浮层。 */
+  embedded?: boolean;
+  className?: string;
 }) {
   const ready = useChatStore((s) => s.ready);
   const threads = useChatStore((s) => s.threads);
@@ -262,7 +267,13 @@ export function ChatPanel({
   return (
     <aside
       aria-label="AI 伴读"
-      className="bg-background border-border fixed inset-y-0 right-0 z-40 flex w-[420px] max-w-full flex-col border-l shadow-2xl"
+      className={cn(
+        "bg-background border-border flex flex-col border-l",
+        embedded
+          ? "w-96 shrink-0"
+          : "fixed inset-y-0 right-0 z-40 w-[420px] max-w-full shadow-2xl",
+        className,
+      )}
     >
       <header className="border-border flex items-start gap-2 border-b px-4 py-3">
         <div className="min-w-0 flex-1">
