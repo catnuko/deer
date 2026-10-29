@@ -67,9 +67,14 @@ export function ReaderPage() {
   }
 
   useEffect(() => {
+    // 依赖 book id 而非 book 对象：进度写回会更新 books 数组，
+    // 对象引用每次都变；依赖对象会让 rendition 频繁销毁重建（跳回封面）。
+    if (!bookKey) return;
+    const shelfBook = useBookStore
+      .getState()
+      .books.find((book) => book.id === bookKey);
     if (!shelfBook) return;
     let cancelled = false;
-    let objectUrl: string | null = null;
     let epubBook: EpubBook | null = null;
     lastSavedProgressRef.current = 0;
 
@@ -78,10 +83,9 @@ export function ReaderPage() {
         const bytes = await readFile(shelfBook.filePath);
         if (cancelled) return;
 
-        objectUrl = URL.createObjectURL(
-          new Blob([bytes], { type: "application/epub+zip" }),
-        );
-        epubBook = ePub(objectUrl);
+        // 直接喂字节（epub.js BINARY 路径，JSZip 本地解包）：WKWebView
+        // 对 blob: URL 的 XHR 会被拦，不能走 blob URL。
+        epubBook = ePub(bytes.buffer);
         const nav = await epubBook.loaded.navigation;
         if (cancelled || !epubBook) return;
 
@@ -123,6 +127,25 @@ export function ReaderPage() {
 
         setRealPhase({ status: "ready", toc, currentIndex: 0 });
         await rendition.display();
+
+        // 底部进度条的百分比依赖分页定位表（不生成时 relocated 的
+        // percentage 恒为 0）。后台异步生成，完成后用当前位置刷新一次，
+        // 不阻塞首屏渲染；此后翻页/跳章的 relocated 自带准确百分比。
+        const locatedBook = epubBook;
+        void locatedBook.ready
+          .then(() => locatedBook.locations.generate(1024))
+          .then(() => renditionRef.current?.currentLocation())
+          .then((location) => {
+            const start = (
+              location as
+                | { start?: { percentage?: number } }
+                | undefined
+            )?.start;
+            if (cancelled || !start) return;
+            const percentage = start.percentage ?? 0;
+            setScrollProgress(Math.min(1, Math.max(0, percentage)));
+          })
+          .catch(() => undefined);
       } catch (error) {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : String(error);
@@ -130,16 +153,28 @@ export function ReaderPage() {
       }
     };
 
+    // 分页模式默认没有翻页交互：方向键 / PgUp / PgDn 驱动 next/prev。
+    const onKey = (event: KeyboardEvent) => {
+      const rendition = renditionRef.current;
+      if (!rendition) return;
+      if (event.key === "ArrowRight" || event.key === "PageDown") {
+        void rendition.next().catch(() => undefined);
+      } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        void rendition.prev().catch(() => undefined);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+
     void run();
 
     return () => {
       cancelled = true;
+      window.removeEventListener("keydown", onKey);
       renditionRef.current?.destroy();
       renditionRef.current = null;
       epubBook?.destroy();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [shelfBook, updateBook]);
+  }, [bookKey, updateBook]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
   useEffect(() => {
@@ -151,11 +186,28 @@ export function ReaderPage() {
     });
   }, [fontSize, lineHeight, realPhase]);
 
+  // 正文区左右边缘点击翻页（中间区域留给文字选择）。
+  const turnPage = useCallback(
+    (direction: "next" | "prev") => {
+      const rendition = renditionRef.current;
+      if (!rendition) return;
+      void (direction === "next"
+        ? rendition.next()
+        : rendition.prev()
+      ).catch(() => undefined);
+    },
+    [],
+  );
+
   const selectRealChapter = useCallback(
     (item: TocItem) => {
       const rendition = renditionRef.current;
       if (!rendition) return;
-      void rendition.display(item.href).catch(() => undefined);
+      void rendition
+        .display(item.href)
+        .catch((error: unknown) =>
+          console.warn("[reader] 跳章失败:", item.href, error),
+        );
     },
     [],
   );
@@ -172,6 +224,7 @@ export function ReaderPage() {
         lineHeight={lineHeight}
         viewerRef={viewerRef}
         onSelectChapter={selectRealChapter}
+        onPageTurn={turnPage}
       />
     );
   }
@@ -189,6 +242,7 @@ type RealReaderProps = {
   lineHeight: number;
   viewerRef: React.RefObject<HTMLDivElement | null>;
   onSelectChapter: (item: TocItem) => void;
+  onPageTurn: (direction: "next" | "prev") => void;
 };
 
 function RealReader({
@@ -200,6 +254,7 @@ function RealReader({
   lineHeight,
   viewerRef,
   onSelectChapter,
+  onPageTurn,
 }: RealReaderProps) {
   const tocEntries: ReaderTocEntry[] =
     phase.status === "ready" ? phase.toc : [];
@@ -231,8 +286,20 @@ function RealReader({
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="relative min-h-0 flex-1 overflow-hidden">
+          <div
+            className="relative min-h-0 flex-1 overflow-hidden"
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              const x = (event.clientX - rect.left) / rect.width;
+              // 左右 15% 边缘翻页，中间区域留给文字选择。
+              if (x < 0.15) onPageTurn("prev");
+              else if (x > 0.85) onPageTurn("next");
+            }}
+          >
             <div ref={viewerRef} className="h-full w-full" />
+            {/* epub.js iframe 内的点击不会冒泡到父文档，边缘翻页靠这两个透明捕获层。 */}
+            <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
+            <div className="absolute inset-y-0 right-0 w-[15%]" aria-hidden="true" />
             {phase.status === "loading" ? (
               <div className="text-muted-foreground absolute inset-0 flex items-center justify-center text-sm">
                 正在加载书籍…
