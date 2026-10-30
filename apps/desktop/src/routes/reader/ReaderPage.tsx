@@ -4,9 +4,12 @@ import { readFile } from "@tauri-apps/plugin-fs";
 // 导入即注册 <foliate-view> 自定义元素（view.js 末尾 customElements.define）。
 import "@/vendor/foliate-js/view.js";
 import type {
+  DrawAnnotationDetail,
+  LoadDetail,
   RelocateDetail,
   View as FoliateView,
 } from "@/vendor/foliate-js/view.js";
+import { Overlayer } from "@/vendor/foliate-js/overlayer.js";
 import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
@@ -33,6 +36,7 @@ import {
 import { isTauri } from "@/lib/platform";
 import { useBookStore } from "@/store/bookStore";
 import { useReadingSettings } from "@/store/readingSettings";
+import { DEFAULT_HIGHLIGHT_COLOR } from "@/components/reader/highlightColors";
 import { getDemoBook } from "@/routes/reader/demoBook";
 import { matchTocIndex, type TocItem } from "@/routes/reader/epubToc";
 
@@ -51,7 +55,7 @@ type RealBookPhase =
   | { status: "ready"; toc: TocItem[]; currentIndex: number }
   | { status: "error"; message: string };
 
-type SelectionState = SelectionPlacement & { text: string };
+type SelectionState = SelectionPlacement & { text: string; cfi: string | null };
 
 /** 划选问 Deer（N2）：把选区矩形 + 宿主矩形折算成浮层状态。 */
 function selectionStateOf(
@@ -59,7 +63,7 @@ function selectionStateOf(
   hostRect: { top: number; left: number; width: number },
   text: string,
 ): SelectionState {
-  return { ...popoverPlacement(rect, hostRect), text };
+  return { ...popoverPlacement(rect, hostRect), text, cfi: null };
 }
 
 export function ReaderPage() {
@@ -107,6 +111,34 @@ export function ReaderPage() {
     setSelection(null);
     viewRef.current?.deselect();
     setChatOpen(true);
+  }, []);
+
+  // 复制走系统剪贴板；Tauri webview 是安全上下文，navigator.clipboard 可用。
+  const copySelection = useCallback((text: string) => {
+    void navigator.clipboard.writeText(text).catch(() => undefined);
+    setSelection(null);
+  }, []);
+
+  // M1 先做临时渲染（foliate addAnnotation → draw-annotation 画色块），
+  // 持久化与回显在 M2 的 annotationStore 落地。
+  const highlightSelection = useCallback((color: string, cfi: string | null) => {
+    if (cfi) {
+      void viewRef.current
+        ?.addAnnotation({ value: cfi, color })
+        .catch(() => undefined);
+    }
+    setSelection(null);
+    viewRef.current?.deselect();
+  }, []);
+
+  const noteSelection = useCallback((note: string, cfi: string | null) => {
+    if (cfi) {
+      void viewRef.current
+        ?.addAnnotation({ value: cfi, color: DEFAULT_HIGHLIGHT_COLOR, note })
+        .catch(() => undefined);
+    }
+    setSelection(null);
+    viewRef.current?.deselect();
   }, []);
 
   // 总结当前 spine section：走 N1 的上下文注入，气泡里只显示「总结本章」。
@@ -204,9 +236,23 @@ export function ReaderPage() {
     // pointerup/keyup（paginator 自己也在同一 doc 上监听 selectionchange），
     // 再从该 doc 读 Selection，坐标经 iframe → 宿主平移折算。
     const docCleanups: Array<() => void> = [];
+
+    // 高亮渲染：foliate 的 addAnnotation 只发 draw-annotation 事件，
+    // 颜色取注解上的 color 字段，画半透明高亮块。
+    const onDrawAnnotation = (event: Event) => {
+      const detail = (event as CustomEvent<DrawAnnotationDetail>).detail;
+      if (!detail) return;
+      const color = detail.annotation.color;
+      detail.draw(Overlayer.highlight, {
+        color: typeof color === "string" ? color : undefined,
+      });
+    };
+
     const onLoaded = (event: Event) => {
-      const doc = (event as CustomEvent<{ doc?: Document }>).detail?.doc;
+      const detail = (event as CustomEvent<LoadDetail>).detail;
+      const doc = detail?.doc;
       if (!doc) return;
+      const sectionIndex = detail.index;
       const sync = () => {
         if (cancelled) return;
         const viewer = viewerRef.current;
@@ -224,8 +270,10 @@ export function ReaderPage() {
         const rect = range.getBoundingClientRect();
         const frameRect = frame.getBoundingClientRect();
         const hostRect = viewer.getBoundingClientRect();
-        setSelection(
-          selectionStateOf(
+        // 高亮/笔记（M1）要用 CFI 定位选区，选区存在时就地算好带上。
+        const cfi = viewRef.current?.getCFI(sectionIndex, range) ?? null;
+        setSelection({
+          ...selectionStateOf(
             {
               top: frameRect.top + rect.top - hostRect.top,
               left: frameRect.left + rect.left - hostRect.left,
@@ -235,7 +283,8 @@ export function ReaderPage() {
             { top: 0, left: 0, width: hostRect.width },
             sel,
           ),
-        );
+          cfi,
+        });
       };
       doc.addEventListener("pointerup", sync);
       doc.addEventListener("keyup", sync);
@@ -266,6 +315,7 @@ export function ReaderPage() {
         view.style.cssText = "display:block;width:100%;height:100%";
         view.addEventListener("relocate", onRelocate);
         view.addEventListener("load", onLoaded);
+        view.addEventListener("draw-annotation", onDrawAnnotation);
         element = view;
         viewRef.current = view;
 
@@ -313,6 +363,7 @@ export function ReaderPage() {
       window.removeEventListener("keydown", onKey);
       element?.removeEventListener("relocate", onRelocate);
       element?.removeEventListener("load", onLoaded);
+      element?.removeEventListener("draw-annotation", onDrawAnnotation);
       docCleanups.forEach((fn) => fn());
       element?.close();
       element?.remove();
@@ -364,6 +415,9 @@ export function ReaderPage() {
         draft={draft}
         panelRef={panelRef}
         onAskSelection={askDeer}
+        onCopySelection={copySelection}
+        onHighlightSelection={highlightSelection}
+        onNoteSelection={noteSelection}
         onSummarizeChapter={() => void summarizeCurrentSection()}
         onClosePanel={() => setChatOpen(false)}
       />
@@ -378,6 +432,7 @@ export function ReaderPage() {
       chatOpen={chatOpen}
       draft={draft}
       onAskSelection={askDeer}
+      onCopySelection={copySelection}
       onOpenPanel={() => setChatOpen(true)}
       onClosePanel={() => setChatOpen(false)}
     />
@@ -400,6 +455,9 @@ type RealReaderProps = {
   draft: ChatPanelDraft | null;
   panelRef: React.RefObject<ChatPanelHandle | null>;
   onAskSelection: (text: string) => void;
+  onCopySelection: (text: string) => void;
+  onHighlightSelection: (color: string, cfi: string | null) => void;
+  onNoteSelection: (note: string, cfi: string | null) => void;
   onSummarizeChapter: () => void;
   onClosePanel: () => void;
 };
@@ -420,6 +478,9 @@ function RealReader({
   draft,
   panelRef,
   onAskSelection,
+  onCopySelection,
+  onHighlightSelection,
+  onNoteSelection,
   onSummarizeChapter,
   onClosePanel,
 }: RealReaderProps) {
@@ -484,6 +545,12 @@ function RealReader({
                 x={selection.x}
                 y={selection.y}
                 placement={selection.placement}
+                text={selection.text}
+                onCopy={onCopySelection}
+                onHighlight={(color) =>
+                  onHighlightSelection(color, selection.cfi)
+                }
+                onNote={(note) => onNoteSelection(note, selection.cfi)}
                 onAsk={() => onAskSelection(selection.text)}
               />
             ) : null}
@@ -537,6 +604,7 @@ type DemoReaderProps = {
   chatOpen: boolean;
   draft: ChatPanelDraft | null;
   onAskSelection: (text: string) => void;
+  onCopySelection: (text: string) => void;
   onOpenPanel: () => void;
   onClosePanel: () => void;
 };
@@ -549,6 +617,7 @@ function DemoReader({
   chatOpen,
   draft,
   onAskSelection,
+  onCopySelection,
   onOpenPanel,
   onClosePanel,
 }: DemoReaderProps) {
@@ -607,6 +676,12 @@ function DemoReader({
 
   const askDeer = (text: string) => {
     onAskSelection(text);
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+  };
+
+  // 演示书没有 foliate view，高亮/笔记没有 CFI 可存，菜单收口即关闭。
+  const closeSelection = () => {
     setSelection(null);
     window.getSelection()?.removeAllRanges();
   };
@@ -675,6 +750,10 @@ function DemoReader({
                 x={selection.x}
                 y={selection.y}
                 placement={selection.placement}
+                text={selection.text}
+                onCopy={onCopySelection}
+                onHighlight={() => closeSelection()}
+                onNote={() => closeSelection()}
                 onAsk={() => askDeer(selection.text)}
               />
             ) : null}
