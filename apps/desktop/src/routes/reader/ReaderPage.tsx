@@ -7,12 +7,17 @@ import type {
   RelocateDetail,
   View as FoliateView,
 } from "@/vendor/foliate-js/view.js";
-import { ChatPanel, type ChatPanelDraft } from "@/components/ai/ChatPanel";
+import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { SelectionPopover } from "@/components/reader/SelectionPopover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  buildChapterSummaryPrompt,
+  extractSectionText,
+} from "@/lib/ai/chapterSummary";
+import { buildPrompt } from "@/lib/ai/readingContext";
 import {
   formatSelectionDraft,
   popoverPlacement,
@@ -90,6 +95,10 @@ export function ReaderPage() {
   const [chatOpen, setChatOpen] = useState(
     () => window.matchMedia("(min-width: 1280px)").matches,
   );
+  const panelRef = useRef<ChatPanelHandle | null>(null);
+  // 章节总结用：relocate 时记录当前 spine section（TOC 的章可能跨多个 section，
+  // v1 先总结当前 section，跨 section 章只总结当前一小节）。
+  const currentSectionRef = useRef(0);
 
   const askDeer = useCallback((text: string) => {
     const formatted = formatSelectionDraft(text);
@@ -99,6 +108,32 @@ export function ReaderPage() {
     viewRef.current?.deselect();
     setChatOpen(true);
   }, []);
+
+  // 总结当前 spine section：走 N1 的上下文注入，气泡里只显示「总结本章」。
+  const summarizeCurrentSection = async () => {
+    const view = viewRef.current;
+    const section = view?.book.sections[currentSectionRef.current];
+    if (!view || !section) return;
+    try {
+      // CBZ/PDF 的图片 section 没有 createDocument，空正文直接不响应。
+      const doc = await section.createDocument?.();
+      if (!doc) return;
+      const text = extractSectionText(doc);
+      if (!text) return;
+      const prompt = buildPrompt(buildChapterSummaryPrompt(text).prompt, {
+        bookTitle: shelfBook?.title ?? "",
+        chapterTitle:
+          realPhase.status === "ready"
+            ? (realPhase.toc[realPhase.currentIndex]?.title ?? null)
+            : null,
+        progress: scrollProgress,
+      });
+      panelRef.current?.send(prompt, "总结本章");
+      setChatOpen(true);
+    } catch {
+      // 抽不出正文就当没点，不打断阅读。
+    }
+  };
 
   // 换书即重置真实渲染状态：在渲染期比较上一本书 id（React 认可的模式，
   // 避免 effect 内同步 setState 触发级联渲染）。
@@ -139,6 +174,7 @@ export function ReaderPage() {
 
       // 翻页/跳章后选区与浮层都作废。
       setSelection(null);
+      currentSectionRef.current = section.current;
       const fraction = Number.isFinite(detail.fraction)
         ? Math.min(1, Math.max(0, detail.fraction as number))
         : 0;
@@ -326,7 +362,9 @@ export function ReaderPage() {
         selection={selection}
         chatOpen={chatOpen}
         draft={draft}
+        panelRef={panelRef}
         onAskSelection={askDeer}
+        onSummarizeChapter={() => void summarizeCurrentSection()}
         onClosePanel={() => setChatOpen(false)}
       />
     );
@@ -340,6 +378,7 @@ export function ReaderPage() {
       chatOpen={chatOpen}
       draft={draft}
       onAskSelection={askDeer}
+      onOpenPanel={() => setChatOpen(true)}
       onClosePanel={() => setChatOpen(false)}
     />
   );
@@ -359,7 +398,9 @@ type RealReaderProps = {
   selection: SelectionState | null;
   chatOpen: boolean;
   draft: ChatPanelDraft | null;
+  panelRef: React.RefObject<ChatPanelHandle | null>;
   onAskSelection: (text: string) => void;
+  onSummarizeChapter: () => void;
   onClosePanel: () => void;
 };
 
@@ -377,7 +418,9 @@ function RealReader({
   selection,
   chatOpen,
   draft,
+  panelRef,
   onAskSelection,
+  onSummarizeChapter,
   onClosePanel,
 }: RealReaderProps) {
   const tocEntries: ReaderTocEntry[] =
@@ -394,6 +437,7 @@ function RealReader({
         chapterCount={Math.max(tocEntries.length, 1)}
         fontSize={fontSize}
         lineHeight={lineHeight as 1.6 | 1.8 | 2}
+        onSummarizeChapter={onSummarizeChapter}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -466,6 +510,7 @@ function RealReader({
         </div>
 
         <ChatPanel
+          ref={panelRef}
           book={{ id: bookId, title }}
           embedded
           readingContext={{
@@ -492,6 +537,7 @@ type DemoReaderProps = {
   chatOpen: boolean;
   draft: ChatPanelDraft | null;
   onAskSelection: (text: string) => void;
+  onOpenPanel: () => void;
   onClosePanel: () => void;
 };
 
@@ -503,6 +549,7 @@ function DemoReader({
   chatOpen,
   draft,
   onAskSelection,
+  onOpenPanel,
   onClosePanel,
 }: DemoReaderProps) {
   const book = getDemoBook(bookId);
@@ -511,9 +558,20 @@ function DemoReader({
   const [scrollProgress, setScrollProgress] = useState(0);
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const scrollHostRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<ChatPanelHandle | null>(null);
 
   const chapter = book.chapters[chapterIndex] ?? book.chapters[0];
   const chapterCount = book.chapters.length;
+
+  // 总结本章（N3）：演示书章节就是段落列表，走 N1 上下文注入发送。
+  const summarizeChapter = () => {
+    const prompt = buildPrompt(
+      buildChapterSummaryPrompt(chapter.paragraphs.join("\n\n")).prompt,
+      { bookTitle: book.title, chapterTitle: chapter.title, progress: null },
+    );
+    panelRef.current?.send(prompt, "总结本章");
+    onOpenPanel();
+  };
 
   // 换章回到开头：新正文从头读，进度条归零（状态在切换时同步重置，避免 effect 里 setState）。
   const selectChapter = (index: number) => {
@@ -588,6 +646,7 @@ function DemoReader({
         chapterCount={chapterCount}
         fontSize={fontSize}
         lineHeight={lineHeight as 1.6 | 1.8 | 2}
+        onSummarizeChapter={summarizeChapter}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -642,6 +701,7 @@ function DemoReader({
         </div>
 
         <ChatPanel
+          ref={panelRef}
           book={{ id: bookId ?? book.id, title: book.title }}
           embedded
           // 演示书没有全书概念，scrollProgress 是本章内的进度，不冒充全书进度。

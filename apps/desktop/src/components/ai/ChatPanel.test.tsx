@@ -3,6 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CurrentBook } from "@/lib/ai/currentBook";
+import type { ChatPanelHandle } from "./ChatPanel";
 
 vi.mock("@/lib/ai/claudeBackend", () => ({
   CLAUDE_CHUNK_EVENT: "claude://chunk",
@@ -246,6 +247,54 @@ describe("ChatPanel", () => {
     );
     await eventually(() => expect(input).toHaveValue(draft.text));
     expect(claudeChat).not.toHaveBeenCalled();
+  });
+
+  it("ref.send：气泡显示 displayText，发给 claude 的是完整 prompt", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(claudeChat).mockResolvedValue({
+      text: "本章总结如下……",
+      sessionId: "sess_sum",
+    });
+    const panelRef = { current: null as ChatPanelHandle | null };
+    render(<ChatPanel ref={panelRef} book={BOOK} onClose={() => {}} />);
+
+    await eventually(() => expect(panelRef.current).not.toBeNull());
+    panelRef.current?.send("完整的总结 prompt", "总结本章");
+
+    await eventually(() =>
+      expect(screen.getByText("总结本章")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/完整的总结 prompt/)).not.toBeInTheDocument();
+    await eventually(() =>
+      expect(screen.getByText("本章总结如下……")).toBeInTheDocument(),
+    );
+    const prompt = vi.mocked(claudeChat).mock.calls[0][0].prompt;
+    expect(prompt).toBe("完整的总结 prompt");
+    const threadId = activeThread();
+    const messages = useChatStore.getState().messages[threadId];
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toBe("总结本章");
+  });
+
+  it("ref.send 在回复在途时不并发发送", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    let resolveChat!: (v: { text: string; sessionId: string }) => void;
+    vi.mocked(claudeChat).mockReturnValue(
+      new Promise((resolve) => {
+        resolveChat = resolve;
+      }),
+    );
+    const panelRef = { current: null as ChatPanelHandle | null };
+    render(<ChatPanel ref={panelRef} book={BOOK} onClose={() => {}} />);
+
+    await eventually(() => expect(panelRef.current).not.toBeNull());
+    panelRef.current?.send("第一条", "第一条");
+    panelRef.current?.send("第二条", "第二条");
+    resolveChat({ text: "第一条的回复", sessionId: "sess_x" });
+    await eventually(() =>
+      expect(screen.getByText("第一条的回复")).toBeInTheDocument(),
+    );
+    expect(claudeChat).toHaveBeenCalledTimes(1);
   });
 
   it("清空按钮清空当前会话并回到空状态", async () => {

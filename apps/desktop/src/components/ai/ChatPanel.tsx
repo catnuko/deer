@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -139,6 +139,11 @@ export type ChatPanelDraft = {
   id: number;
 };
 
+/** 章节总结等外部入口通过 ref 调用：prompt 发给 claude，气泡显示 displayText。 */
+export type ChatPanelHandle = {
+  send: (prompt: string, displayText?: string) => void;
+};
+
 /** 划选/总结等入口预填输入框：只改 composer 文本，不自动发送。 */
 function ComposerPreset({ draft }: { draft: ChatPanelDraft }) {
   const aui = useAui();
@@ -155,6 +160,7 @@ export function ChatPanel({
   className,
   readingContext,
   draft,
+  ref,
 }: {
   book: CurrentBook;
   onClose: () => void;
@@ -165,6 +171,7 @@ export function ChatPanel({
   readingContext?: ReadingContext | null;
   /** 外部入口预填输入框（划选问 Deer 等）；id 变化即重填。 */
   draft?: ChatPanelDraft | null;
+  ref?: React.Ref<ChatPanelHandle>;
 }) {
   const ready = useChatStore((s) => s.ready);
   const threads = useChatStore((s) => s.threads);
@@ -274,6 +281,14 @@ export function ChatPanel({
     },
     [appendMessage, book.id, currentThreadId, tauri],
   );
+
+  const send = useCallback(
+    (prompt: string, displayText?: string) => {
+      void sendUserMessage(prompt, displayText ?? prompt);
+    },
+    [sendUserMessage],
+  );
+  useImperativeHandle(ref, () => ({ send }), [send]);
 
   const runtime = useExternalStoreRuntime<ChatMessage>({
     messages,

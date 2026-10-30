@@ -11,6 +11,8 @@ type ReaderToolbarProps = {
   chapterCount: number;
   fontSize: number;
   lineHeight: LineHeight;
+  /** 提供时显示「总结本章」入口（章节总结 N3）。 */
+  onSummarizeChapter?: () => void;
 };
 
 export function ReaderToolbar({
@@ -20,6 +22,7 @@ export function ReaderToolbar({
   chapterCount,
   fontSize,
   lineHeight,
+  onSummarizeChapter,
 }: ReaderToolbarProps) {
   return (
     <header className="border-border bg-background/95 flex h-14 shrink-0 items-center gap-3 border-b px-4">
@@ -45,6 +48,11 @@ export function ReaderToolbar({
         <Badge variant="outline">
           字号 {fontSize} · 行距 {lineHeight.toFixed(1)}
         </Badge>
+        {onSummarizeChapter ? (
+          <Button variant="ghost" size="sm" onClick={onSummarizeChapter}>
+            总结本章
+          </Button>
+        ) : null}
         <Button variant="ghost" size="sm" render={<Link to="/settings" />}>
           阅读设置
         </Button>
