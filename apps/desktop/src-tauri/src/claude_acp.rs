@@ -162,11 +162,17 @@ struct Conn {
 }
 
 impl Conn {
-    async fn spawn() -> Result<Self, String> {
+    async fn spawn(claude_cli: Option<&Path>) -> Result<Self, String> {
         let node = find_node();
         let entry = find_adapter_entry()?;
-        let mut child = Command::new(&node)
-            .arg(&entry)
+        // 指向用户真实的 claude CLI（见 claude_cli 模块），SDK 会把它用作
+        // pathToClaudeCodeExecutable，让 CLI 用上用户的 Keychain 登录态。
+        let mut cmd = Command::new(&node);
+        cmd.arg(&entry);
+        if let Some(cli) = claude_cli {
+            cmd.env("CLAUDE_CODE_EXECUTABLE", cli);
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -313,7 +319,9 @@ async fn run_chat(
     prompt: &str,
     resume_session_id: Option<&str>,
 ) -> Result<ClaudeChatResult, String> {
-    let mut conn = Conn::spawn().await?;
+    let cli = crate::claude_cli::resolve_claude().await?;
+    crate::claude_cli::auth_precheck(&cli).await?;
+    let mut conn = Conn::spawn(Some(cli.as_path())).await?;
 
     let init_id = conn
         .send("initialize", json!({"protocolVersion": 1, "clientCapabilities": {}}))

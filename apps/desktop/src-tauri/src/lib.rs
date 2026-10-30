@@ -1,4 +1,5 @@
 mod claude_acp;
+mod claude_cli;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
