@@ -8,6 +8,7 @@ import {
   Library,
   MoreHorizontal,
   Pencil,
+  Settings as SettingsIcon,
   Trash2,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -36,6 +37,8 @@ import { isTauri } from "@/lib/platform";
 import type { Book, Shelf } from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { BookCard } from "./BookCard";
+import { ContinueReadingCard } from "./ContinueReadingCard";
+import { continueReadingBookOf } from "./continueReading";
 import { ShelfNameDialog } from "./ShelfNameDialog";
 
 type ShelfForm =
@@ -95,6 +98,12 @@ export function BookshelfPage() {
     shelves.find((shelf) => shelf.id === effectiveShelfId) ?? null;
   const countInShelf = (shelfId: string) =>
     books.filter((book) => book.shelfIds.includes(shelfId)).length;
+
+  // 「继续阅读」卡片（M5a）：有保存过阅读位置的书才显示。
+  const continueReading = useMemo(
+    () => (isReady ? continueReadingBookOf(books) : null),
+    [books, isReady],
+  );
 
   function requireDesktop(): boolean {
     if (preview || !isTauri()) {
@@ -194,6 +203,16 @@ export function BookshelfPage() {
       <PageHeader
         title="书架"
         description="导入、整理与阅读你的本地电子书。"
+        actions={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="打开设置"
+            onClick={() => navigate("/settings")}
+          >
+            <SettingsIcon />
+          </Button>
+        }
       />
 
       <div className="flex min-h-0 flex-1">
@@ -340,6 +359,16 @@ export function BookshelfPage() {
           )}
 
           <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
+            {isReady && continueReading ? (
+              <div className="mb-5 max-w-xl">
+                <ContinueReadingCard
+                  book={continueReading}
+                  onContinue={(book) =>
+                    navigate(`/reader?book=${encodeURIComponent(book.id)}`)
+                  }
+                />
+              </div>
+            ) : null}
             {!isReady ? (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4">
                 {Array.from({ length: 6 }).map((_, index) => (

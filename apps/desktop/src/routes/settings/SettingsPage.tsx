@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
@@ -10,6 +12,7 @@ const TABS = ["appearance", "reading", "about"] as const;
 type SettingsTab = (typeof TABS)[number];
 
 export function SettingsPage() {
+  const navigate = useNavigate();
   // 支持 ?tab=reading 这样的直达链接；之后切换走本地状态。
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get("tab");
@@ -24,6 +27,17 @@ export function SettingsPage() {
       <PageHeader
         title="设置"
         description="外观、阅读偏好与本地数据，全部保存在本机。"
+        actions={
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-auto"
+            onClick={() => navigate("/bookshelf")}
+          >
+            <ArrowLeft className="size-3.5" />
+            返回书架
+          </Button>
+        }
       />
 
       <div className="min-h-0 flex-1 overflow-auto px-8 py-6">
