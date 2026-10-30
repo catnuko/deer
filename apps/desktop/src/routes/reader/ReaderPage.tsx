@@ -35,6 +35,7 @@ import {
 } from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
 import { useBookStore } from "@/store/bookStore";
+import { useAnnotationStore } from "@/store/annotationStore";
 import { useReadingSettings } from "@/store/readingSettings";
 import { DEFAULT_HIGHLIGHT_COLOR } from "@/components/reader/highlightColors";
 import { getDemoBook } from "@/routes/reader/demoBook";
@@ -119,27 +120,51 @@ export function ReaderPage() {
     setSelection(null);
   }, []);
 
-  // M1 先做临时渲染（foliate addAnnotation → draw-annotation 画色块），
-  // 持久化与回显在 M2 的 annotationStore 落地。
-  const highlightSelection = useCallback((color: string, cfi: string | null) => {
-    if (cfi) {
-      void viewRef.current
-        ?.addAnnotation({ value: cfi, color })
-        .catch(() => undefined);
-    }
-    setSelection(null);
-    viewRef.current?.deselect();
-  }, []);
+  const bookKey = shelfBook?.id ?? null;
 
-  const noteSelection = useCallback((note: string, cfi: string | null) => {
-    if (cfi) {
-      void viewRef.current
-        ?.addAnnotation({ value: cfi, color: DEFAULT_HIGHLIGHT_COLOR, note })
-        .catch(() => undefined);
-    }
-    setSelection(null);
-    viewRef.current?.deselect();
-  }, []);
+  // 高亮/笔记：foliate 画临时层，annotationStore 落盘，回显与编辑菜单都以此为源。
+  const highlightSelection = useCallback(
+    (color: string, cfi: string | null, text: string) => {
+      if (cfi && bookKey) {
+        void viewRef.current
+          ?.addAnnotation({ value: cfi, color })
+          .catch(() => undefined);
+        useAnnotationStore.getState().add({
+          bookId: bookKey,
+          cfi,
+          color,
+          ...(text ? { excerpt: text } : {}),
+        });
+      }
+      setSelection(null);
+      viewRef.current?.deselect();
+    },
+    [bookKey],
+  );
+
+  const noteSelection = useCallback(
+    (note: string, cfi: string | null, text: string) => {
+      if (cfi && bookKey) {
+        void viewRef.current
+          ?.addAnnotation({
+            value: cfi,
+            color: DEFAULT_HIGHLIGHT_COLOR,
+            note,
+          })
+          .catch(() => undefined);
+        useAnnotationStore.getState().add({
+          bookId: bookKey,
+          cfi,
+          color: DEFAULT_HIGHLIGHT_COLOR,
+          note,
+          ...(text ? { excerpt: text } : {}),
+        });
+      }
+      setSelection(null);
+      viewRef.current?.deselect();
+    },
+    [bookKey],
+  );
 
   // 总结当前 spine section：走 N1 的上下文注入，气泡里只显示「总结本章」。
   const summarizeCurrentSection = async () => {
@@ -169,7 +194,6 @@ export function ReaderPage() {
 
   // 换书即重置真实渲染状态：在渲染期比较上一本书 id（React 认可的模式，
   // 避免 effect 内同步 setState 触发级联渲染）。
-  const bookKey = shelfBook?.id ?? null;
   const [lastBookKey, setLastBookKey] = useState<string | null>(null);
   if (bookKey !== lastBookKey) {
     setLastBookKey(bookKey);
@@ -248,10 +272,23 @@ export function ReaderPage() {
       });
     };
 
+    // 回显：foliate 不跨 section 保持注解，每个 section load 时把本书注解
+    // 重加一遍（未加载的 section resolve 后拿不到 overlayer，自然跳过）。
+    const redrawAnnotations = () => {
+      const view = viewRef.current;
+      if (!view) return;
+      for (const a of useAnnotationStore.getState().listForBook(shelfBook.id)) {
+        void view
+          .addAnnotation({ value: a.cfi, color: a.color, note: a.note })
+          .catch(() => undefined);
+      }
+    };
+
     const onLoaded = (event: Event) => {
       const detail = (event as CustomEvent<LoadDetail>).detail;
       const doc = detail?.doc;
       if (!doc) return;
+      redrawAnnotations();
       const sectionIndex = detail.index;
       const sync = () => {
         if (cancelled) return;
@@ -296,6 +333,8 @@ export function ReaderPage() {
 
     const run = async () => {
       try {
+        // 注解库先于首次 load 事件就绪，打开书即可回显。
+        await useAnnotationStore.getState().load();
         const bytes = await readFile(shelfBook.filePath);
         if (cancelled) return;
         const viewer = viewerRef.current;
@@ -456,8 +495,8 @@ type RealReaderProps = {
   panelRef: React.RefObject<ChatPanelHandle | null>;
   onAskSelection: (text: string) => void;
   onCopySelection: (text: string) => void;
-  onHighlightSelection: (color: string, cfi: string | null) => void;
-  onNoteSelection: (note: string, cfi: string | null) => void;
+  onHighlightSelection: (color: string, cfi: string | null, text: string) => void;
+  onNoteSelection: (note: string, cfi: string | null, text: string) => void;
   onSummarizeChapter: () => void;
   onClosePanel: () => void;
 };
@@ -548,9 +587,11 @@ function RealReader({
                 text={selection.text}
                 onCopy={onCopySelection}
                 onHighlight={(color) =>
-                  onHighlightSelection(color, selection.cfi)
+                  onHighlightSelection(color, selection.cfi, selection.text)
                 }
-                onNote={(note) => onNoteSelection(note, selection.cfi)}
+                onNote={(note) =>
+                  onNoteSelection(note, selection.cfi, selection.text)
+                }
                 onAsk={() => onAskSelection(selection.text)}
               />
             ) : null}
