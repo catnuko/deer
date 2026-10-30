@@ -1,0 +1,200 @@
+// @vitest-environment happy-dom
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CurrentBook } from "@/lib/ai/currentBook";
+
+vi.mock("@/lib/ai/claudeBackend", () => ({
+  CLAUDE_CHUNK_EVENT: "claude://chunk",
+  isTauriRuntime: vi.fn(() => false),
+  claudeChat: vi.fn(),
+}));
+
+const { isTauriRuntime, claudeChat } = await import("@/lib/ai/claudeBackend");
+const { ChatPanel } = await import("./ChatPanel");
+const { useChatStore } = await import("@/store/chatStore");
+
+const BOOK: CurrentBook = { id: "book-1", title: "三体" };
+
+function resetStore() {
+  useChatStore.setState({
+    threads: {},
+    messages: {},
+    activeThreadByBook: {},
+    feedback: {},
+    claudeSessionByBook: {},
+    ready: true,
+  });
+}
+
+function activeThread() {
+  const state = useChatStore.getState();
+  const threadId = state.activeThreadByBook[BOOK.id];
+  if (!threadId) throw new Error("没有为当前书建立会话");
+  return threadId;
+}
+
+async function sendMessage(text: string) {
+  const user = userEvent.setup();
+  await user.type(
+    screen.getByPlaceholderText(/问点什么/),
+    text,
+  );
+  await user.click(screen.getByRole("button", { name: "发送" }));
+}
+
+// happy-dom 的 MutationObserver 对后续 DOM 变化不触发，RTL 的 waitFor 轮询
+// 探不到新渲染的内容；用 vitest 的 vi.waitFor（纯定时轮询）做异步断言。
+function eventually<T>(fn: () => T, timeout = 3000): Promise<T> {
+  return vi.waitFor(fn, { timeout });
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  resetStore();
+  vi.mocked(isTauriRuntime).mockReturnValue(false);
+  vi.mocked(claudeChat).mockReset();
+});
+
+afterEach(() => {
+  cleanup();
+  // zustand 是模块级单例，测试间必须还原，否则串状态。
+  resetStore();
+});
+
+describe("ChatPanel", () => {
+  it("头部显示书名、模式徽标，空会话显示引导文案", () => {
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    expect(screen.getByText("AI 伴读")).toBeInTheDocument();
+    expect(screen.getByText("三体")).toBeInTheDocument();
+    expect(screen.getByText("未接后端（浏览器预览）")).toBeInTheDocument();
+    expect(screen.getByText(/和《三体》聊聊/)).toBeInTheDocument();
+  });
+
+  it("桌面端模式显示「本地 Claude Code」徽标与说明", () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    expect(screen.getByText("本地 Claude Code")).toBeInTheDocument();
+    expect(screen.getByText(/回复由你本机的 claude CLI 生成/)).toBeInTheDocument();
+  });
+
+  it("浏览器预览模式发送后先出现用户消息，再收到演示回复", async () => {
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("这本书讲什么");
+
+    await eventually(() =>
+      expect(screen.getByText("这本书讲什么")).toBeInTheDocument(),
+    );
+    // mockReply 延迟 600ms 后返回写死的占位回复；「讲什么」命中关键词分支。
+    await eventually(() =>
+      expect(screen.getByText(/粗看下来，全书围绕/)).toBeInTheDocument(),
+    );
+    // 回复落库（持久化链路）。
+    const threadId = activeThread();
+    expect(useChatStore.getState().messages[threadId]).toHaveLength(2);
+  });
+
+  it("桌面端走 claudeChat，回复正文与 session id 落库", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(claudeChat).mockResolvedValue({
+      text: "桌面端的完整回复",
+      sessionId: "sess_42",
+    });
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("主角是谁");
+
+    await eventually(() =>
+      expect(screen.getByText("桌面端的完整回复")).toBeInTheDocument(),
+    );
+    const threadId = activeThread();
+    const messages = useChatStore.getState().messages[threadId];
+    expect(messages).toHaveLength(2);
+    expect(messages[1].content).toBe("桌面端的完整回复");
+    expect(useChatStore.getState().claudeSessionByBook[BOOK.id]).toBe(
+      "sess_42",
+    );
+  });
+
+  it("桌面端 claudeChat 报错时，把原因写进消息而不是白屏", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(claudeChat).mockRejectedValue(
+      new Error("claude 未安装或不在应用 PATH 中，请在终端安装 claude"),
+    );
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("主角是谁");
+
+    await eventually(() =>
+      expect(
+        screen.getByText(/（出错了）claude 未安装或不在应用 PATH 中/),
+      ).toBeInTheDocument(),
+    );
+    expect(useChatStore.getState().claudeSessionByBook[BOOK.id]).toBeUndefined();
+  });
+
+  it("等待回复期间显示「正在输入…」", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    let resolveChat!: (v: { text: string; sessionId: string }) => void;
+    vi.mocked(claudeChat).mockReturnValue(
+      new Promise((resolve) => {
+        resolveChat = resolve;
+      }),
+    );
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("在吗");
+    await eventually(() =>
+      expect(screen.getByText("正在输入…")).toBeInTheDocument(),
+    );
+
+    resolveChat({ text: "在的", sessionId: "sess_1" });
+    await eventually(() =>
+      expect(screen.queryByText("正在输入…")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("清空按钮清空当前会话并回到空状态", async () => {
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("你好");
+    await eventually(() =>
+      expect(screen.getByText(/我记下了你这个问题/)).toBeInTheDocument(),
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "清空当前会话" }));
+
+    expect(screen.getByText(/和《三体》聊聊/)).toBeInTheDocument();
+    const threadId = activeThread();
+    expect(useChatStore.getState().messages[threadId]).toHaveLength(0);
+  });
+
+  it("点关闭按钮触发 onClose", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<ChatPanel book={BOOK} onClose={onClose} />);
+
+    await user.click(screen.getByRole("button", { name: "关闭面板" }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("给助手回复点「有帮助」后反馈写入 store", async () => {
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("你好");
+    await eventually(() =>
+      expect(screen.getByText(/我记下了你这个问题/)).toBeInTheDocument(),
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "有帮助" }));
+
+    const threadId = activeThread();
+    const assistantMessage = useChatStore.getState().messages[threadId][1];
+    expect(useChatStore.getState().feedback[assistantMessage.id]).toBe("up");
+  });
+});

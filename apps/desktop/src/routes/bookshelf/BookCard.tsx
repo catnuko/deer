@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -110,22 +111,24 @@ export function BookCard({
               阅读
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel>书架</DropdownMenuLabel>
-            {shelves.length === 0 && (
-              <DropdownMenuItem disabled>还没有书架</DropdownMenuItem>
-            )}
-            {shelves.map((shelf) => {
-              const inShelf = book.shelfIds.includes(shelf.id);
-              return (
-                <DropdownMenuItem
-                  key={shelf.id}
-                  onClick={() => onToggleShelf(book, shelf)}
-                >
-                  <span className="flex-1 truncate">{shelf.name}</span>
-                  {inShelf && <Check className="text-primary" />}
-                </DropdownMenuItem>
-              );
-            })}
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>书架</DropdownMenuLabel>
+              {shelves.length === 0 && (
+                <DropdownMenuItem disabled>还没有书架</DropdownMenuItem>
+              )}
+              {shelves.map((shelf) => {
+                const inShelf = book.shelfIds.includes(shelf.id);
+                return (
+                  <DropdownMenuItem
+                    key={shelf.id}
+                    onClick={() => onToggleShelf(book, shelf)}
+                  >
+                    <span className="flex-1 truncate">{shelf.name}</span>
+                    {inShelf && <Check className="text-primary" />}
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               variant="destructive"
