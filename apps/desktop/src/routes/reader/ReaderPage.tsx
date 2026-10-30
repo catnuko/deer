@@ -351,6 +351,14 @@ function RealReader({
         <ChatPanel
           book={{ id: bookId, title }}
           embedded
+          readingContext={{
+            bookTitle: title,
+            chapterTitle:
+              phase.status === "ready"
+                ? (phase.toc[phase.currentIndex]?.title ?? null)
+                : null,
+            progress: scrollProgress,
+          }}
           onClose={() => undefined}
           className="hidden xl:flex"
         />
@@ -461,6 +469,12 @@ function DemoReader({ bookId, fontSize, lineHeight }: DemoReaderProps) {
         <ChatPanel
           book={{ id: bookId ?? book.id, title: book.title }}
           embedded
+          // 演示书没有全书概念，scrollProgress 是本章内的进度，不冒充全书进度。
+          readingContext={{
+            bookTitle: book.title,
+            chapterTitle: chapter.title,
+            progress: null,
+          }}
           onClose={() => undefined}
           className="hidden xl:flex"
         />

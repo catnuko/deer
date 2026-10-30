@@ -188,6 +188,41 @@ describe("ChatPanel", () => {
     expect(claudeChat).toHaveBeenCalledTimes(1);
   });
 
+  it("桌面端发送时 prompt 自动带上阅读上下文行（书名/章节/进度）", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(claudeChat).mockResolvedValue({
+      text: "好的",
+      sessionId: "sess_ctx",
+    });
+    render(
+      <ChatPanel
+        book={BOOK}
+        onClose={() => {}}
+        readingContext={{
+          bookTitle: "三体",
+          chapterTitle: "疯狂年代",
+          progress: 0.423,
+        }}
+      />,
+    );
+
+    await sendMessage("主角是谁");
+
+    await eventually(() => expect(claudeChat).toHaveBeenCalledTimes(1));
+    const prompt = vi.mocked(claudeChat).mock.calls[0][0].prompt;
+    expect(prompt).toBe(
+      [
+        "你是《三体》这本书的伴读助手。",
+        "【阅读上下文】《三体》 · 当前章节：疯狂年代 · 全书进度 42%",
+        "",
+        "主角是谁",
+      ].join("\n"),
+    );
+    // 用户气泡里只有原文，不带上下文框架。
+    expect(screen.getByText("主角是谁")).toBeInTheDocument();
+    expect(screen.queryByText(/阅读上下文/)).not.toBeInTheDocument();
+  });
+
   it("清空按钮清空当前会话并回到空状态", async () => {
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
 

@@ -11,6 +11,7 @@ import {
 import { ArrowUp, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
+import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
 import { claudeChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -135,12 +136,15 @@ export function ChatPanel({
   onClose,
   embedded = false,
   className,
+  readingContext,
 }: {
   book: CurrentBook;
   onClose: () => void;
   /** 内联常驻侧栏模式（阅读页用）；默认 false = 书架/首页的 fixed 浮层。 */
   embedded?: boolean;
   className?: string;
+  /** 阅读上下文（N1）：每条消息的 prompt 前自动附带书名/章节/进度。 */
+  readingContext?: ReadingContext | null;
 }) {
   const ready = useChatStore((s) => s.ready);
   const threads = useChatStore((s) => s.threads);
@@ -154,7 +158,15 @@ export function ChatPanel({
   const clearThread = useChatStore((s) => s.clearThread);
 
   const [replying, setReplying] = useState(false);
+  // replying 的 ref 镜像：命令式发送入口（章节总结等）不经 React 状态判并发。
+  const replyingRef = useRef(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // 阅读上下文经 ref 读取：relocate 会高频更新 progress，
+  // 若进依赖会让 sendUserMessage/onNew 的闭包频繁失效。
+  const ctxRef = useRef<ReadingContext | null>(null);
+  useEffect(() => {
+    ctxRef.current = readingContext ?? null;
+  }, [readingContext]);
   // 运行时环境整个会话不会变，取一次即可。
   const [tauri] = useState(() => isTauriRuntime());
 
@@ -188,6 +200,61 @@ export function ChatPanel({
     [book.id, book.title],
   );
 
+  // 发送一条消息：displayText 进用户气泡，claudePrompt 才是发给 claude 的
+  // 完整 prompt（N1 上下文注入后两者不再相同，章节总结也复用这条通路）。
+  const sendUserMessage = useCallback(
+    async (claudePrompt: string, displayText: string) => {
+      if (replyingRef.current || !claudePrompt.trim()) return;
+      const threadId = currentThreadId();
+      appendMessage(threadId, "user", displayText);
+      replyingRef.current = true;
+      setReplying(true);
+
+      // 浏览器预览（无 Tauri 后端）：写死的演示回复，不联网。
+      if (!tauri) {
+        const timer = setTimeout(() => {
+          appendMessage(threadId, "assistant", mockReply(claudePrompt));
+          replyingRef.current = false;
+          setReplying(false);
+          timers.current = timers.current.filter((t) => t !== timer);
+        }, MOCK_DELAY);
+        timers.current.push(timer);
+        return;
+      }
+
+      // 桌面端：走本地 claude（ACP），同书追问续接上一轮会话上下文。
+      const assistant = appendMessage(threadId, "assistant", "");
+      const resumeSessionId =
+        useChatStore.getState().claudeSessionByBook[book.id] ?? null;
+      try {
+        const result = await claudeChat({
+          prompt: claudePrompt,
+          messageId: assistant.id,
+          resumeSessionId,
+          onDelta: (delta) => {
+            useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
+          },
+        });
+        // 以 Rust 侧累计的完整正文为准落库（含持久化）。
+        useChatStore
+          .getState()
+          .setMessageContent(threadId, assistant.id, result.text);
+        useChatStore
+          .getState()
+          .setClaudeSession(book.id, result.sessionId);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        useChatStore
+          .getState()
+          .setMessageContent(threadId, assistant.id, `（出错了）${reason}`);
+      } finally {
+        replyingRef.current = false;
+        setReplying(false);
+      }
+    },
+    [appendMessage, book.id, currentThreadId, tauri],
+  );
+
   const runtime = useExternalStoreRuntime<ChatMessage>({
     messages,
     isRunning: replying,
@@ -210,49 +277,11 @@ export function ChatPanel({
     onNew: async (message) => {
       const text = extractText(message);
       if (!text) return;
-      const threadId = currentThreadId();
-      appendMessage(threadId, "user", text);
-      setReplying(true);
-
-      // 浏览器预览（无 Tauri 后端）：写死的演示回复，不联网。
-      if (!tauri) {
-        const timer = setTimeout(() => {
-          appendMessage(threadId, "assistant", mockReply(text));
-          setReplying(false);
-          timers.current = timers.current.filter((t) => t !== timer);
-        }, MOCK_DELAY);
-        timers.current.push(timer);
-        return;
-      }
-
-      // 桌面端：走本地 claude（ACP），同书追问续接上一轮会话上下文。
-      const assistant = appendMessage(threadId, "assistant", "");
-      const resumeSessionId =
-        useChatStore.getState().claudeSessionByBook[book.id] ?? null;
-      try {
-        const result = await claudeChat({
-          prompt: `你是《${book.title}》这本书的伴读助手。\n\n${text}`,
-          messageId: assistant.id,
-          resumeSessionId,
-          onDelta: (delta) => {
-            useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
-          },
-        });
-        // 以 Rust 侧累计的完整正文为准落库（含持久化）。
-        useChatStore
-          .getState()
-          .setMessageContent(threadId, assistant.id, result.text);
-        useChatStore
-          .getState()
-          .setClaudeSession(book.id, result.sessionId);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        useChatStore
-          .getState()
-          .setMessageContent(threadId, assistant.id, `（出错了）${reason}`);
-      } finally {
-        setReplying(false);
-      }
+      const prompt = buildPrompt(
+        text,
+        ctxRef.current ?? { bookTitle: book.title },
+      );
+      await sendUserMessage(prompt, text);
     },
     adapters: {
       feedback: {
