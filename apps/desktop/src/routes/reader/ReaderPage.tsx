@@ -12,6 +12,7 @@ import type {
 import { Overlayer } from "@/vendor/foliate-js/overlayer.js";
 import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
+import { AnnotationPanel } from "@/components/reader/AnnotationPanel";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { SelectionPopover } from "@/components/reader/SelectionPopover";
@@ -126,6 +127,36 @@ export function ReaderPage() {
 
   const bookKey = shelfBook?.id ?? null;
 
+  // 笔记管理面板（M3）：列表直接订阅 annotationStore，跳转/删除复用 foliate 能力。
+  const [notesOpen, setNotesOpen] = useState(false);
+  const annotationsForBook = useAnnotationStore((state) =>
+    bookKey ? state.annotations[bookKey] : undefined,
+  );
+
+  const deleteAnnotationById = useCallback(
+    (id: string) => {
+      if (!bookKey) return;
+      const annotation = useAnnotationStore
+        .getState()
+        .annotations[bookKey]?.find((a) => a.id === id);
+      if (!annotation) return;
+      useAnnotationStore.getState().remove(id);
+      void viewRef.current
+        ?.deleteAnnotation({ value: annotation.cfi })
+        .catch(() => undefined);
+    },
+    [bookKey],
+  );
+
+  // 点击笔记列表条目跳回原文：foliate 的 goTo 对 CFI 字符串会先 resolve 再定位。
+  const jumpToAnnotation = useCallback((cfi: string) => {
+    void viewRef.current
+      ?.goTo(cfi)
+      .catch((error: unknown) =>
+        console.warn("[reader] 跳转笔记位置失败:", cfi, error),
+      );
+  }, []);
+
   // 高亮/笔记：foliate 画临时层，annotationStore 落盘，回显与编辑菜单都以此为源。
   const highlightSelection = useCallback(
     (color: string, cfi: string | null, text: string) => {
@@ -197,13 +228,10 @@ export function ReaderPage() {
 
   const deleteAnnotationMenu = useCallback(() => {
     const annotation = annotationMenu?.annotation;
-    if (!annotation || !bookKey) return;
-    useAnnotationStore.getState().remove(annotation.id);
-    void viewRef.current
-      ?.deleteAnnotation({ value: annotation.cfi })
-      .catch(() => undefined);
+    if (!annotation) return;
+    deleteAnnotationById(annotation.id);
     setAnnotationMenu(null);
-  }, [annotationMenu, bookKey]);
+  }, [annotationMenu, deleteAnnotationById]);
 
   // 总结当前 spine section：走 N1 的上下文注入，气泡里只显示「总结本章」。
   const summarizeCurrentSection = async () => {
@@ -531,6 +559,12 @@ export function ReaderPage() {
         onChangeAnnotationColor={changeAnnotationColor}
         onEditAnnotationNote={editAnnotationNote}
         onDeleteAnnotation={deleteAnnotationMenu}
+        notesOpen={notesOpen}
+        annotations={annotationsForBook}
+        onToggleNotes={() => setNotesOpen((open) => !open)}
+        onCloseNotes={() => setNotesOpen(false)}
+        onSelectAnnotation={jumpToAnnotation}
+        onDeleteAnnotationById={deleteAnnotationById}
         chatOpen={chatOpen}
         draft={draft}
         panelRef={panelRef}
@@ -577,6 +611,12 @@ type RealReaderProps = {
   onChangeAnnotationColor: (color: string) => void;
   onEditAnnotationNote: (note: string) => void;
   onDeleteAnnotation: () => void;
+  notesOpen: boolean;
+  annotations: StoredAnnotation[] | undefined;
+  onToggleNotes: () => void;
+  onCloseNotes: () => void;
+  onSelectAnnotation: (cfi: string) => void;
+  onDeleteAnnotationById: (id: string) => void;
   chatOpen: boolean;
   draft: ChatPanelDraft | null;
   panelRef: React.RefObject<ChatPanelHandle | null>;
@@ -604,6 +644,12 @@ function RealReader({
   onChangeAnnotationColor,
   onEditAnnotationNote,
   onDeleteAnnotation,
+  notesOpen,
+  annotations,
+  onToggleNotes,
+  onCloseNotes,
+  onSelectAnnotation,
+  onDeleteAnnotationById,
   chatOpen,
   draft,
   panelRef,
@@ -629,6 +675,7 @@ function RealReader({
         fontSize={fontSize}
         lineHeight={lineHeight as 1.6 | 1.8 | 2}
         onSummarizeChapter={onSummarizeChapter}
+        onOpenNotes={onToggleNotes}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -643,6 +690,15 @@ function RealReader({
           }}
           className="hidden md:flex"
         />
+
+        {notesOpen ? (
+          <AnnotationPanel
+            annotations={annotations ?? []}
+            onSelect={onSelectAnnotation}
+            onDelete={onDeleteAnnotationById}
+            onClose={onCloseNotes}
+          />
+        ) : null}
 
         <div className="flex min-w-0 flex-1 flex-col">
           <div

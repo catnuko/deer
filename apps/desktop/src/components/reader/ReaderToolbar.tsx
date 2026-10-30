@@ -13,6 +13,8 @@ type ReaderToolbarProps = {
   lineHeight: LineHeight;
   /** 提供时显示「总结本章」入口（章节总结 N3）。 */
   onSummarizeChapter?: () => void;
+  /** 提供时显示「笔记」入口（笔记管理面板 M3）。 */
+  onOpenNotes?: () => void;
 };
 
 export function ReaderToolbar({
@@ -23,6 +25,7 @@ export function ReaderToolbar({
   fontSize,
   lineHeight,
   onSummarizeChapter,
+  onOpenNotes,
 }: ReaderToolbarProps) {
   return (
     <header className="border-border bg-background/95 flex h-14 shrink-0 items-center gap-3 border-b px-4">
@@ -48,6 +51,11 @@ export function ReaderToolbar({
         <Badge variant="outline">
           字号 {fontSize} · 行距 {lineHeight.toFixed(1)}
         </Badge>
+        {onOpenNotes ? (
+          <Button variant="ghost" size="sm" onClick={onOpenNotes}>
+            笔记
+          </Button>
+        ) : null}
         {onSummarizeChapter ? (
           <Button variant="ghost" size="sm" onClick={onSummarizeChapter}>
             总结本章
