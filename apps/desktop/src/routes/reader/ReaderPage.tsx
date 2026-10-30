@@ -13,6 +13,7 @@ import { Overlayer } from "@/vendor/foliate-js/overlayer.js";
 import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { AnnotationPanel } from "@/components/reader/AnnotationPanel";
+import { QuickSettingsPanel } from "@/components/reader/QuickSettingsPanel";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { SelectionPopover } from "@/components/reader/SelectionPopover";
@@ -37,7 +38,7 @@ import {
 import { isTauri } from "@/lib/platform";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore, type StoredAnnotation } from "@/store/annotationStore";
-import { useReadingSettings } from "@/store/readingSettings";
+import { useReadingSettings, type FontSize, type PageFlow, type PaperColor } from "@/store/readingSettings";
 import { DEFAULT_HIGHLIGHT_COLOR } from "@/components/reader/highlightColors";
 import { getDemoBook } from "@/routes/reader/demoBook";
 import { matchTocIndex, type TocItem } from "@/routes/reader/epubToc";
@@ -68,12 +69,38 @@ function selectionStateOf(
   return { ...popoverPlacement(rect, hostRect), text, cfi: null };
 }
 
+/** 深色主题判定：显式 dark，或 system 时跟随系统外观变化。 */
+function useIsDarkTheme(): boolean {
+  const theme = useReadingSettings((state) => state.theme);
+  const [systemDark, setSystemDark] = useState(
+    () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => setSystemDark(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  return theme === "dark" || (theme === "system" && systemDark);
+}
+
 export function ReaderPage() {
   const [searchParams] = useSearchParams();
   const bookId = searchParams.get("book");
 
   const fontSize = useReadingSettings((state) => state.fontSize);
   const lineHeight = useReadingSettings((state) => state.lineHeight);
+  const paperColor = useReadingSettings((state) => state.paperColor);
+  const pageFlow = useReadingSettings((state) => state.pageFlow);
+  const setFontSize = useReadingSettings((state) => state.setFontSize);
+  const setPaperColor = useReadingSettings((state) => state.setPaperColor);
+  const setPageFlow = useReadingSettings((state) => state.setPageFlow);
+  const isDark = useIsDarkTheme();
 
   // —— 桌面端真实 EPUB：从书库找到书并渲染；浏览器预览退回演示书。——
   const isDesktop = isTauri();
@@ -129,6 +156,8 @@ export function ReaderPage() {
 
   // 笔记管理面板（M3）：列表直接订阅 annotationStore，跳转/删除复用 foliate 能力。
   const [notesOpen, setNotesOpen] = useState(false);
+  // 阅读页快捷显示设置面板（M4）。
+  const [quickSettingsOpen, setQuickSettingsOpen] = useState(false);
   const annotationsForBook = useAnnotationStore((state) =>
     bookKey ? state.annotations[bookKey] : undefined,
   );
@@ -516,11 +545,35 @@ export function ReaderPage() {
   }, [bookKey, updateBook]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
+  // 纸色只在浅色主题生效：深色主题传 undefined，保持深色背景。
   useEffect(() => {
     const renderer = viewRef.current?.renderer as StyleableRenderer | undefined;
     if (!renderer || realPhase.status !== "ready") return;
-    renderer.setStyles?.(readingStyles(fontSize, lineHeight));
-  }, [fontSize, lineHeight, realPhase.status]);
+    renderer.setStyles?.(
+      readingStyles(
+        fontSize,
+        lineHeight,
+        isDark ? undefined : paperColor,
+      ),
+    );
+  }, [fontSize, lineHeight, paperColor, isDark, realPhase.status]);
+
+  // 纸色（M4）：::part(filter) 用 --deer-paper 覆盖 paginator 背景，
+  // 设在 foliate 容器上让变量继承进去；深色主题移除，回落应用背景。
+  useEffect(() => {
+    const host = viewerRef.current;
+    if (!host) return;
+    if (isDark) host.style.removeProperty("--deer-paper");
+    else host.style.setProperty("--deer-paper", paperColor);
+  }, [paperColor, isDark, realPhase.status]);
+
+  // 翻页方式（M4）：flow 是 renderer 的 observed attribute，运行时
+  // setAttribute 即切换，paginator 用 anchor 恢复位置；未就绪时跳过。
+  useEffect(() => {
+    const renderer = viewRef.current?.renderer;
+    if (!renderer || realPhase.status !== "ready") return;
+    renderer.setAttribute("flow", pageFlow);
+  }, [pageFlow, realPhase.status]);
 
   // 正文区左右边缘点击翻页（中间区域留给文字选择）。
   const turnPage = useCallback((direction: "next" | "prev") => {
@@ -565,6 +618,15 @@ export function ReaderPage() {
         onCloseNotes={() => setNotesOpen(false)}
         onSelectAnnotation={jumpToAnnotation}
         onDeleteAnnotationById={deleteAnnotationById}
+        quickSettingsOpen={quickSettingsOpen}
+        paperColor={paperColor}
+        pageFlow={pageFlow}
+        isDark={isDark}
+        onToggleQuickSettings={() => setQuickSettingsOpen((open) => !open)}
+        onCloseQuickSettings={() => setQuickSettingsOpen(false)}
+        onFontSizeChange={setFontSize}
+        onPaperColorChange={setPaperColor}
+        onPageFlowChange={setPageFlow}
         chatOpen={chatOpen}
         draft={draft}
         panelRef={panelRef}
@@ -599,7 +661,7 @@ type RealReaderProps = {
   author: string;
   phase: RealBookPhase;
   scrollProgress: number;
-  fontSize: number;
+  fontSize: FontSize;
   lineHeight: number;
   viewerRef: React.RefObject<HTMLDivElement | null>;
   onSelectChapter: (item: TocItem) => void;
@@ -617,6 +679,15 @@ type RealReaderProps = {
   onCloseNotes: () => void;
   onSelectAnnotation: (cfi: string) => void;
   onDeleteAnnotationById: (id: string) => void;
+  quickSettingsOpen: boolean;
+  paperColor: PaperColor;
+  pageFlow: PageFlow;
+  isDark: boolean;
+  onToggleQuickSettings: () => void;
+  onCloseQuickSettings: () => void;
+  onFontSizeChange: (fontSize: FontSize) => void;
+  onPaperColorChange: (paperColor: PaperColor) => void;
+  onPageFlowChange: (pageFlow: PageFlow) => void;
   chatOpen: boolean;
   draft: ChatPanelDraft | null;
   panelRef: React.RefObject<ChatPanelHandle | null>;
@@ -650,6 +721,15 @@ function RealReader({
   onCloseNotes,
   onSelectAnnotation,
   onDeleteAnnotationById,
+  quickSettingsOpen,
+  paperColor,
+  pageFlow,
+  isDark,
+  onToggleQuickSettings,
+  onCloseQuickSettings,
+  onFontSizeChange,
+  onPaperColorChange,
+  onPageFlowChange,
   chatOpen,
   draft,
   panelRef,
@@ -676,6 +756,7 @@ function RealReader({
         lineHeight={lineHeight as 1.6 | 1.8 | 2}
         onSummarizeChapter={onSummarizeChapter}
         onOpenNotes={onToggleNotes}
+        onOpenQuickSettings={onToggleQuickSettings}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -716,6 +797,18 @@ function RealReader({
                 所以边缘翻页靠这两个透明捕获层接住。 */}
             <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
             <div className="absolute inset-y-0 right-0 w-[15%]" aria-hidden="true" />
+            {quickSettingsOpen ? (
+              <QuickSettingsPanel
+                fontSize={fontSize}
+                paperColor={paperColor}
+                pageFlow={pageFlow}
+                paperColorDisabled={isDark}
+                onFontSizeChange={onFontSizeChange}
+                onPaperColorChange={onPaperColorChange}
+                onPageFlowChange={onPageFlowChange}
+                onClose={onCloseQuickSettings}
+              />
+            ) : null}
             {phase.status === "loading" ? (
               <div className="text-muted-foreground absolute inset-0 flex items-center justify-center text-sm">
                 正在加载书籍…

@@ -15,6 +15,8 @@ type ReaderToolbarProps = {
   onSummarizeChapter?: () => void;
   /** 提供时显示「笔记」入口（笔记管理面板 M3）。 */
   onOpenNotes?: () => void;
+  /** 提供时显示「显示设置」入口（阅读页快捷设置面板 M4）。 */
+  onOpenQuickSettings?: () => void;
 };
 
 export function ReaderToolbar({
@@ -26,6 +28,7 @@ export function ReaderToolbar({
   lineHeight,
   onSummarizeChapter,
   onOpenNotes,
+  onOpenQuickSettings,
 }: ReaderToolbarProps) {
   return (
     <header className="border-border bg-background/95 flex h-14 shrink-0 items-center gap-3 border-b px-4">
@@ -54,6 +57,11 @@ export function ReaderToolbar({
         {onOpenNotes ? (
           <Button variant="ghost" size="sm" onClick={onOpenNotes}>
             笔记
+          </Button>
+        ) : null}
+        {onOpenQuickSettings ? (
+          <Button variant="ghost" size="sm" onClick={onOpenQuickSettings}>
+            显示设置
           </Button>
         ) : null}
         {onSummarizeChapter ? (
