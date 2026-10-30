@@ -11,10 +11,19 @@ export const DEMO_BOOK: CurrentBook = {
   title: "一本没读完的书",
 };
 
+export function currentBookFromParams(
+  book: string | null,
+  title: string | null,
+): CurrentBook {
+  if (!book) return DEMO_BOOK;
+  const trimmedTitle = title?.trim();
+  return {
+    id: book,
+    title: trimmedTitle ? trimmedTitle : `书籍 ${book.slice(0, 6)}`,
+  };
+}
+
 export function useCurrentBook(): CurrentBook {
   const [params] = useSearchParams();
-  const id = params.get("book");
-  if (!id) return DEMO_BOOK;
-  const title = params.get("title");
-  return { id, title: title?.trim() ? title : `书籍 ${id.slice(0, 6)}` };
+  return currentBookFromParams(params.get("book"), params.get("title"));
 }
