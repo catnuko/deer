@@ -223,6 +223,31 @@ describe("ChatPanel", () => {
     expect(screen.queryByText(/阅读上下文/)).not.toBeInTheDocument();
   });
 
+  it("draft 预填输入框但不自动发送，id 变化时重填", async () => {
+    const draft = { text: "我划选了这段：\n\n「给时光以生命」\n\n想问：", id: 1 };
+    const { rerender } = render(
+      <ChatPanel book={BOOK} onClose={() => {}} draft={draft} />,
+    );
+
+    const input = screen.getByPlaceholderText(/问点什么/);
+    await eventually(() => expect(input).toHaveValue(draft.text));
+    // 没有自动发送：会话里没有消息。
+    expect(claudeChat).not.toHaveBeenCalled();
+    const threadId = activeThread();
+    expect(useChatStore.getState().messages[threadId]).toHaveLength(0);
+
+    // 同一段划选再问一次（新 id）：重填同文本，不叠加。
+    rerender(
+      <ChatPanel
+        book={BOOK}
+        onClose={() => {}}
+        draft={{ ...draft, id: 2 }}
+      />,
+    );
+    await eventually(() => expect(input).toHaveValue(draft.text));
+    expect(claudeChat).not.toHaveBeenCalled();
+  });
+
   it("清空按钮清空当前会话并回到空状态", async () => {
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
 

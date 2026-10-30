@@ -7,11 +7,18 @@ import type {
   RelocateDetail,
   View as FoliateView,
 } from "@/vendor/foliate-js/view.js";
-import { ChatPanel } from "@/components/ai/ChatPanel";
+import { ChatPanel, type ChatPanelDraft } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
+import { SelectionPopover } from "@/components/reader/SelectionPopover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  formatSelectionDraft,
+  popoverPlacement,
+  selectionTextOf,
+  type SelectionPlacement,
+} from "@/lib/ai/selectionDraft";
 import {
   bookToc,
   ebookFormatOf,
@@ -38,6 +45,17 @@ type RealBookPhase =
   | { status: "loading" }
   | { status: "ready"; toc: TocItem[]; currentIndex: number }
   | { status: "error"; message: string };
+
+type SelectionState = SelectionPlacement & { text: string };
+
+/** 划选问 Deer（N2）：把选区矩形 + 宿主矩形折算成浮层状态。 */
+function selectionStateOf(
+  rect: { top: number; left: number; width: number; height: number },
+  hostRect: { top: number; left: number; width: number },
+  text: string,
+): SelectionState {
+  return { ...popoverPlacement(rect, hostRect), text };
+}
 
 export function ReaderPage() {
   const [searchParams] = useSearchParams();
@@ -66,6 +84,21 @@ export function ReaderPage() {
   const viewerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<FoliateView | null>(null);
   const lastSavedProgressRef = useRef(0);
+  const [selection, setSelection] = useState<SelectionState | null>(null);
+  const [draft, setDraft] = useState<ChatPanelDraft | null>(null);
+  // 大屏默认展开面板；小屏由划选问 / 后续入口主动唤起。
+  const [chatOpen, setChatOpen] = useState(
+    () => window.matchMedia("(min-width: 1280px)").matches,
+  );
+
+  const askDeer = useCallback((text: string) => {
+    const formatted = formatSelectionDraft(text);
+    if (!formatted) return;
+    setDraft({ text: formatted.draft, id: Date.now() });
+    setSelection(null);
+    viewRef.current?.deselect();
+    setChatOpen(true);
+  }, []);
 
   // 换书即重置真实渲染状态：在渲染期比较上一本书 id（React 认可的模式，
   // 避免 effect 内同步 setState 触发级联渲染）。
@@ -104,6 +137,8 @@ export function ReaderPage() {
       const section = detail.section;
       if (!section || section.total === 0) return;
 
+      // 翻页/跳章后选区与浮层都作废。
+      setSelection(null);
       const fraction = Number.isFinite(detail.fraction)
         ? Math.min(1, Math.max(0, detail.fraction as number))
         : 0;
@@ -128,6 +163,52 @@ export function ReaderPage() {
       }
     };
 
+    // 划选问 Deer（N2）：foliate 没有现成的选区事件，沿用上游 reader.js /
+    // paginator.js 的做法——在 view 的 load 事件给出的章节 document 上挂
+    // pointerup/keyup（paginator 自己也在同一 doc 上监听 selectionchange），
+    // 再从该 doc 读 Selection，坐标经 iframe → 宿主平移折算。
+    const docCleanups: Array<() => void> = [];
+    const onLoaded = (event: Event) => {
+      const doc = (event as CustomEvent<{ doc?: Document }>).detail?.doc;
+      if (!doc) return;
+      const sync = () => {
+        if (cancelled) return;
+        const viewer = viewerRef.current;
+        if (!viewer) return;
+        const sel = selectionTextOf(doc.getSelection());
+        if (!sel) {
+          setSelection(null);
+          return;
+        }
+        const range = doc.getSelection()?.getRangeAt(0);
+        const frame = doc.defaultView?.frameElement as HTMLElement | null;
+        if (!range || !frame) return;
+        // 正文渲染在 sandbox iframe 里，选区矩形是 iframe 坐标系；
+        // paginator 没有对内容做 CSS 缩放，平移即可换算到宿主坐标系。
+        const rect = range.getBoundingClientRect();
+        const frameRect = frame.getBoundingClientRect();
+        const hostRect = viewer.getBoundingClientRect();
+        setSelection(
+          selectionStateOf(
+            {
+              top: frameRect.top + rect.top - hostRect.top,
+              left: frameRect.left + rect.left - hostRect.left,
+              width: rect.width,
+              height: rect.height,
+            },
+            { top: 0, left: 0, width: hostRect.width },
+            sel,
+          ),
+        );
+      };
+      doc.addEventListener("pointerup", sync);
+      doc.addEventListener("keyup", sync);
+      docCleanups.push(() => {
+        doc.removeEventListener("pointerup", sync);
+        doc.removeEventListener("keyup", sync);
+      });
+    };
+
     const run = async () => {
       try {
         const bytes = await readFile(shelfBook.filePath);
@@ -148,6 +229,7 @@ export function ReaderPage() {
         const view = document.createElement("foliate-view") as FoliateView;
         view.style.cssText = "display:block;width:100%;height:100%";
         view.addEventListener("relocate", onRelocate);
+        view.addEventListener("load", onLoaded);
         element = view;
         viewRef.current = view;
 
@@ -194,6 +276,8 @@ export function ReaderPage() {
       cancelled = true;
       window.removeEventListener("keydown", onKey);
       element?.removeEventListener("relocate", onRelocate);
+      element?.removeEventListener("load", onLoaded);
+      docCleanups.forEach((fn) => fn());
       element?.close();
       element?.remove();
       viewRef.current = null;
@@ -239,11 +323,26 @@ export function ReaderPage() {
         viewerRef={viewerRef}
         onSelectChapter={selectRealChapter}
         onPageTurn={turnPage}
+        selection={selection}
+        chatOpen={chatOpen}
+        draft={draft}
+        onAskSelection={askDeer}
+        onClosePanel={() => setChatOpen(false)}
       />
     );
   }
 
-  return <DemoReader bookId={bookId} fontSize={fontSize} lineHeight={lineHeight} />;
+  return (
+    <DemoReader
+      bookId={bookId}
+      fontSize={fontSize}
+      lineHeight={lineHeight}
+      chatOpen={chatOpen}
+      draft={draft}
+      onAskSelection={askDeer}
+      onClosePanel={() => setChatOpen(false)}
+    />
+  );
 }
 
 type RealReaderProps = {
@@ -257,6 +356,11 @@ type RealReaderProps = {
   viewerRef: React.RefObject<HTMLDivElement | null>;
   onSelectChapter: (item: TocItem) => void;
   onPageTurn: (direction: "next" | "prev") => void;
+  selection: SelectionState | null;
+  chatOpen: boolean;
+  draft: ChatPanelDraft | null;
+  onAskSelection: (text: string) => void;
+  onClosePanel: () => void;
 };
 
 function RealReader({
@@ -270,6 +374,11 @@ function RealReader({
   viewerRef,
   onSelectChapter,
   onPageTurn,
+  selection,
+  chatOpen,
+  draft,
+  onAskSelection,
+  onClosePanel,
 }: RealReaderProps) {
   const tocEntries: ReaderTocEntry[] =
     phase.status === "ready" ? phase.toc : [];
@@ -326,6 +435,14 @@ function RealReader({
                 打开本书失败：{phase.message}
               </div>
             ) : null}
+            {selection ? (
+              <SelectionPopover
+                x={selection.x}
+                y={selection.y}
+                placement={selection.placement}
+                onAsk={() => onAskSelection(selection.text)}
+              />
+            ) : null}
           </div>
 
           <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
@@ -359,8 +476,9 @@ function RealReader({
                 : null,
             progress: scrollProgress,
           }}
-          onClose={() => undefined}
-          className="hidden xl:flex"
+          draft={draft}
+          onClose={onClosePanel}
+          className={chatOpen ? "flex" : "hidden"}
         />
       </div>
     </div>
@@ -371,14 +489,27 @@ type DemoReaderProps = {
   bookId: string | null;
   fontSize: number;
   lineHeight: number;
+  chatOpen: boolean;
+  draft: ChatPanelDraft | null;
+  onAskSelection: (text: string) => void;
+  onClosePanel: () => void;
 };
 
 /** 浏览器预览（非 Tauri）时的演示书渲染，行为与泳道 B 占位版一致。 */
-function DemoReader({ bookId, fontSize, lineHeight }: DemoReaderProps) {
+function DemoReader({
+  bookId,
+  fontSize,
+  lineHeight,
+  chatOpen,
+  draft,
+  onAskSelection,
+  onClosePanel,
+}: DemoReaderProps) {
   const book = getDemoBook(bookId);
 
   const [chapterIndex, setChapterIndex] = useState(0);
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [selection, setSelection] = useState<SelectionState | null>(null);
   const scrollHostRef = useRef<HTMLDivElement>(null);
 
   const chapter = book.chapters[chapterIndex] ?? book.chapters[0];
@@ -388,6 +519,38 @@ function DemoReader({ bookId, fontSize, lineHeight }: DemoReaderProps) {
   const selectChapter = (index: number) => {
     setChapterIndex(index);
     setScrollProgress(0);
+    setSelection(null);
+  };
+
+  // 划选问 Deer（N2）：演示书正文就在宿主文档里，直接读 window selection。
+  const onMouseUp = () => {
+    const host = scrollHostRef.current;
+    const sel = window.getSelection();
+    const text = selectionTextOf(sel);
+    if (!host || !sel || sel.rangeCount === 0 || !text) {
+      setSelection(null);
+      return;
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    setSelection(
+      selectionStateOf(
+        {
+          top: rect.top - hostRect.top,
+          left: rect.left - hostRect.left,
+          width: rect.width,
+          height: rect.height,
+        },
+        { top: 0, left: 0, width: hostRect.width },
+        text,
+      ),
+    );
+  };
+
+  const askDeer = (text: string) => {
+    onAskSelection(text);
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
   };
 
   useEffect(() => {
@@ -436,7 +599,11 @@ function DemoReader({ bookId, fontSize, lineHeight }: DemoReaderProps) {
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div ref={scrollHostRef} className="min-h-0 flex-1">
+          <div
+            ref={scrollHostRef}
+            className="relative min-h-0 flex-1"
+            onMouseUp={onMouseUp}
+          >
             <ScrollArea className="h-full">
               <ReaderArticle
                 chapter={chapter}
@@ -444,6 +611,14 @@ function DemoReader({ bookId, fontSize, lineHeight }: DemoReaderProps) {
                 lineHeight={lineHeight as 1.6 | 1.8 | 2}
               />
             </ScrollArea>
+            {selection ? (
+              <SelectionPopover
+                x={selection.x}
+                y={selection.y}
+                placement={selection.placement}
+                onAsk={() => askDeer(selection.text)}
+              />
+            ) : null}
           </div>
 
           <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
@@ -475,8 +650,9 @@ function DemoReader({ bookId, fontSize, lineHeight }: DemoReaderProps) {
             chapterTitle: chapter.title,
             progress: null,
           }}
-          onClose={() => undefined}
-          className="hidden xl:flex"
+          draft={draft}
+          onClose={onClosePanel}
+          className={chatOpen ? "flex" : "hidden"}
         />
       </div>
     </div>

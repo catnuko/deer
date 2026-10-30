@@ -6,6 +6,7 @@ import {
   MessagePartPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useAui,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
 import { ArrowUp, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
@@ -131,12 +132,29 @@ function Composer() {
   );
 }
 
+export type ChatPanelDraft = {
+  /** 预填到输入框的完整草稿（划选引用 + 提问引导）。 */
+  text: string;
+  /** 每次新草稿换新 id，驱动输入框重填同一段内容。 */
+  id: number;
+};
+
+/** 划选/总结等入口预填输入框：只改 composer 文本，不自动发送。 */
+function ComposerPreset({ draft }: { draft: ChatPanelDraft }) {
+  const aui = useAui();
+  useEffect(() => {
+    aui.composer.setText(draft.text);
+  }, [aui, draft]);
+  return null;
+}
+
 export function ChatPanel({
   book,
   onClose,
   embedded = false,
   className,
   readingContext,
+  draft,
 }: {
   book: CurrentBook;
   onClose: () => void;
@@ -145,6 +163,8 @@ export function ChatPanel({
   className?: string;
   /** 阅读上下文（N1）：每条消息的 prompt 前自动附带书名/章节/进度。 */
   readingContext?: ReadingContext | null;
+  /** 外部入口预填输入框（划选问 Deer 等）；id 变化即重填。 */
+  draft?: ChatPanelDraft | null;
 }) {
   const ready = useChatStore((s) => s.ready);
   const threads = useChatStore((s) => s.threads);
@@ -346,6 +366,7 @@ export function ChatPanel({
       </div>
 
       <AssistantRuntimeProvider runtime={runtime}>
+        {draft ? <ComposerPreset key={draft.id} draft={draft} /> : null}
         <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
           <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
             <ThreadPrimitive.Empty>
