@@ -157,6 +157,37 @@ describe("ChatPanel", () => {
     );
   });
 
+  it("回复在途时即使输入了文字也无法发送，回复结束后恢复", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    let resolveChat!: (v: { text: string; sessionId: string }) => void;
+    vi.mocked(claudeChat).mockReturnValue(
+      new Promise((resolve) => {
+        resolveChat = resolve;
+      }),
+    );
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("第一条");
+    await eventually(() =>
+      expect(screen.getByText("正在输入…")).toBeInTheDocument(),
+    );
+
+    // 在途时继续打字：有文字的情况下发送键仍禁用（isSendDisabled 生效），
+    // 且输入框不禁用、能继续打字。
+    const user = userEvent.setup();
+    const input = screen.getByPlaceholderText(/问点什么/);
+    expect(input).toBeEnabled();
+    await user.type(input, "第二条");
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+
+    resolveChat({ text: "第一条的回复", sessionId: "sess_9" });
+    // 回复结束后输入框里还留着「第二条」，发送键恢复可用。
+    await eventually(() =>
+      expect(screen.getByRole("button", { name: "发送" })).toBeEnabled(),
+    );
+    expect(claudeChat).toHaveBeenCalledTimes(1);
+  });
+
   it("清空按钮清空当前会话并回到空状态", async () => {
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
 

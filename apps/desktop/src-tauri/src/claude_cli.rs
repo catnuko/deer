@@ -14,9 +14,13 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::deer_log::log;
+
 const AUTH_TIMEOUT: Duration = Duration::from_secs(8);
 const SHELL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(3);
 const SHELL_PROBE_MARKER: &str = "__DEER_PATH__";
+const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 const CLI_NOT_FOUND: &str = "未找到本机 claude CLI（已探测 ~/.local/bin、~/.claude/local、~/.npm-global/bin、nvm、homebrew 与 PATH）。请在终端安装 claude（curl -fsSL https://claude.ai/install.sh | bash）后重启应用。";
 
@@ -166,10 +170,17 @@ pub async fn auth_precheck(cli: &Path) -> Result<(), String> {
     )
     .await;
     let Ok(Ok(output)) = output else {
+        log("auth", "预检未得到结果（超时或命令无法执行），跳过判定");
         return Ok(());
     };
     if !output.status.success() {
+        log("auth", &format!("预检命令退出码 {:?}，跳过判定", output.status.code()));
         return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match summarize_auth_status(&stdout) {
+        Some(summary) => log("auth", &summary),
+        None => log("auth", "预检输出无法解析，跳过判定"),
     }
     let parsed: Value = match serde_json::from_slice(&output.stdout) {
         Ok(v) => v,
@@ -179,6 +190,88 @@ pub async fn auth_precheck(cli: &Path) -> Result<(), String> {
         return Err("claude CLI 未登录。请在终端执行 `claude login` 完成登录后重试。".to_string());
     }
     Ok(())
+}
+
+/// 登录态摘要（只取三个非敏感字段，用于日志）。
+pub(crate) fn summarize_auth_status(stdout: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(stdout).ok()?;
+    let logged_in = v.get("loggedIn")?.as_bool()?;
+    Some(format!(
+        "loggedIn={logged_in} authMethod={} apiProvider={}",
+        v.get("authMethod").and_then(Value::as_str).unwrap_or("?"),
+        v.get("apiProvider").and_then(Value::as_str).unwrap_or("?")
+    ))
+}
+
+/// 钥匙串探测：确认 claude 的凭据条目当前是否可读，把结论写进日志。
+///
+/// 只跑 `security find-generic-password` 做只读访问，**绝不记录命令输出**
+/// （那是 token 本身）；超时/被拒这类情况正好是 GUI 里被安全弹窗拦住的
+/// 证据。CLI 自己读取钥匙串时有 2 秒超时，所以这里的结果只用于诊断。
+pub async fn keychain_probe() -> String {
+    let user = std::env::var("USER").unwrap_or_default();
+    let output = tokio::time::timeout(
+        KEYCHAIN_TIMEOUT,
+        tokio::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-a", &user, "-w", "-s", KEYCHAIN_SERVICE])
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await;
+    match output {
+        Err(_) => format!(
+            "读取超时（>{} 秒）：可能有系统授权弹窗在等待，或 securityd 无响应",
+            KEYCHAIN_TIMEOUT.as_secs()
+        ),
+        Ok(Err(e)) => format!("无法执行 security 命令：{e}"),
+        Ok(Ok(out)) => classify_keychain_result(out.status.code(), &String::from_utf8_lossy(&out.stderr)),
+    }
+}
+
+/// 把 security 命令的退出码/stderr 归成一句诊断结论（不涉及条目内容）。
+pub(crate) fn classify_keychain_result(code: Option<i32>, stderr: &str) -> String {
+    let lower = stderr.to_lowercase();
+    if code == Some(0) {
+        return "凭据条目存在且可读".to_string();
+    }
+    if lower.contains("could not be found") || lower.contains("item not found") {
+        return "钥匙串中没有 claude 凭据条目".to_string();
+    }
+    if lower.contains("user interaction is not allowed") {
+        return "钥匙串访问被拒绝（当前进程没有可交互的授权会话）".to_string();
+    }
+    if lower.contains("not allowed") || lower.contains("denied") {
+        return "钥匙串访问被拒绝（可能需要在系统弹窗里允许）".to_string();
+    }
+    format!("读取失败（security 退出码 {code:?}）")
+}
+
+/* ------------------------------------------------------------------ */
+/* OAuth 令牌（官方绕开钥匙串的途径）                                     */
+/* ------------------------------------------------------------------ */
+
+/// 可选的 OAuth 令牌文件：用户在终端跑 `claude setup-token`（需订阅），
+/// 把输出存进来。存在且非空时，spawn 会把它注入 `CLAUDE_CODE_OAUTH_TOKEN`，
+/// CLI 用它直接向服务端鉴权，不再读钥匙串——GUI 拉起的进程读钥匙串会被
+/// securityd 拦住，这是 CLI 官方支持的环境变量途径。文件由用户自己管理，
+/// 我们只在内存里传递，不落日志。
+pub fn oauth_token_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".config/deer/claude-oauth-token"))
+}
+
+/// 去首尾空白后非空才算有效令牌。
+pub(crate) fn token_from_content(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+pub(crate) fn read_oauth_token() -> Option<String> {
+    read_token_at(&oauth_token_path()?)
+}
+
+fn read_token_at(path: &Path) -> Option<String> {
+    token_from_content(&std::fs::read_to_string(path).ok()?)
 }
 
 /* ------------------------------------------------------------------ */
@@ -273,6 +366,54 @@ mod tests {
                 PathBuf::from("/p1/claude"),
             ]
         );
+    }
+
+    #[test]
+    fn summarizes_auth_status_for_logging() {
+        let json = r#"{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty","email":"x@y.z"}"#;
+        let summary = summarize_auth_status(json).unwrap();
+        assert!(summary.contains("loggedIn=true"));
+        assert!(summary.contains("authMethod=oauth_token"));
+        // 摘要里不能出现邮箱等个人字段
+        assert!(!summary.contains("x@y.z"));
+        // 缺字段/坏 JSON 不产出摘要
+        assert!(summarize_auth_status(r#"{"authMethod":"x"}"#).is_none());
+        assert!(summarize_auth_status("not json").is_none());
+    }
+
+    #[test]
+    fn classifies_keychain_probe_results() {
+        assert!(classify_keychain_result(Some(0), "").contains("可读"));
+        assert!(classify_keychain_result(
+            Some(44),
+            "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain."
+        )
+        .contains("没有 claude 凭据条目"));
+        assert!(classify_keychain_result(
+            Some(36),
+            "security: SecKeychainItemCopyContent: User interaction is not allowed."
+        )
+        .contains("被拒绝"));
+        assert!(classify_keychain_result(Some(1), "something else").contains("退出码"));
+        // 结论里不能带出 stderr 原文（可能含路径以外的信息）
+        assert!(!classify_keychain_result(Some(44), "The specified item could not be found").contains("specified item"));
+    }
+
+    #[test]
+    fn token_needs_nonblank_content() {
+        assert_eq!(token_from_content("  sk-ant-oat01-x\n"), Some("sk-ant-oat01-x".to_string()));
+        assert_eq!(token_from_content("   \n\t"), None);
+        assert_eq!(token_from_content(""), None);
+    }
+
+    #[test]
+    fn reads_token_from_file_and_treats_missing_as_none() {
+        let root = tmp_root("token");
+        let path = root.join("t.txt");
+        assert_eq!(read_token_at(&path), None);
+        std::fs::write(&path, "  tok-1 \n").unwrap();
+        assert_eq!(read_token_at(&path), Some("tok-1".to_string()));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

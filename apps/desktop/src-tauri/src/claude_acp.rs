@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -18,11 +18,25 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 
+use crate::claude_cli::read_oauth_token;
+use crate::deer_log::{log, LOG_HINT};
+
 const EVENT_CHUNK: &str = "claude://chunk";
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(180);
+/// 第一个文本增量到达前的静默上限：正常一轮几秒内就有输出，超时基本意味着
+/// claude 启动时被系统弹窗（钥匙串等）或网络问题挂住。
+const IDLE_BEFORE_FIRST_CHUNK: Duration = Duration::from_secs(20);
+/// 已经流式输出后两段之间的静默上限：长回答中途偶尔停顿，给更宽的余量。
+const IDLE_BETWEEN_CHUNKS: Duration = Duration::from_secs(120);
 const ADAPTER_PACKAGE: &str = "@zed-industries/claude-code-acp";
 const ADAPTER_ENTRY: &str = "dist/index.js";
 const STDERR_TAIL_LINES: usize = 20;
+/// 聊天请求的排队等待上限：在途时后来的请求最多等这么久拿门闩，超时拒绝。
+/// （CHAT_GATE 是单门闩，实际最多 1 个在排队 + 1 个在跑。）
+const CHAT_QUEUE_WAIT: Duration = Duration::from_secs(120);
+
+/// 全局聊天串行化门闩：同一 app 进程内同一时刻只跑一个 ACP 会话。
+static CHAT_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Serialize)]
 pub struct ClaudeChatResult {
@@ -42,11 +56,6 @@ struct ChunkPayload {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum RpcMessage {
-    Response {
-        id: Value,
-        result: Option<Value>,
-        error: Option<Value>,
-    },
     Request {
         id: Value,
         method: String,
@@ -83,6 +92,37 @@ pub(crate) fn parse_rpc_response(line: &str) -> Option<Result<Value, String>> {
         }));
     }
     Some(Ok(v.get("result").cloned().unwrap_or(Value::Null)))
+}
+
+/// 空闲超时的定向错误文案。GUI 里卡住时没有 stderr 可看，文案必须点名
+/// 「正在等的是哪一步」以及最可能的外部原因（系统弹窗），并指出日志位置。
+pub(crate) fn idle_timeout_error(stage: &str, idle: Duration, stderr_tail: &str) -> String {
+    let secs = idle.as_secs();
+    let base = match stage {
+        "initialize" => format!(
+            "ACP 适配器在 {secs} 秒内没有响应（initialize）。请确认 node 与 @zed-industries/claude-code-acp 安装完好后重试。"
+        ),
+        "session" => format!(
+            "claude 会话在 {secs} 秒内没有建立：claude 可能在启动时被系统弹窗（如 macOS 钥匙串授权）拦住，或启动即失败。请检查屏幕上是否有系统弹窗并允许后重试。"
+        ),
+        _ => format!(
+            "发出消息后 {secs} 秒内没有收到模型的任何输出：常见原因是 macOS 钥匙串/安全弹窗在等待你确认，或网络不通。请检查屏幕上是否有系统弹窗并允许后重试。"
+        ),
+    };
+    let tail = if stderr_tail.is_empty() {
+        String::new()
+    } else {
+        format!("（{stderr_tail}）")
+    };
+    format!("{base}{tail}诊断日志：{LOG_HINT}")
+}
+
+/// 从适配器的一整行 JSON-RPC 报文里提取文本增量。
+/// 这层解包曾经漏掉（直接在顶层找 `update`，而它在 `params` 里），
+/// 导致所有增量被静默丢弃、正文恒为空。
+pub(crate) fn delta_from_line(line: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    text_delta(v.get("params")?)
 }
 
 /// `session/update` 通知里的文本增量（agent_message_chunk）。
@@ -172,13 +212,34 @@ impl Conn {
         if let Some(cli) = claude_cli {
             cmd.env("CLAUDE_CODE_EXECUTABLE", cli);
         }
+        // 官方绕开钥匙串的途径：CLAUDE_CODE_OAUTH_TOKEN 优先于钥匙串读取
+        // （CLI 2.x 二进制内证）。令牌来自 `claude setup-token` 的输出，用户
+        // 手动放进 ~/.config/deer/claude-oauth-token（我们不代管凭据文件）。
+        if let Some(token) = read_oauth_token() {
+            cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
+            log("auth", "已从 ~/.config/deer/claude-oauth-token 注入 CLAUDE_CODE_OAUTH_TOKEN（绕开钥匙串）");
+        }
         let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| format!("启动适配器失败（node: {}，entry: {}）：{e}", node.display(), entry.display()))?;
+            .map_err(|e| {
+                let msg = format!("启动适配器失败（node: {}，entry: {}）：{e}", node.display(), entry.display());
+                log("spawn", &msg);
+                msg
+            })?;
+        log(
+            "spawn",
+            &format!(
+                "pid={:?} node={} entry={} claude={:?}",
+                child.id(),
+                node.display(),
+                entry.display(),
+                claude_cli.map(|p| p.display().to_string())
+            ),
+        );
 
         let stdin = child.stdin.take().ok_or("适配器 stdin 不可用")?;
         let stdout = child.stdout.take().ok_or("适配器 stdout 不可用")?;
@@ -190,6 +251,7 @@ impl Conn {
             loop {
                 match lines.next_line().await {
                     Ok(Some(line)) => {
+                        log("recv", &line);
                         if tx.send(ReaderMsg::Line(line)).await.is_err() {
                             break;
                         }
@@ -197,6 +259,7 @@ impl Conn {
                     _ => break,
                 }
             }
+            log("eof", "适配器 stdout 关闭");
             let _ = tx.send(ReaderMsg::Eof).await;
         });
 
@@ -205,12 +268,14 @@ impl Conn {
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                log("stderr", &line);
                 let mut buf = tail.lock().unwrap();
                 if buf.len() == STDERR_TAIL_LINES {
                     buf.pop_front();
                 }
                 buf.push_back(line);
             }
+            log("eof", "适配器 stderr 关闭");
         });
 
         Ok(Self {
@@ -226,6 +291,7 @@ impl Conn {
     async fn send(&mut self, method: &str, params: Value) -> u64 {
         self.next_id += 1;
         let id = self.next_id;
+        log("send", &format!("{method} id={id}"));
         let msg = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         let mut stdin = self.stdin.lock().await;
         let _ = stdin.write_all(msg.to_string().as_bytes()).await;
@@ -237,27 +303,37 @@ impl Conn {
     /// 读消息流直到目标 id 的 response 到达；期间把文本增量 emit 给前端，
     /// 对 agent 发来的请求（如权限申请）回复 method-not-found（聊天场景下
     /// 等价于拒绝使用工具）。
-    async fn wait_response(
+    ///
+    /// `stage` 用于空闲超时的报错文案。静默上限：第一个文本增量前 20 秒
+    /// （正常一轮几秒内就有输出），流式输出开始后放宽到 120 秒。
+    async fn wait_response<F: FnMut(&str, String) + Send>(
         &mut self,
-        app: &AppHandle,
         message_id: &str,
         target_id: u64,
+        stage: &str,
+        on_chunk: &mut F,
     ) -> Result<Value, String> {
         loop {
-            match self.rx.recv().await {
+            let idle = if self.accumulated.is_empty() {
+                IDLE_BEFORE_FIRST_CHUNK
+            } else {
+                IDLE_BETWEEN_CHUNKS
+            };
+            let msg = match tokio::time::timeout(idle, self.rx.recv()).await {
+                Ok(msg) => msg,
+                Err(_) => {
+                    let err = idle_timeout_error(stage, idle, &self.stderr_brief());
+                    log("timeout", &format!("{stage} 静默 {} 秒", idle.as_secs()));
+                    return Err(err);
+                }
+            };
+            match msg {
                 Some(ReaderMsg::Line(line)) => {
-                    if let Some(delta) = serde_json::from_str::<Value>(&line)
-                        .ok()
-                        .as_ref()
-                        .and_then(text_delta)
-                    {
+                    if let Some(delta) = delta_from_line(&line) {
                         self.accumulated.push_str(&delta);
-                        let _ = app.emit(
-                            EVENT_CHUNK,
-                            ChunkPayload {
-                                message_id: message_id.to_string(),
-                                delta,
-                            },
+                        on_chunk(
+                            message_id,
+                            delta,
                         );
                         continue;
                     }
@@ -268,11 +344,15 @@ impl Conn {
                             .map(|id| id == json!(target_id))
                             .unwrap_or(false);
                         if is_target {
-                            return resp.map_err(|e| format!("适配器错误：{e}"));
+                            return resp.map_err(|e| {
+                                log("error", &format!("{stage} 返回错误：{e}"));
+                                format!("适配器错误：{e}")
+                            });
                         }
                         continue;
                     }
                     if let Some(RpcMessage::Request { id, method, .. }) = parse_rpc_line(&line) {
+                        log("rpc", &format!("拒绝 agent 发起的请求：{method} id={id}"));
                         let err = json!({
                             "jsonrpc": "2.0",
                             "id": id,
@@ -285,10 +365,9 @@ impl Conn {
                     }
                 }
                 Some(ReaderMsg::Eof) | None => {
-                    return Err(format!(
-                        "适配器进程意外退出。{}",
-                        self.stderr_brief()
-                    ));
+                    let err = format!("适配器进程意外退出。{}", self.stderr_brief());
+                    log("eof", &err);
+                    return Err(err);
                 }
             }
         }
@@ -308,25 +387,61 @@ impl Conn {
     }
 
     async fn shutdown(&mut self) {
-        let _ = self.child.kill().await;
+        match self.child.kill().await {
+            Ok(()) => log("exit", "适配器进程已终止"),
+            Err(e) => log("exit", &format!("终止适配器进程失败：{e}")),
+        }
     }
 }
 
 /// 跑一轮完整对话。返回助手全文与 ACP session id。
-async fn run_chat(
-    app: &AppHandle,
+/// `on_chunk` 收到每个文本增量（生产路径用它向前端 emit 事件）。
+async fn run_chat<F: FnMut(&str, String) + Send>(
+    on_chunk: &mut F,
     message_id: &str,
     prompt: &str,
     resume_session_id: Option<&str>,
 ) -> Result<ClaudeChatResult, String> {
-    let cli = crate::claude_cli::resolve_claude().await?;
-    crate::claude_cli::auth_precheck(&cli).await?;
+    let t0 = Instant::now();
+    log(
+        "start",
+        &format!(
+            "message_id={message_id} resume={} prompt_chars={}",
+            resume_session_id.is_some(),
+            prompt.chars().count()
+        ),
+    );
+
+    let cli = match crate::claude_cli::resolve_claude().await {
+        Ok(cli) => {
+            log(
+                "cli",
+                &format!("定位到 {}（耗时 {} ms）", cli.display(), t0.elapsed().as_millis()),
+            );
+            cli
+        }
+        Err(e) => {
+            log("cli", &format!("定位失败：{e}"));
+            return Err(e);
+        }
+    };
+    match crate::claude_cli::auth_precheck(&cli).await {
+        Ok(()) => log("auth", "预检通过"),
+        Err(e) => {
+            log("auth", &format!("预检失败：{e}"));
+            return Err(e);
+        }
+    }
+    let keychain = crate::claude_cli::keychain_probe().await;
+    log("keychain", &keychain);
+
     let mut conn = Conn::spawn(Some(cli.as_path())).await?;
 
     let init_id = conn
         .send("initialize", json!({"protocolVersion": 1, "clientCapabilities": {}}))
         .await;
-    conn.wait_response(app, message_id, init_id).await?;
+    conn.wait_response(message_id, init_id, "initialize", on_chunk).await?;
+    log("stage", "initialize 完成");
 
     let session_id = match resume_session_id {
         Some(resume) => {
@@ -336,7 +451,8 @@ async fn run_chat(
                     json!({"sessionId": resume, "cwd": std::env::var("HOME").unwrap_or_default(), "mcpServers": []}),
                 )
                 .await;
-            conn.wait_response(app, message_id, load_id).await?;
+            conn.wait_response(message_id, load_id, "session", on_chunk).await?;
+            log("stage", "session/load 完成");
             resume.to_string()
         }
         None => {
@@ -346,12 +462,14 @@ async fn run_chat(
                     json!({"cwd": std::env::var("HOME").unwrap_or_default(), "mcpServers": []}),
                 )
                 .await;
-            let result = conn.wait_response(app, message_id, new_id).await?;
-            result
+            let result = conn.wait_response(message_id, new_id, "session", on_chunk).await?;
+            let sid = result
                 .get("sessionId")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "适配器未返回 sessionId".to_string())?
-                .to_string()
+                .to_string();
+            log("stage", &format!("session/new 完成：{sid}"));
+            sid
         }
     };
 
@@ -361,14 +479,31 @@ async fn run_chat(
             json!({"sessionId": session_id, "prompt": [{"type": "text", "text": prompt}]}),
         )
         .await;
+    log("stage", "session/prompt 已发出，等待首个输出");
     let result = tokio::time::timeout(
         PROMPT_TIMEOUT,
-        conn.wait_response(app, message_id, prompt_id),
+        conn.wait_response(message_id, prompt_id, "prompt", on_chunk),
     )
     .await
-    .map_err(|_| format!("等待模型回复超时（{} 秒）。", PROMPT_TIMEOUT.as_secs()))??;
+    .map_err(|_| {
+        let err = format!(
+            "等待模型回复超时（{} 秒）。诊断日志：{LOG_HINT}",
+            PROMPT_TIMEOUT.as_secs()
+        );
+        log("timeout", &err);
+        err
+    })??;
 
     let text = std::mem::take(&mut conn.accumulated);
+    log(
+        "done",
+        &format!(
+            "stopReason={:?} text_chars={} 总耗时 {} ms",
+            result.get("stopReason"),
+            text.chars().count(),
+            t0.elapsed().as_millis()
+        ),
+    );
     conn.shutdown().await;
 
     if result
@@ -386,6 +521,10 @@ async fn run_chat(
 /// Tauri command：发一条消息给本机 claude（经 ACP 适配器）。
 /// 增量经 `claude://chunk` 事件实时推送（供流式渲染），返回的 text 是
 /// 增量累计的完整正文（供落库兜底），并带回 ACP session id。
+///
+/// 全局串行：同一时刻只允许一个 ACP 会话在跑（见 CHAT_GATE）。在途时收到
+/// 的请求最多排队 CHAT_QUEUE_CAP-1 个，超了直接报错——排队者等一轮回复
+/// 结束后依次执行，而不是并发 spawn 互相踩会话状态。
 #[tauri::command]
 pub async fn claude_chat(
     app: AppHandle,
@@ -396,7 +535,37 @@ pub async fn claude_chat(
     if prompt.trim().is_empty() {
         return Err("消息不能为空".to_string());
     }
-    run_chat(&app, &message_id, &prompt, resume_session_id.as_deref()).await
+
+    // try_lock 先探队列满没满；满了立刻报错，不让用户干等。
+    let permit = match CHAT_GATE.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            log("queue", "已有请求在途，排队等待");
+            tokio::time::timeout(CHAT_QUEUE_WAIT, CHAT_GATE.lock())
+                .await
+                .map_err(|_| {
+                    let err = format!(
+                        "上一条回复还没结束，且队列已满（>{} 秒）。请等当前回复完成后重试。诊断日志：{LOG_HINT}",
+                        CHAT_QUEUE_WAIT.as_secs()
+                    );
+                    log("queue", &format!("排队超时（{} 秒），拒绝请求", CHAT_QUEUE_WAIT.as_secs()));
+                    err
+                })?
+        }
+    };
+    let _guard = permit;
+
+    let app_for_chunks = app.clone();
+    let mut emit_chunk = move |mid: &str, delta: String| {
+        let _ = app_for_chunks.emit(
+            EVENT_CHUNK,
+            ChunkPayload {
+                message_id: mid.to_string(),
+                delta,
+            },
+        );
+    };
+    run_chat(&mut emit_chunk, &message_id, &prompt, resume_session_id.as_deref()).await
 }
 
 /* ------------------------------------------------------------------ */
@@ -418,6 +587,22 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn extracts_delta_from_full_jsonrpc_line() {
+        // 回归：真实报文里 update 在 params 下，整行直接丢给 text_delta
+        // 曾永远返回 None（空气泡根因）。这里按线上形状断言。
+        let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"abc","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"收到"}}}}"#;
+        assert_eq!(delta_from_line(line).as_deref(), Some("收到"));
+
+        // 思考块不算正文；响应/通知/坏行都不产出增量
+        assert_eq!(
+            delta_from_line(r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hmm"}}}}"#),
+            None
+        );
+        assert_eq!(delta_from_line(r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}"#), None);
+        assert_eq!(delta_from_line("not json"), None);
     }
 
     #[test]
@@ -481,9 +666,91 @@ mod tests {
     }
 
     #[test]
+    fn idle_timeout_error_names_the_stage_and_log_file() {
+        let d = Duration::from_secs(20);
+        let prompt = idle_timeout_error("prompt", d, "");
+        assert!(prompt.contains("20 秒"));
+        assert!(prompt.contains("钥匙串"));
+        assert!(prompt.contains(crate::deer_log::LOG_HINT));
+
+        let session = idle_timeout_error("session", d, "");
+        assert!(session.contains("会话"));
+
+        let init = idle_timeout_error("initialize", d, "");
+        assert!(init.contains("适配器"));
+
+        // stderr 尾部会拼进文案，方便用户直接看到线索
+        let with_tail = idle_timeout_error("prompt", d, "stderr 尾部：boom");
+        assert!(with_tail.contains("boom"));
+    }
+
+    #[test]
     fn finds_adapter_entry_in_dev_tree() {
         // 在仓库 worktree 里跑测试时，CARGO_MANIFEST_DIR 指向 src-tauri。
         let entry = find_adapter_entry().expect("适配器应可定位");
         assert!(entry.ends_with("dist/index.js"));
+    }
+
+    /// 真实 ACP 会话（终端里手工跑）：`cargo test -- --ignored real_acp_chat`
+    /// 走完整管线：resolve → 预检 → 钥匙串探针 → spawn → initialize →
+    /// session/new → prompt，并把日志隔离到临时 HOME，验证日志真的写得出来。
+    /// 依赖本机已登录的 claude CLI，CI / 无环境时用 `cargo test`（不含它）。
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "依赖本机已登录的 claude CLI 与网络，手工跑"]
+    async fn real_acp_chat_round_trip_and_log_file() {
+        let fake_home = std::env::temp_dir().join(format!(
+            "deer-real-acp-home-{}",
+            std::process::id()
+        ));
+        let logs = fake_home.join("Library/Logs/deer");
+        let _ = std::fs::remove_dir_all(&fake_home);
+        std::fs::create_dir_all(&logs).unwrap();
+        // HOME 决定日志路径（deer_log 用 $HOME/Library/Logs/deer）；已有日志
+        // 文件的话先挪走，避免读到旧文件误判。
+        let saved_home = std::env::var("HOME").unwrap();
+        let real_log = PathBuf::from(&saved_home).join("Library/Logs/deer/claude-acp.log");
+        let backup = if real_log.exists() {
+            let b = std::env::temp_dir().join(format!("deer-log-backup-{}", std::process::id()));
+            std::fs::rename(&real_log, &b).unwrap();
+            Some(b)
+        } else {
+            None
+        };
+        // HOME 决定日志路径（deer_log 用 $HOME/Library/Logs/deer）；测试进程
+        // 内单线程改环境变量是安全的（本测试是 --ignore 手工跑，与其余测试
+        // 串行执行由调用方保证）。
+        unsafe { std::env::set_var("HOME", &fake_home) };
+
+        let chunks = std::sync::Mutex::new(Vec::<String>::new());
+        let result = run_chat(
+            &mut |_, delta: String| chunks.lock().unwrap().push(delta),
+            "test-msg-1",
+            "回复两个字：收到",
+            None,
+        )
+        .await;
+
+        let result = result.expect("真实会话应成功");
+        let text = result.text;
+        assert!(!result.session_id.is_empty(), "应返回 ACP session id");
+        assert!(text.contains("收到"), "正文应包含模型回复，实际：{text}");
+        assert!(!chunks.lock().unwrap().is_empty(), "增量应至少有一条");
+        assert_eq!(chunks.lock().unwrap().join(""), text, "增量累计应等于正文");
+
+        // 日志文件真实写出且不含凭据
+        let log_file = logs.join("claude-acp.log");
+        assert!(log_file.exists(), "日志文件应被创建：{}", log_file.display());
+        let content = std::fs::read_to_string(&log_file).unwrap();
+        // --nocapture 时打印全文，方便人工核对各阶段日志
+        eprintln!("---- claude-acp.log ----\n{content}----");
+        assert!(content.contains("[start]"), "应有 start 阶段");
+        assert!(content.contains("[done]"), "应有 done 阶段");
+        assert!(!content.contains("sk-ant-"), "日志不得包含 token");
+
+        unsafe { std::env::set_var("HOME", &saved_home) };
+        if let Some(b) = backup {
+            std::fs::rename(&b, &real_log).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&fake_home);
     }
 }

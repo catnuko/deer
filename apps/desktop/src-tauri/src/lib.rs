@@ -1,5 +1,6 @@
 mod claude_acp;
 mod claude_cli;
+mod deer_log;
 
 #[tauri::command]
 fn greet(name: &str) -> String {

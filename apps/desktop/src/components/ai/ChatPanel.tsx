@@ -191,6 +191,9 @@ export function ChatPanel({
   const runtime = useExternalStoreRuntime<ChatMessage>({
     messages,
     isRunning: replying,
+    // 回复在途时禁用发送：连续发送会起两个 ACP 子进程、共写同一份
+    // claude 会话状态，导致空气泡挂起。只禁发送，不禁输入框。
+    isSendDisabled: replying,
     convertMessage: (m) => ({
       id: m.id,
       role: m.role,
