@@ -12,6 +12,7 @@ export type Book = {
   addedAt: number; // epoch ms
   lastOpenedAt?: number;
   progress: number; // 0..1
+  lastLocationCfi?: string; // 上次读到的位置，打开书时恢复
   shelfIds: string[];
   tags: string[];
 };

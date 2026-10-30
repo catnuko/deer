@@ -42,6 +42,11 @@ import { useReadingSettings, type FontSize, type PageFlow, type PaperColor } fro
 import { DEFAULT_HIGHLIGHT_COLOR } from "@/components/reader/highlightColors";
 import { getDemoBook } from "@/routes/reader/demoBook";
 import { matchTocIndex, type TocItem } from "@/routes/reader/epubToc";
+import {
+  clampProgress,
+  positionFlushPatchOf,
+  positionPatchOf,
+} from "@/routes/reader/readingPosition";
 
 /** foliate 的 paginator 实现 setStyles，但 Renderer 接口没有声明它。 */
 type StyleableRenderer = HTMLElement & {
@@ -49,9 +54,6 @@ type StyleableRenderer = HTMLElement & {
 };
 
 const VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
-
-// 底部进度条持久化节流：位置变化超过该阈值才写回书库。
-const PROGRESS_SAVE_STEP = 0.05;
 
 type RealBookPhase =
   | { status: "loading" }
@@ -122,6 +124,11 @@ export function ReaderPage() {
   const viewerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<FoliateView | null>(null);
   const lastSavedProgressRef = useRef(0);
+  // 最近一次 relocate 的位置（M5a）：节流写盘之外，离开页面 / 关窗时兜底 flush。
+  const lastPositionRef = useRef<{ progress: number; cfi: string | null }>({
+    progress: 0,
+    cfi: null,
+  });
   const [selection, setSelection] = useState<SelectionState | null>(null);
   // 点击已有高亮（show-annotation）弹出的编辑菜单。
   const [annotationMenu, setAnnotationMenu] = useState<
@@ -308,6 +315,7 @@ export function ReaderPage() {
     let cancelled = false;
     let element: FoliateView | null = null;
     lastSavedProgressRef.current = 0;
+    lastPositionRef.current = { progress: 0, cfi: null };
 
     const applyReadingStyles = () => {
       const renderer = element?.renderer as StyleableRenderer | undefined;
@@ -328,10 +336,9 @@ export function ReaderPage() {
       setSelection(null);
       setAnnotationMenu(null);
       currentSectionRef.current = section.current;
-      const fraction = Number.isFinite(detail.fraction)
-        ? Math.min(1, Math.max(0, detail.fraction as number))
-        : 0;
+      const fraction = clampProgress(detail.fraction as number);
       setScrollProgress(fraction);
+      lastPositionRef.current = { progress: fraction, cfi: detail.cfi ?? null };
       setRealPhase((phase) =>
         phase.status === "ready"
           ? {
@@ -343,12 +350,13 @@ export function ReaderPage() {
           : phase,
       );
       // 阅读进度节流写回书库（失败不影响阅读）。
-      const last = lastSavedProgressRef.current;
-      if (Math.abs(fraction - last) >= PROGRESS_SAVE_STEP) {
-        lastSavedProgressRef.current = fraction;
-        void updateBook(shelfBook.id, { progress: fraction }).catch(
-          () => undefined,
-        );
+      const patch = positionPatchOf(lastSavedProgressRef.current, {
+        progress: fraction,
+        cfi: detail.cfi ?? null,
+      });
+      if (patch) {
+        lastSavedProgressRef.current = patch.progress;
+        void updateBook(shelfBook.id, patch).catch(() => undefined);
       }
     };
 
@@ -500,9 +508,19 @@ export function ReaderPage() {
         const toc = bookToc(view.book);
         setRealPhase({ status: "ready", toc, currentIndex: 0 });
 
-        await view.init({ showTextStart: true });
+        // 恢复上次位置（M5a）：init 对解析不了的 CFI 自带回落，
+        // 这里再兜一层 try，保证恢复失败最多回到开头而不是报错页。
+        const savedCfi = shelfBook.lastLocationCfi;
+        try {
+          await view.init({ lastLocation: savedCfi, showTextStart: true });
+        } catch {
+          await view.init({ showTextStart: true }).catch(() => undefined);
+        }
         if (cancelled) return;
         applyReadingStyles();
+        void updateBook(shelfBook.id, { lastOpenedAt: Date.now() }).catch(
+          () => undefined,
+        );
 
         // 首次 relocate 可能早于 init，补一次当前位置。
         const fraction = view.lastLocation?.fraction;
@@ -528,11 +546,22 @@ export function ReaderPage() {
     };
     window.addEventListener("keydown", onKey);
 
+    // 离开阅读页或直接关窗时兜底保存最新位置（节流期内翻过页也不丢）。
+    const flushPosition = () => {
+      const patch = positionFlushPatchOf(lastPositionRef.current);
+      if (!patch) return;
+      lastSavedProgressRef.current = patch.progress;
+      void updateBook(shelfBook.id, patch).catch(() => undefined);
+    };
+    window.addEventListener("beforeunload", flushPosition);
+
     void run();
 
     return () => {
       cancelled = true;
+      window.removeEventListener("beforeunload", flushPosition);
       window.removeEventListener("keydown", onKey);
+      flushPosition();
       element?.removeEventListener("relocate", onRelocate);
       element?.removeEventListener("load", onLoaded);
       element?.removeEventListener("draw-annotation", onDrawAnnotation);
