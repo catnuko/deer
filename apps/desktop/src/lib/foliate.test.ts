@@ -63,4 +63,12 @@ describe("readingStyles", () => {
   it("数值原样带入（小数行高不被截断）", () => {
     expect(readingStyles(15, 1.6)).toContain("line-height: 1.6 !important;");
   });
+
+  it("传入纸色时压掉书自带的 html/body 背景，不传保持书原样", () => {
+    const withPaper = readingStyles(15, 1.8, "#c7edcc");
+    expect(withPaper).toContain(
+      "html, body { background: #c7edcc !important; }",
+    );
+    expect(readingStyles(15, 1.8)).not.toContain("background");
+  });
 });

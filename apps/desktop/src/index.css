@@ -118,3 +118,10 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* 阅读纸色（M4）：paginator 的 #background 以 part "filter" 转发出来，
+   阅读页在浅色主题下设置 --deer-paper 覆盖它；未设置时用应用背景兜底。
+   !important 压过 paginator 在 load 时写死的行内背景。 */
+foliate-view::part(filter) {
+  background: var(--deer-paper, var(--background)) !important;
+}

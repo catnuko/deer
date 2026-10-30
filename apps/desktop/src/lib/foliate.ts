@@ -67,10 +67,23 @@ export function bookToc(book: Book): TocItem[] {
 /**
  * 注入正文 iframe 的阅读设置样式。foliate 把它追加在书自带 CSS 之后，
  * 用 !important 保证字号/行高不被书内样式覆盖（这是验收 3 的落点）。
+ *
+ * paperColor 传入时同时压掉书自带的 html/body 背景（护眼纸色）；
+ * 不传保持书原样。paginator 的视口底色由 index.css 的 ::part(filter) 规则
+ * 读取同一个 --deer-paper 变量补齐，避免书页四周露出书原背景。
  */
-export function readingStyles(fontSize: number, lineHeight: number): string {
+export function readingStyles(
+  fontSize: number,
+  lineHeight: number,
+  paperColor?: string,
+): string {
+  const paper = paperColor
+    ? `
+html, body { background: ${paperColor} !important; }
+`
+    : "";
   return `
-html { font-size: ${fontSize}px !important; }
+${paper}html { font-size: ${fontSize}px !important; }
 body, p, div, span { line-height: ${lineHeight} !important; }
 `;
 }
