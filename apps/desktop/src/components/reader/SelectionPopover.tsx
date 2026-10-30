@@ -6,7 +6,9 @@ import {
   Copy,
   Highlighter,
   NotebookPen,
+  Palette,
   Sparkles,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import type { SelectionPlacement } from "@/lib/ai/selectionDraft";
@@ -17,25 +19,31 @@ import { HIGHLIGHT_COLORS } from "./highlightColors";
  * x/y/placement 由 popoverPlacement 算好传入。
  * 「高亮」展开色条、「笔记」展开输入框，都是菜单内的二级面板；
  * 菜单何时关闭由父级（清掉 selection 状态）决定。
+ * `existing` 传入时是编辑已有高亮的菜单：改色 / 笔记 / 删除。
  */
 export function SelectionPopover({
   x,
   y,
   placement,
-  text,
+  text = "",
+  existing,
   onCopy,
   onHighlight,
   onNote,
   onAsk,
+  onDelete,
 }: SelectionPlacement & {
-  text: string;
-  onCopy: (text: string) => void;
+  text?: string;
+  /** 编辑已有高亮：预填颜色与笔记，菜单切为改色/笔记/删除。 */
+  existing?: { color: string; note?: string };
+  onCopy?: (text: string) => void;
   onHighlight: (color: string) => void;
   onNote: (note: string) => void;
-  onAsk: (text: string) => void;
+  onAsk?: (text: string) => void;
+  onDelete?: () => void;
 }) {
   const [mode, setMode] = useState<"menu" | "colors" | "note">("menu");
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(existing?.note ?? "");
 
   return (
     <div className="absolute z-20" style={{ left: x, top: y }}>
@@ -50,9 +58,24 @@ export function SelectionPopover({
           event.stopPropagation();
         }}
       >
-        {mode === "menu" ? (
+        {mode === "menu" && existing ? (
           <div className="divide-border flex divide-x">
-            <MenuButton icon={Copy} label="复制" onClick={() => onCopy(text)} />
+            <MenuButton
+              icon={Palette}
+              label="改色"
+              onClick={() => setMode("colors")}
+            />
+            <MenuButton
+              icon={NotebookPen}
+              label="笔记"
+              onClick={() => setMode("note")}
+            />
+            <MenuButton icon={Trash2} label="删除" onClick={() => onDelete?.()} />
+          </div>
+        ) : null}
+        {mode === "menu" && !existing ? (
+          <div className="divide-border flex divide-x">
+            <MenuButton icon={Copy} label="复制" onClick={() => onCopy?.(text)} />
             <MenuButton
               icon={Highlighter}
               label="高亮"
@@ -66,7 +89,7 @@ export function SelectionPopover({
             <MenuButton
               icon={Sparkles}
               label="问 Deer"
-              onClick={() => onAsk(text)}
+              onClick={() => onAsk?.(text)}
             />
           </div>
         ) : null}

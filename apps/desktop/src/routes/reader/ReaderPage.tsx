@@ -35,7 +35,7 @@ import {
 } from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
 import { useBookStore } from "@/store/bookStore";
-import { useAnnotationStore } from "@/store/annotationStore";
+import { useAnnotationStore, type StoredAnnotation } from "@/store/annotationStore";
 import { useReadingSettings } from "@/store/readingSettings";
 import { DEFAULT_HIGHLIGHT_COLOR } from "@/components/reader/highlightColors";
 import { getDemoBook } from "@/routes/reader/demoBook";
@@ -95,6 +95,10 @@ export function ReaderPage() {
   const viewRef = useRef<FoliateView | null>(null);
   const lastSavedProgressRef = useRef(0);
   const [selection, setSelection] = useState<SelectionState | null>(null);
+  // 点击已有高亮（show-annotation）弹出的编辑菜单。
+  const [annotationMenu, setAnnotationMenu] = useState<
+    (SelectionPlacement & { annotation: StoredAnnotation }) | null
+  >(null);
   const [draft, setDraft] = useState<ChatPanelDraft | null>(null);
   // 大屏默认展开面板；小屏由划选问 / 后续入口主动唤起。
   const [chatOpen, setChatOpen] = useState(
@@ -166,6 +170,41 @@ export function ReaderPage() {
     [bookKey],
   );
 
+  // 点击已有高亮的三个动作：改色重画（foliate 同 key 先移除再画）、
+  // 笔记只落盘、删除双删（store + overlayer）。
+  const changeAnnotationColor = useCallback(
+    (color: string) => {
+      const annotation = annotationMenu?.annotation;
+      if (!annotation || !bookKey) return;
+      useAnnotationStore.getState().setColor(annotation.id, color);
+      void viewRef.current
+        ?.addAnnotation({ value: annotation.cfi, color, note: annotation.note })
+        .catch(() => undefined);
+      setAnnotationMenu(null);
+    },
+    [annotationMenu, bookKey],
+  );
+
+  const editAnnotationNote = useCallback(
+    (note: string) => {
+      const annotation = annotationMenu?.annotation;
+      if (!annotation || !bookKey) return;
+      useAnnotationStore.getState().setNote(annotation.id, note);
+      setAnnotationMenu(null);
+    },
+    [annotationMenu, bookKey],
+  );
+
+  const deleteAnnotationMenu = useCallback(() => {
+    const annotation = annotationMenu?.annotation;
+    if (!annotation || !bookKey) return;
+    useAnnotationStore.getState().remove(annotation.id);
+    void viewRef.current
+      ?.deleteAnnotation({ value: annotation.cfi })
+      .catch(() => undefined);
+    setAnnotationMenu(null);
+  }, [annotationMenu, bookKey]);
+
   // 总结当前 spine section：走 N1 的上下文注入，气泡里只显示「总结本章」。
   const summarizeCurrentSection = async () => {
     const view = viewRef.current;
@@ -230,6 +269,7 @@ export function ReaderPage() {
 
       // 翻页/跳章后选区与浮层都作废。
       setSelection(null);
+      setAnnotationMenu(null);
       currentSectionRef.current = section.current;
       const fraction = Number.isFinite(detail.fraction)
         ? Math.min(1, Math.max(0, detail.fraction as number))
@@ -284,6 +324,39 @@ export function ReaderPage() {
       }
     };
 
+    // 点击已有高亮（overlayer hitTest 命中后 foliate 派发 show-annotation）：
+    // 按 CFI 找到注解，坐标换算同选区，弹出编辑菜单。
+    const onShowAnnotation = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ value: string; range: Range }>
+      ).detail;
+      const viewer = viewerRef.current;
+      if (!detail || !viewer) return;
+      const annotation = useAnnotationStore
+        .getState()
+        .listForBook(shelfBook.id)
+        .find((a) => a.cfi === detail.value);
+      if (!annotation) return;
+      const frame = detail.range.startContainer.ownerDocument?.defaultView
+        ?.frameElement as HTMLElement | null;
+      if (!frame) return;
+      const rect = detail.range.getBoundingClientRect();
+      const frameRect = frame.getBoundingClientRect();
+      const hostRect = viewer.getBoundingClientRect();
+      setAnnotationMenu({
+        ...popoverPlacement(
+          {
+            top: frameRect.top + rect.top - hostRect.top,
+            left: frameRect.left + rect.left - hostRect.left,
+            width: rect.width,
+            height: rect.height,
+          },
+          { top: 0, left: 0, width: hostRect.width },
+        ),
+        annotation,
+      });
+    };
+
     const onLoaded = (event: Event) => {
       const detail = (event as CustomEvent<LoadDetail>).detail;
       const doc = detail?.doc;
@@ -294,6 +367,8 @@ export function ReaderPage() {
         if (cancelled) return;
         const viewer = viewerRef.current;
         if (!viewer) return;
+        // 重新划选时收起高亮编辑菜单。
+        setAnnotationMenu(null);
         const sel = selectionTextOf(doc.getSelection());
         if (!sel) {
           setSelection(null);
@@ -355,6 +430,7 @@ export function ReaderPage() {
         view.addEventListener("relocate", onRelocate);
         view.addEventListener("load", onLoaded);
         view.addEventListener("draw-annotation", onDrawAnnotation);
+        view.addEventListener("show-annotation", onShowAnnotation);
         element = view;
         viewRef.current = view;
 
@@ -403,6 +479,7 @@ export function ReaderPage() {
       element?.removeEventListener("relocate", onRelocate);
       element?.removeEventListener("load", onLoaded);
       element?.removeEventListener("draw-annotation", onDrawAnnotation);
+      element?.removeEventListener("show-annotation", onShowAnnotation);
       docCleanups.forEach((fn) => fn());
       element?.close();
       element?.remove();
@@ -450,6 +527,10 @@ export function ReaderPage() {
         onSelectChapter={selectRealChapter}
         onPageTurn={turnPage}
         selection={selection}
+        annotationMenu={annotationMenu}
+        onChangeAnnotationColor={changeAnnotationColor}
+        onEditAnnotationNote={editAnnotationNote}
+        onDeleteAnnotation={deleteAnnotationMenu}
         chatOpen={chatOpen}
         draft={draft}
         panelRef={panelRef}
@@ -490,6 +571,12 @@ type RealReaderProps = {
   onSelectChapter: (item: TocItem) => void;
   onPageTurn: (direction: "next" | "prev") => void;
   selection: SelectionState | null;
+  annotationMenu:
+    | (SelectionPlacement & { annotation: StoredAnnotation })
+    | null;
+  onChangeAnnotationColor: (color: string) => void;
+  onEditAnnotationNote: (note: string) => void;
+  onDeleteAnnotation: () => void;
   chatOpen: boolean;
   draft: ChatPanelDraft | null;
   panelRef: React.RefObject<ChatPanelHandle | null>;
@@ -513,6 +600,10 @@ function RealReader({
   onSelectChapter,
   onPageTurn,
   selection,
+  annotationMenu,
+  onChangeAnnotationColor,
+  onEditAnnotationNote,
+  onDeleteAnnotation,
   chatOpen,
   draft,
   panelRef,
@@ -579,7 +670,20 @@ function RealReader({
                 打开本书失败：{phase.message}
               </div>
             ) : null}
-            {selection ? (
+            {annotationMenu ? (
+              <SelectionPopover
+                x={annotationMenu.x}
+                y={annotationMenu.y}
+                placement={annotationMenu.placement}
+                existing={{
+                  color: annotationMenu.annotation.color,
+                  note: annotationMenu.annotation.note,
+                }}
+                onHighlight={onChangeAnnotationColor}
+                onNote={onEditAnnotationNote}
+                onDelete={onDeleteAnnotation}
+              />
+            ) : selection ? (
               <SelectionPopover
                 x={selection.x}
                 y={selection.y}

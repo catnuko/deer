@@ -116,3 +116,56 @@ describe("SelectionPopover", () => {
     expect(props.onAsk).toHaveBeenCalledWith("被划选的句子");
   });
 });
+
+describe("SelectionPopover 编辑已有高亮", () => {
+  const existing = { color: HIGHLIGHT_COLORS[0]!.value, note: "旧笔记" };
+
+  function renderEditPopover(
+    overrides: Partial<Parameters<typeof SelectionPopover>[0]> = {},
+  ) {
+    return renderPopover({ existing, ...overrides });
+  }
+
+  it("编辑模式只出改色/笔记/删除三个动作，不出复制和高亮", () => {
+    renderEditPopover();
+
+    for (const name of ["改色", "笔记", "删除"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "问 Deer" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("点改色展开色条，选色把颜色值交给 onHighlight", async () => {
+    const props = renderEditPopover();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "改色" }));
+    await user.click(
+      screen.getByRole("button", { name: `高亮：${HIGHLIGHT_COLORS[2]!.label}` }),
+    );
+    expect(props.onHighlight).toHaveBeenCalledWith(HIGHLIGHT_COLORS[2]!.value);
+  });
+
+  it("笔记预填旧笔记，保存把新内容交给 onNote", async () => {
+    const props = renderEditPopover();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "笔记" }));
+    expect(screen.getByLabelText("笔记内容")).toHaveValue("旧笔记");
+
+    await user.type(screen.getByLabelText("笔记内容"), "，再补一句");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(props.onNote).toHaveBeenCalledWith("旧笔记，再补一句");
+  });
+
+  it("点击删除调用 onDelete", async () => {
+    const props = renderEditPopover({ onDelete: vi.fn() });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    expect(props.onDelete).toHaveBeenCalledTimes(1);
+  });
+});
