@@ -32,12 +32,24 @@ export type BookStoreState = {
   moveBookToShelf(bookId: string, shelfId: string): Promise<void>;
 };
 
+/** 聊天书卡：MCP 书架工具结果里抽出的书籍引用，点击打开阅读。 */
+export type ChatBookRef = {
+  id: string;
+  title: string;
+  author: string;
+  format: string;
+  progress: number; // 0..1
+  coverPath?: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   /** 深度思考的过程文本（开启深度思考的回复才有），折叠展示。 */
   thinking?: string;
+  /** 本条回复里模型经书架 MCP 工具返回的书单，渲染成可点击书卡。 */
+  books?: ChatBookRef[];
   createdAt: number;
 };
 

@@ -4,11 +4,13 @@
  * stdio JSON-RPC，文本增量经 `claude://chunk` 事件实时推送。
  */
 
+import type { ChatBookRef } from "@/lib/types";
+
 export const CLAUDE_CHUNK_EVENT = "claude://chunk";
 
 export type ClaudeChunkPayload = {
   messageId: string;
-  /** "message" = 正文增量，"thought" = 深度思考增量。 */
+  /** "message" = 正文增量，"thought" = 深度思考增量，"books" = 书架工具返回的完整书单（JSON 数组文本）。 */
   kind?: string;
   delta: string;
 };
@@ -39,16 +41,27 @@ export function isTauriRuntime(): boolean {
   );
 }
 
-/** 监听流式增量事件并按 messageId 路由到正文/思考回调，返回解绑函数。 */
+/** 监听流式增量事件并按 messageId 路由到正文/思考/书卡回调，返回解绑函数。 */
 async function listenChunks(
   messageId: string,
-  opts: { onDelta: (delta: string) => void; onThoughtDelta?: (delta: string) => void },
+  opts: {
+    onDelta: (delta: string) => void;
+    onThoughtDelta?: (delta: string) => void;
+    onBooks?: (books: ChatBookRef[]) => void;
+  },
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return await listen<ClaudeChunkPayload>(CLAUDE_CHUNK_EVENT, (event) => {
     if (event.payload.messageId !== messageId) return;
     if (event.payload.kind === "thought") {
       opts.onThoughtDelta?.(event.payload.delta);
+    } else if (event.payload.kind === "books") {
+      try {
+        const books = JSON.parse(event.payload.delta) as ChatBookRef[];
+        if (Array.isArray(books) && books.length > 0) opts.onBooks?.(books);
+      } catch {
+        // 坏帧丢弃：书卡是锦上添花，不影响正文
+      }
     } else {
       opts.onDelta(event.payload.delta);
     }
@@ -92,6 +105,8 @@ export async function acpxChat(opts: {
   deepThinking?: boolean;
   onDelta: (delta: string) => void;
   onThoughtDelta?: (delta: string) => void;
+  /** 书架 MCP 工具返回的书单（Rust 侧从 tool 结果抽取），渲染成书卡。 */
+  onBooks?: (books: ChatBookRef[]) => void;
 }): Promise<ClaudeChatResult> {
   const { invoke } = await import("@tauri-apps/api/core");
   const unlisten = await listenChunks(opts.messageId, opts);

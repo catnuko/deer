@@ -10,7 +10,9 @@
 //! - 冷环境直接 prompt 会报 -32002 NO_SESSION，需先 `sessions new`；
 //!   npm 首拉偶发 `spawn Unknown system error -88`，spawn/ensure 均需重试。
 //! - 权限策略 `--deny-all`：伴读聊天不允许 agent 用工具（与直连链路对
-//!   权限申请一律拒绝的行为一致）。
+//!   权限申请一律拒绝的行为一致）；仅放行 Deer 书架 MCP server 的三个
+//!   工具（--mcp-config + --allowed-tools，见 mcp_server.rs），推荐书籍
+//!   时模型能查书架/读进度，工具结果里的书单经 books 事件推给前端成书卡。
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -45,6 +47,11 @@ const CHAT_QUEUE_WAIT: Duration = Duration::from_secs(120);
 /// 瞬时 spawn 失败（npm exec 冷缓存 -88）的重试上限与间隔。
 const TRANSIENT_RETRIES: usize = 3;
 const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(800);
+/// Deer 书架 MCP server 挂载名：工具名形如 mcp__deer__search_books。
+const MCP_SERVER_NAME: &str = "deer";
+/// 权限只放行书架 MCP 的三个工具，其余工具仍被 --deny-all 拒绝。
+const ALLOWED_MCP_TOOLS: &str =
+    "mcp__deer__search_books,mcp__deer__get_reading_state,mcp__deer__get_library";
 
 #[derive(Debug, Serialize)]
 pub struct AcpxEnvStatus {
@@ -127,23 +134,82 @@ pub(crate) fn is_transient_spawn_error(output: &str) -> bool {
     output.contains("Unknown system error") || output.contains("-88")
 }
 
+/// 书架 MCP server 的挂载配置：ACP mcpServers 数组形态（spike 实测 acpx
+/// 只认数组，对象形态报 "expected array"）。指向当前二进制的
+/// --mcp-server 模式，GUI 外的 harness 与内置聊天用同一份。
+pub(crate) fn mcp_server_config(exe: &Path) -> Value {
+    json!({
+        "mcpServers": [
+            { "name": MCP_SERVER_NAME, "command": exe.to_string_lossy(), "args": ["--mcp-server"] }
+        ]
+    })
+}
+
+/// 把 MCP 挂载配置写到临时文件，返回路径；定位不到自身可执行文件时
+/// 返回 None（聊天不带 MCP 工具继续跑，只是没有书架能力）。
+fn write_mcp_config() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let path = std::env::temp_dir().join("deer-mcp-server.json");
+    std::fs::write(&path, mcp_server_config(&exe).to_string()).ok()?;
+    Some(path)
+}
+
 /// 一次 prompt 调用的完整参数（prompt 经 `-f -` 走 stdin，避免被当成选项）。
 /// 注意：--format/--json-strict/--deny-all 是顶层选项，必须放在 `claude`
 /// 子命令之前（子命令不继承它们，放后面会退出并打印帮助）。
-pub(crate) fn prompt_args(record: &str) -> Vec<String> {
-    vec![
+/// mcp_config 有值时同样在顶层追加 --mcp-config 与 --allowed-tools：
+/// 权限仍是 --deny-all，只精确放行书架 MCP 的三个工具（spike 实测
+/// allowed-tools 能在 deny-all 之下放行指定 MCP 工具）。
+pub(crate) fn prompt_args(record: &str, mcp_config: Option<&Path>) -> Vec<String> {
+    let mut args: Vec<String> = vec![
         "--format".into(),
         "json".into(),
         "--json-strict".into(),
         "--deny-all".into(),
-        "--timeout".into(),
-        (PROMPT_TIMEOUT.as_secs() - 10).to_string(),
-        "claude".into(),
-        "-s".into(),
-        record.into(),
-        "-f".into(),
-        "-".into(),
-    ]
+    ];
+    if let Some(path) = mcp_config {
+        args.push("--mcp-config".into());
+        args.push(path.to_string_lossy().into_owned());
+        args.push("--allowed-tools".into());
+        args.push(ALLOWED_MCP_TOOLS.into());
+    }
+    args.push("--timeout".into());
+    args.push((PROMPT_TIMEOUT.as_secs() - 10).to_string());
+    args.push("claude".into());
+    args.push("-s".into());
+    args.push(record.into());
+    args.push("-f".into());
+    args.push("-".into());
+    args
+}
+
+/// 从 tool_call_update（status=completed）的 rawOutput 里抽取书卡：
+/// Deer 书架 MCP 工具的结果 text 块是 `{"deer":"books","books":[...]}`，
+/// 按标记识别（不依赖工具名元数据），非书架工具的输出一律不产书卡。
+pub(crate) fn book_cards_from_update(params: &Value) -> Option<Vec<Value>> {
+    let update = params.get("update")?;
+    if update.get("sessionUpdate")?.as_str()? != "tool_call_update" {
+        return None;
+    }
+    if update.get("status")?.as_str()? != "completed" {
+        return None;
+    }
+    for item in update.get("rawOutput")?.as_array()? {
+        let Some(text) = item.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<Value>(text) else {
+            continue;
+        };
+        if payload.get("deer").and_then(Value::as_str) == Some("books") {
+            if let Some(books) = payload.get("books").and_then(Value::as_array) {
+                if !books.is_empty() {
+                    return Some(books.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 /* ------------------------------------------------------------------ */
@@ -365,12 +431,13 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
     prompt: &str,
     message_id: &str,
     deep_thinking: bool,
+    mcp_config: Option<&Path>,
     on_chunk: &mut F,
 ) -> Result<PromptOutcome, String> {
     let t0 = std::time::Instant::now();
     let home = std::env::var("HOME").unwrap_or_default();
     let home = PathBuf::from(&home);
-    let args = prompt_args(record);
+    let args = prompt_args(record, mcp_config);
     let mut cmd = spawn_cmd(acpx, &args, &home);
     // 深度思考沿用直连链路的环境变量机制（每轮注入；对 acpx 拉起的
     // claude-agent-acp 适配器是否生效属未验证项，不生效则只是没有思考块）。
@@ -466,6 +533,12 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
                         if let Some(delta) = crate::claude_acp::thought_delta(v.get("params").unwrap_or(&Value::Null)) {
                             on_chunk(message_id, "thought", delta);
                         }
+                        // 书架 MCP 工具结果里的书单：抽成 books 事件推给前端渲染书卡
+                        if let Some(books) = book_cards_from_update(v.get("params").unwrap_or(&Value::Null)) {
+                            if let Ok(delta) = serde_json::to_string(&books) {
+                                on_chunk(message_id, "books", delta);
+                            }
+                        }
                         if session_id.is_none() {
                             session_id = session_id_from_value(v);
                         }
@@ -527,19 +600,33 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
 
 /// 确保 acpx 命名会话存在：`sessions new -s <record>`，瞬时失败重试。
 /// 有 ACP session id 时用 --resume-session 把旧会话接回来（NO_SESSION 修复路径）。
+/// 带 MCP 配置创建会话，让内置聊天挂上的书架工具在会话里可用。
 async fn ensure_session(
     acpx: &Path,
     record: &str,
     resume: Option<&str>,
+    mcp_config: Option<&Path>,
 ) -> Result<(), String> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let mut args = vec![
-        "claude".to_string(),
-        "sessions".to_string(),
-        "new".to_string(),
-        "-s".to_string(),
-        record.to_string(),
-    ];
+    let mut args: Vec<String> = if let Some(path) = mcp_config {
+        vec![
+            "--mcp-config".into(),
+            path.to_string_lossy().into_owned(),
+            "claude".to_string(),
+            "sessions".to_string(),
+            "new".to_string(),
+            "-s".to_string(),
+            record.to_string(),
+        ]
+    } else {
+        vec![
+            "claude".to_string(),
+            "sessions".to_string(),
+            "new".to_string(),
+            "-s".to_string(),
+            record.to_string(),
+        ]
+    };
     if let Some(id) = resume {
         args.push("--resume-session".to_string());
         args.push(id.to_string());
@@ -590,12 +677,40 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
     deep_thinking: bool,
 ) -> Result<crate::claude_acp::ClaudeChatResult, String> {
     let acpx = verify_env().await?;
-    let mut outcome = run_prompt(acpx.as_path(), record, prompt, message_id, deep_thinking, on_chunk).await;
+    // MCP 挂载配置每轮重写（指向当前二进制的 --mcp-server 模式）；写不出
+    // 就退化成无工具聊天。
+    let mcp_config = write_mcp_config();
+    log(
+        "acpx",
+        &match &mcp_config {
+            Some(path) => format!("书架 MCP server 已挂载（{}）", path.display()),
+            None => "书架 MCP server 不可用（无法定位自身可执行文件），本轮无书架工具".to_string(),
+        },
+    );
+    let mut outcome = run_prompt(
+        acpx.as_path(),
+        record,
+        prompt,
+        message_id,
+        deep_thinking,
+        mcp_config.as_deref(),
+        on_chunk,
+    )
+    .await;
     if let Err(err) = &outcome {
         if is_no_session_error(err) || is_transient_spawn_error(err) {
             log("acpx", &format!("prompt 失败（{}），ensure 后重试一次", if is_no_session_error(err) { "NO_SESSION" } else { "瞬时" }));
-            ensure_session(acpx.as_path(), record, resume_session_id).await?;
-            outcome = run_prompt(acpx.as_path(), record, prompt, message_id, deep_thinking, on_chunk).await;
+            ensure_session(acpx.as_path(), record, resume_session_id, mcp_config.as_deref()).await?;
+            outcome = run_prompt(
+                acpx.as_path(),
+                record,
+                prompt,
+                message_id,
+                deep_thinking,
+                mcp_config.as_deref(),
+                on_chunk,
+            )
+            .await;
         }
     }
     let outcome = outcome?;
@@ -746,7 +861,7 @@ mod tests {
 
     #[test]
     fn prompt_args_are_strict_json_and_deny_tools() {
-        let args = prompt_args("deer-thread_x");
+        let args = prompt_args("deer-thread_x", None);
         let joined = args.join(" ");
         // 顶层选项必须出现在 `claude` 子命令之前（实测放后面会打印帮助退出）
         assert!(joined.find("--format json").unwrap() < joined.find("claude").unwrap());
@@ -760,6 +875,59 @@ mod tests {
         // 命名会话紧跟子命令（-s 是 claude 子命令的选项）
         let claude_pos = joined.find("claude").unwrap();
         assert!(joined.find("-s deer-thread_x").unwrap() > claude_pos);
+    }
+
+    #[test]
+    fn prompt_args_inject_mcp_config_and_allow_only_shelf_tools() {
+        let path = Path::new("/tmp/deer-mcp-server.json");
+        let args = prompt_args("deer-thread_x", Some(path));
+        let joined = args.join(" ");
+        let claude_pos = joined.find("claude").unwrap();
+        // 顶层 --mcp-config 与 --allowed-tools 同样必须在 claude 之前
+        let mcp_pos = joined.find("--mcp-config /tmp/deer-mcp-server.json").unwrap();
+        assert!(mcp_pos < claude_pos);
+        assert!(joined.contains("mcp__deer__search_books"));
+        assert!(joined.contains("mcp__deer__get_reading_state"));
+        assert!(joined.contains("mcp__deer__get_library"));
+        // 权限仍是 deny-all，只精确放行书架工具
+        assert!(joined.contains("--deny-all"));
+    }
+
+    #[test]
+    fn mcp_config_uses_acp_array_shape() {
+        // spike 实测：acpx 的 --mcp-config 只认 ACP 数组形态（对象报 expected array）
+        let exe = Path::new("/Applications/deer.app/desktop");
+        let config = mcp_server_config(exe);
+        let servers = config["mcpServers"].as_array().unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0]["name"], "deer");
+        assert_eq!(servers[0]["command"], "/Applications/deer.app/desktop");
+        assert_eq!(servers[0]["args"][0], "--mcp-server");
+    }
+
+    #[test]
+    fn extracts_book_cards_from_completed_tool_update() {
+        // spike 实测帧：completed 的 tool_call_update，rawOutput text 块带 deer:books 标记
+        let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed","rawOutput":[{"type":"text","text":"{\"books\":[{\"id\":\"b1\",\"title\":\"三国演义\",\"author\":\"罗贯中\",\"format\":\"epub\",\"progress\":0.02,\"coverPath\":\"/covers/b1.jpg\"}],\"deer\":\"books\"}"}]}}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let books = book_cards_from_update(v.get("params").unwrap()).unwrap();
+        assert_eq!(books.len(), 1);
+        assert_eq!(books[0]["title"], "三国演义");
+
+        // 权限被拒（status=failed，rawOutput 是字符串）不产书卡
+        let denied = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","status":"failed","rawOutput":"User refused permission to run tool"}}}"#;
+        let v: Value = serde_json::from_str(denied).unwrap();
+        assert!(book_cards_from_update(v.get("params").unwrap()).is_none());
+
+        // 无标记的其它工具结果（如 tool_reference）不产书卡
+        let other = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","status":"completed","rawOutput":[{"type":"tool_reference","tool_name":"mcp__deer__search_books"}]}}}"#;
+        let v: Value = serde_json::from_str(other).unwrap();
+        assert!(book_cards_from_update(v.get("params").unwrap()).is_none());
+
+        // tool_call（初始帧）不产书卡
+        let pending = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","status":"pending","content":[]}}}"#;
+        let v: Value = serde_json::from_str(pending).unwrap();
+        assert!(book_cards_from_update(v.get("params").unwrap()).is_none());
     }
 
     /// 真实 acpx E2E（多 harness 一期验收证据）：`cargo test -- --ignored real_acpx`

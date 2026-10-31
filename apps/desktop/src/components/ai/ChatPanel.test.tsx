@@ -2,6 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { CurrentBook } from "@/lib/ai/currentBook";
 import type { ChatPanelHandle } from "./ChatPanel";
 
@@ -499,5 +500,48 @@ describe("ChatPanel", () => {
     expect(useChatStore.getState().acpxSessionByThread[threadId]).toBe(
       "acpx_sess_1",
     );
+  });
+
+  it("acpx 书架工具返回书单时渲染成书卡，点击打开对应书", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    const { acpxChat, acpxEnvCheck } = await import("@/lib/ai/claudeBackend");
+    // 模拟 Rust 侧从书架 MCP 工具结果抽出书单后推来的 books 事件。
+    vi.mocked(acpxChat).mockImplementation(async (opts) => {
+      opts.onBooks?.([
+        { id: "b1", title: "球状闪电", author: "刘慈欣", format: "epub", progress: 0.2 },
+      ]);
+      return { text: "为你找到一本《球状闪电》", sessionId: "acpx_sess_2" };
+    });
+    useChatStore.getState().setHarness("acpx");
+    vi.mocked(acpxEnvCheck).mockResolvedValue({
+      ok: true,
+      nodeOk: true,
+      nodeVersion: "v24.20.0",
+      acpxVersion: "0.21.1",
+      message: "",
+    });
+    render(
+      <MemoryRouter initialEntries={["/bookshelf"]}>
+        <Routes>
+          <Route path="/bookshelf" element={<ChatPanel book={BOOK} onClose={() => {}} />} />
+          <Route path="/reader" element={<div data-testid="reader-page">阅读页</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await sendMessage("推荐一本我想看的书");
+
+    // 书卡出现在回复气泡里（数据 part 渲染），带书名与作者。
+    const card = await eventually(() => screen.getByTestId("chat-book-card"));
+    expect(card).toHaveTextContent("球状闪电");
+    expect(card).toHaveTextContent("刘慈欣");
+    // 点击书卡 → 复用现有开书通路跳转阅读页。
+    const user = userEvent.setup();
+    await user.click(card);
+    expect(await screen.findByTestId("reader-page")).toBeInTheDocument();
+    // 书单落库：消息上保留 books（重开面板仍可见）。
+    const threadId = activeThread();
+    const messages = useChatStore.getState().messages[threadId];
+    expect(messages[1].books?.[0]?.id).toBe("b1");
   });
 });

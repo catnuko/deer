@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ChatMessage, ChatThread } from "@/lib/types";
+import type { ChatBookRef, ChatMessage, ChatThread } from "@/lib/types";
 import type { ChatHarness } from "@/lib/ai/claudeBackend";
 
 /** 点赞/点踩的本地 UI 状态，只存不发请求。 */
@@ -51,6 +51,12 @@ export type ChatStore = ChatStoreState & {
   setDeepThinking(value: boolean): void;
   /** 流式追加：给已有消息的思考过程追加一段增量。 */
   appendToMessageThinking(threadId: string, messageId: string, delta: string): void;
+  /** 书架工具返回的书单并入消息（按书 id 去重，后到的覆盖先到的）。 */
+  appendToMessageBooks(
+    threadId: string,
+    messageId: string,
+    books: ChatBookRef[],
+  ): void;
   clearThread(threadId: string): void;
 };
 
@@ -324,6 +330,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
               ? { ...m, thinking: (m.thinking ?? "") + delta }
               : m,
           ),
+        },
+      }));
+    },
+
+    appendToMessageBooks(threadId, messageId, books) {
+      set((s) => ({
+        messages: {
+          ...s.messages,
+          [threadId]: (s.messages[threadId] ?? []).map((m) => {
+            if (m.id !== messageId) return m;
+            const seen = new Set(books.map((b) => b.id));
+            const kept = (m.books ?? []).filter((b) => !seen.has(b.id));
+            return { ...m, books: [...kept, ...books] };
+          }),
         },
       }));
     },

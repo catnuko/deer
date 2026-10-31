@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { CurrentBook } from "@/lib/ai/currentBook";
+import { ChatBookCard } from "@/components/ai/ChatBookCard";
 import { useChatStore } from "@/store/chatStore";
 
 /** 从 composer 提交的消息里抽出纯文本。 */
@@ -108,11 +109,30 @@ function FeedbackButton({
   );
 }
 
+/** 书架工具书单的 data part 渲染：书卡列表，点击直接开书。 */
+function BooksData({ data }: { data: { books: ChatMessage["books"] } }) {
+  const books = data?.books ?? [];
+  if (!books.length) return null;
+  return (
+    <div data-testid="chat-books" className="mt-2 flex flex-col gap-1.5">
+      {books.map((book) => (
+        <ChatBookCard key={book.id} book={book} />
+      ))}
+    </div>
+  );
+}
+
 function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="mb-4">
       <div className="bg-card text-card-foreground border-border max-w-[92%] rounded-2xl rounded-bl-sm border px-3.5 py-2.5 text-sm leading-relaxed shadow-sm">
-        <MessagePrimitive.Parts components={{ Text: TextPart, Reasoning: ReasoningPart }} />
+        <MessagePrimitive.Parts
+          components={{
+            Text: TextPart,
+            Reasoning: ReasoningPart,
+            data: { by_name: { books: BooksData } },
+          }}
+        />
       </div>
       <ActionBarPrimitive.Root className="mt-1 ml-1 flex items-center gap-0.5">
         <FeedbackButton direction="up" />
@@ -344,6 +364,11 @@ export function ChatPanel({
                 .getState()
                 .appendToMessageThinking(threadId, assistant.id, delta);
             },
+            onBooks: (books) => {
+              useChatStore
+                .getState()
+                .appendToMessageBooks(threadId, assistant.id, books);
+            },
           });
           useChatStore
             .getState()
@@ -402,14 +427,23 @@ export function ChatPanel({
     convertMessage: (m) => ({
       id: m.id,
       role: m.role,
-      // 深度思考：thinking 作为 reasoning 部件放在正文前，渲染成折叠块。
-      content:
-        m.role === "assistant" && m.thinking
+      // 深度思考：thinking 作为 reasoning 部件放在正文前，渲染成折叠块；
+      // 书单作为 data part（name=books）由 BooksData 渲染成书卡。
+      content: [
+        ...(m.role === "assistant" && m.thinking
+          ? [{ type: "reasoning" as const, text: m.thinking }]
+          : []),
+        { type: "text" as const, text: m.content },
+        ...(m.role === "assistant" && m.books?.length
           ? [
-              { type: "reasoning" as const, text: m.thinking },
-              { type: "text" as const, text: m.content },
+              {
+                type: "data" as const,
+                name: "books",
+                data: { books: m.books },
+              },
             ]
-          : m.content,
+          : []),
+      ],
       createdAt: new Date(m.createdAt),
       metadata: feedback[m.id]
         ? {

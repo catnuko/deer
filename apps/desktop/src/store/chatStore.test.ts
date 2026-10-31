@@ -116,6 +116,41 @@ describe("chatStore", () => {
     expect(saved.content).toBe("");
   });
 
+  it("书单并入消息的 books 字段，按书 id 去重且后到覆盖先到", () => {
+    const store = useChatStore.getState();
+    const thread = store.ensureThread("book-a", "甲书");
+    const msg = store.appendMessage(thread.id, "assistant", "");
+
+    store.appendToMessageBooks(thread.id, msg.id, [
+      { id: "b1", title: "三体", author: "刘慈欣", format: "epub", progress: 0.4 },
+    ]);
+    // 同一模型回复可能调多次工具：get_library 全量 + search_books 精确，
+    // 后到的进度应覆盖先到的，且已有书不重复。
+    store.appendToMessageBooks(thread.id, msg.id, [
+      { id: "b1", title: "三体", author: "刘慈欣", format: "epub", progress: 0.6 },
+      { id: "b2", title: "球状闪电", author: "刘慈欣", format: "epub", progress: 0 },
+    ]);
+
+    const saved = useChatStore.getState().messages[thread.id][0];
+    expect(saved.books).toHaveLength(2);
+    expect(saved.books?.find((b) => b.id === "b1")?.progress).toBe(0.6);
+  });
+
+  it("appendToMessageBooks 不影响其它消息", () => {
+    const store = useChatStore.getState();
+    const thread = store.ensureThread("book-a", "甲书");
+    const first = store.appendMessage(thread.id, "assistant", "第一条");
+    const second = store.appendMessage(thread.id, "assistant", "第二条");
+
+    store.appendToMessageBooks(thread.id, first.id, [
+      { id: "b1", title: "三体", author: "刘慈欣", format: "epub", progress: 0 },
+    ]);
+
+    expect(useChatStore.getState().messages[thread.id][0].books).toHaveLength(1);
+    expect(useChatStore.getState().messages[thread.id][1].books).toBeUndefined();
+    expect(second.content).toBe("第二条");
+  });
+
   it("harness 默认 claude（现有单链路行为不变），切换后持久化", () => {
     expect(useChatStore.getState().harness).toBe("claude");
 

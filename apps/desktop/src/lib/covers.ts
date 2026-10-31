@@ -21,8 +21,11 @@ function toBlobPart(bytes: Uint8Array): ArrayBuffer {
   ) as ArrayBuffer;
 }
 
-/** 读取封面为可渲染的 objectURL；没有封面或读取失败返回 null。 */
-export async function getCoverUrl(book: Book): Promise<string | null> {
+/** 读取封面为可渲染的 objectURL；没有封面或读取失败返回 null。
+ *  书架卡片与聊天书卡共用：只要有 coverPath 就能读。 */
+export async function getCoverUrl(
+  book: Pick<Book, "coverPath">,
+): Promise<string | null> {
   if (!isTauri() || !book.coverPath) return null;
 
   const cached = coverUrlCache.get(book.coverPath);
