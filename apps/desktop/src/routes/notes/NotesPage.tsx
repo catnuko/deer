@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, StickyNote, Trash2 } from "lucide-react";
+import { StickyNote, Trash2 } from "lucide-react";
 import { formatTime } from "@/components/reader/AnnotationPanel";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -47,16 +47,7 @@ export function NotesPage() {
       <PageHeader
         title="笔记"
         description="所有书里的划线、摘录与笔记都在这里。"
-        actions={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="返回书架"
-            onClick={() => navigate("/bookshelf")}
-          >
-            <ArrowLeft />
-          </Button>
-        }
+        onBack={() => navigate("/bookshelf")}
       />
       <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
         {groups.length === 0 ? (

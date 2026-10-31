@@ -19,6 +19,9 @@ import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { SelectionPopover } from "@/components/reader/SelectionPopover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
   buildChapterSummaryPrompt,
   extractSectionText,
@@ -37,6 +40,7 @@ import {
   readingStyles,
 } from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore, type StoredAnnotation } from "@/store/annotationStore";
 import { useReadingSettings, type FontSize, type PageFlow, type PaperColor } from "@/store/readingSettings";
@@ -55,6 +59,11 @@ type StyleableRenderer = HTMLElement & {
 };
 
 const VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
+
+/** 浮层经 Esc / 关闭按钮收起后，焦点归还顶栏的触发按钮（验收 3）。 */
+function focusToolbarButton(id: string) {
+  requestAnimationFrame(() => document.getElementById(id)?.focus());
+}
 
 type RealBookPhase =
   | { status: "loading" }
@@ -168,11 +177,6 @@ export function ReaderPage() {
     }
   };
 
-  const openConceptMap = () => {
-    setConceptMapChapterKey(`sec:${currentSectionRef.current}`);
-    setConceptMapOpen(true);
-  };
-
   const askDeer = useCallback((text: string) => {
     const formatted = formatSelectionDraft(text);
     if (!formatted) return;
@@ -194,6 +198,55 @@ export function ReaderPage() {
   const [notesOpen, setNotesOpen] = useState(false);
   // 阅读页快捷显示设置面板（M4）。
   const [quickSettingsOpen, setQuickSettingsOpen] = useState(false);
+  // 目录开关（布局重排 v1）：宽窗默认展开 dock；窄窗走 Sheet 浮层，默认收起。
+  const isWide = useMediaQuery("(min-width: 768px)");
+  const [tocOpen, setTocOpen] = useState(
+    () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(min-width: 768px)").matches,
+  );
+  // 跨越到窄窗时把 dock 形态的面板收起，避免 Sheet 突然盖到正文上。
+  useEffect(() => {
+    if (!isWide) {
+      setTocOpen(false);
+      setNotesOpen(false);
+    }
+  }, [isWide]);
+
+  // 浮层互斥（规范 1.3）：显示设置与概念地图同时只开一个。
+  const toggleQuickSettings = () => {
+    if (quickSettingsOpen) {
+      setQuickSettingsOpen(false);
+      focusToolbarButton("reader-toolbar-display");
+      return;
+    }
+    setConceptMapOpen(false);
+    setQuickSettingsOpen(true);
+  };
+  const closeQuickSettings = useCallback(() => {
+    setQuickSettingsOpen(false);
+    focusToolbarButton("reader-toolbar-display");
+  }, []);
+  const toggleConceptMap = () => {
+    if (conceptMapOpen) {
+      setConceptMapOpen(false);
+      focusToolbarButton("reader-toolbar-concept-map");
+      return;
+    }
+    setQuickSettingsOpen(false);
+    setConceptMapChapterKey(`sec:${currentSectionRef.current}`);
+    setConceptMapOpen(true);
+  };
+  const closeConceptMap = useCallback(() => {
+    setConceptMapOpen(false);
+    focusToolbarButton("reader-toolbar-concept-map");
+  }, []);
+  // 编辑已有高亮的「复制」（规范 1.5）：复制摘录，收口菜单。
+  const copyAnnotationText = useCallback((text: string) => {
+    if (!text) return;
+    void navigator.clipboard.writeText(text).catch(() => undefined);
+    setAnnotationMenu(null);
+  }, []);
   const annotationsForBook = useAnnotationStore((state) =>
     bookKey ? state.annotations[bookKey] : undefined,
   );
@@ -351,9 +404,11 @@ export function ReaderPage() {
       const section = detail.section;
       if (!section || section.total === 0) return;
 
-      // 翻页/跳章后选区与浮层都作废。
+      // 翻页/跳章后选区与浮层都作废（布局重排 1.3：两个设置类浮层一并关闭）。
       setSelection(null);
       setAnnotationMenu(null);
+      setQuickSettingsOpen(false);
+      setConceptMapOpen(false);
       currentSectionRef.current = section.current;
       const fraction = clampProgress(detail.fraction as number);
       setScrollProgress(fraction);
@@ -652,7 +707,6 @@ export function ReaderPage() {
         phase={realPhase}
         scrollProgress={scrollProgress}
         fontSize={fontSize}
-        lineHeight={lineHeight}
         viewerRef={viewerRef}
         onSelectChapter={selectRealChapter}
         onPageTurn={turnPage}
@@ -671,8 +725,12 @@ export function ReaderPage() {
         paperColor={paperColor}
         pageFlow={pageFlow}
         isDark={isDark}
-        onToggleQuickSettings={() => setQuickSettingsOpen((open) => !open)}
-        onCloseQuickSettings={() => setQuickSettingsOpen(false)}
+        wideViewport={isWide}
+        tocOpen={tocOpen}
+        tocEmpty={realPhase.status === "ready" && realPhase.toc.length === 0}
+        onToggleToc={() => setTocOpen((open) => !open)}
+        onToggleQuickSettings={toggleQuickSettings}
+        onCloseQuickSettings={closeQuickSettings}
         onFontSizeChange={setFontSize}
         onPaperColorChange={setPaperColor}
         onPageFlowChange={setPageFlow}
@@ -681,13 +739,14 @@ export function ReaderPage() {
         panelRef={panelRef}
         onAskSelection={askDeer}
         onCopySelection={copySelection}
+        onCopyAnnotation={copyAnnotationText}
         onHighlightSelection={highlightSelection}
         onNoteSelection={noteSelection}
         onSummarizeChapter={() => void summarizeCurrentSection()}
         conceptMapOpen={conceptMapOpen && conceptMapChapterKey !== null}
         conceptMapChapterKey={conceptMapChapterKey}
-        onOpenConceptMap={openConceptMap}
-        onCloseConceptMap={() => setConceptMapOpen(false)}
+        onToggleConceptMap={toggleConceptMap}
+        onCloseConceptMap={closeConceptMap}
         getChapterText={readCurrentSectionText}
         onClosePanel={() => setChatOpen(false)}
       />
@@ -716,7 +775,6 @@ type RealReaderProps = {
   phase: RealBookPhase;
   scrollProgress: number;
   fontSize: FontSize;
-  lineHeight: number;
   viewerRef: React.RefObject<HTMLDivElement | null>;
   onSelectChapter: (item: TocItem) => void;
   onPageTurn: (direction: "next" | "prev") => void;
@@ -737,6 +795,12 @@ type RealReaderProps = {
   paperColor: PaperColor;
   pageFlow: PageFlow;
   isDark: boolean;
+  /** 宽窗（≥md）为 true：目录/笔记用左栏 dock，窄窗用 Sheet 浮层（布局重排 v1）。 */
+  wideViewport: boolean;
+  tocOpen: boolean;
+  /** 无目录的书（图片书等）：目录面板显示空态、按钮置灰。 */
+  tocEmpty: boolean;
+  onToggleToc: () => void;
   onToggleQuickSettings: () => void;
   onCloseQuickSettings: () => void;
   onFontSizeChange: (fontSize: FontSize) => void;
@@ -747,12 +811,14 @@ type RealReaderProps = {
   panelRef: React.RefObject<ChatPanelHandle | null>;
   onAskSelection: (text: string) => void;
   onCopySelection: (text: string) => void;
+  /** 编辑已有高亮菜单里的「复制」：复制摘录并收口菜单。 */
+  onCopyAnnotation: (text: string) => void;
   onHighlightSelection: (color: string, cfi: string | null, text: string) => void;
   onNoteSelection: (note: string, cfi: string | null, text: string) => void;
   onSummarizeChapter: () => void;
   conceptMapOpen: boolean;
   conceptMapChapterKey: string | null;
-  onOpenConceptMap: () => void;
+  onToggleConceptMap: () => void;
   onCloseConceptMap: () => void;
   getChapterText: () => Promise<string | null>;
   onClosePanel: () => void;
@@ -765,7 +831,6 @@ function RealReader({
   phase,
   scrollProgress,
   fontSize,
-  lineHeight,
   viewerRef,
   onSelectChapter,
   onPageTurn,
@@ -784,6 +849,10 @@ function RealReader({
   paperColor,
   pageFlow,
   isDark,
+  wideViewport,
+  tocOpen,
+  tocEmpty,
+  onToggleToc,
   onToggleQuickSettings,
   onCloseQuickSettings,
   onFontSizeChange,
@@ -794,12 +863,13 @@ function RealReader({
   panelRef,
   onAskSelection,
   onCopySelection,
+  onCopyAnnotation,
   onHighlightSelection,
   onNoteSelection,
   onSummarizeChapter,
   conceptMapOpen,
   conceptMapChapterKey,
-  onOpenConceptMap,
+  onToggleConceptMap,
   onCloseConceptMap,
   getChapterText,
   onClosePanel,
@@ -809,42 +879,80 @@ function RealReader({
   const currentIndex = phase.status === "ready" ? phase.currentIndex : 0;
   const percent = Math.round(scrollProgress * 100);
 
+  const renderToc = (variant: "dock" | "sheet") => (
+    <ReaderToc
+      variant={variant}
+      chapters={tocEntries}
+      currentIndex={currentIndex}
+      onSelect={(index) => {
+        if (phase.status === "ready") {
+          const item = phase.toc[index];
+          if (item) onSelectChapter(item);
+        }
+      }}
+    />
+  );
+
   return (
     <div className="flex h-full flex-col">
       <ReaderToolbar
         bookTitle={title}
         author={author}
-        chapterIndex={currentIndex}
-        chapterCount={Math.max(tocEntries.length, 1)}
-        fontSize={fontSize}
-        lineHeight={lineHeight as 1.6 | 1.8 | 2}
+        tocOpen={tocOpen && !tocEmpty}
+        tocDisabled={tocEmpty}
+        onToggleToc={onToggleToc}
+        notesOpen={notesOpen}
+        onToggleNotes={onToggleNotes}
+        quickSettingsOpen={quickSettingsOpen}
+        onToggleQuickSettings={onToggleQuickSettings}
+        conceptMapOpen={conceptMapOpen}
+        onToggleConceptMap={onToggleConceptMap}
         onSummarizeChapter={onSummarizeChapter}
-        onOpenConceptMap={onOpenConceptMap}
-        onOpenNotes={onToggleNotes}
-        onOpenQuickSettings={onToggleQuickSettings}
       />
 
       <div className="flex min-h-0 flex-1">
-        <ReaderToc
-          chapters={tocEntries}
-          currentIndex={currentIndex}
-          onSelect={(index) => {
-            if (phase.status === "ready") {
-              const item = phase.toc[index];
-              if (item) onSelectChapter(item);
-            }
-          }}
-          className="hidden md:flex"
-        />
+        {wideViewport ? (
+          tocOpen && !tocEmpty ? renderToc("dock") : null
+        ) : (
+          <Sheet
+            open={tocOpen && !tocEmpty}
+            onOpenChange={(open) => {
+              if (!open) onToggleToc();
+            }}
+          >
+            <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
+              {renderToc("sheet")}
+            </SheetContent>
+          </Sheet>
+        )}
 
-        {notesOpen ? (
-          <AnnotationPanel
-            annotations={annotations ?? []}
-            onSelect={onSelectAnnotation}
-            onDelete={onDeleteAnnotationById}
-            onClose={onCloseNotes}
-          />
-        ) : null}
+        {wideViewport ? (
+          notesOpen ? (
+            <AnnotationPanel
+              annotations={annotations ?? []}
+              onSelect={onSelectAnnotation}
+              onDelete={onDeleteAnnotationById}
+              onClose={onCloseNotes}
+            />
+          ) : null
+        ) : (
+          <Sheet
+            open={notesOpen}
+            onOpenChange={(open) => {
+              if (!open) onCloseNotes();
+            }}
+          >
+            <SheetContent side="left" showCloseButton={false} className="w-80 gap-0 p-0">
+              <AnnotationPanel
+                variant="sheet"
+                annotations={annotations ?? []}
+                onSelect={onSelectAnnotation}
+                onDelete={onDeleteAnnotationById}
+                onClose={onCloseNotes}
+              />
+            </SheetContent>
+          </Sheet>
+        )}
 
         <div className="flex min-w-0 flex-1 flex-col">
           <div
@@ -903,10 +1011,16 @@ function RealReader({
                 x={annotationMenu.x}
                 y={annotationMenu.y}
                 placement={annotationMenu.placement}
+                text={annotationMenu.annotation.excerpt ?? ""}
                 existing={{
                   color: annotationMenu.annotation.color,
                   note: annotationMenu.annotation.note,
                 }}
+                onCopy={
+                  annotationMenu.annotation.excerpt
+                    ? onCopyAnnotation
+                    : undefined
+                }
                 onHighlight={onChangeAnnotationColor}
                 onNote={onEditAnnotationNote}
                 onDelete={onDeleteAnnotation}
@@ -930,6 +1044,12 @@ function RealReader({
           </div>
 
           <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
+            <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
+              第 {currentIndex + 1} / {Math.max(tocEntries.length, 1)} 章
+              {phase.status === "ready" && phase.toc[currentIndex]
+                ? ` · ${phase.toc[currentIndex].title}`
+                : ""}
+            </span>
             <div
               className="bg-muted h-1 flex-1 overflow-hidden rounded-full"
               role="progressbar"
@@ -946,6 +1066,26 @@ function RealReader({
             <span className="text-muted-foreground w-10 text-right text-xs tabular-nums">
               {percent}%
             </span>
+            {pageFlow === "paginated" ? (
+              <div className="flex shrink-0 items-center gap-0.5">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="上一页"
+                  onClick={() => onPageTurn("prev")}
+                >
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="下一页"
+                  onClick={() => onPageTurn("next")}
+                >
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            ) : null}
           </footer>
         </div>
 
@@ -1001,13 +1141,22 @@ function DemoReader({
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const scrollHostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<ChatPanelHandle | null>(null);
+  // 目录开关（布局重排 v1），与 RealReader 同一套宽窄窗行为。
+  const isWide = useMediaQuery("(min-width: 768px)");
+  const [tocOpen, setTocOpen] = useState(
+    () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(min-width: 768px)").matches,
+  );
+  useEffect(() => {
+    if (!isWide) setTocOpen(false);
+  }, [isWide]);
 
   const chapter = book.chapters[chapterIndex] ?? book.chapters[0];
   const chapterCount = book.chapters.length;
 
   // 概念地图（R2）：演示书按章节序号做缓存 key，正文就是段落列表。
   const [conceptMapOpen, setConceptMapOpen] = useState(false);
-  const openConceptMap = () => setConceptMapOpen(true);
 
   // 总结本章（N3）：演示书章节就是段落列表，走 N1 上下文注入发送。
   const summarizeChapter = () => {
@@ -1020,10 +1169,12 @@ function DemoReader({
   };
 
   // 换章回到开头：新正文从头读，进度条归零（状态在切换时同步重置，避免 effect 里 setState）。
+  // 跳章时概念地图一并关闭（布局重排 1.3）。
   const selectChapter = (index: number) => {
     setChapterIndex(index);
     setScrollProgress(0);
     setSelection(null);
+    setConceptMapOpen(false);
   };
 
   // 划选问 Deer（N2）：演示书正文就在宿主文档里，直接读 window selection。
@@ -1094,21 +1245,39 @@ function DemoReader({
       <ReaderToolbar
         bookTitle={book.title}
         author={book.author}
-        chapterIndex={chapterIndex}
-        chapterCount={chapterCount}
-        fontSize={fontSize}
-        lineHeight={lineHeight as 1.6 | 1.8 | 2}
+        tocOpen={tocOpen}
+        onToggleToc={() => setTocOpen((open) => !open)}
+        conceptMapOpen={conceptMapOpen}
+        onToggleConceptMap={() => setConceptMapOpen((open) => !open)}
         onSummarizeChapter={summarizeChapter}
-        onOpenConceptMap={openConceptMap}
       />
 
       <div className="flex min-h-0 flex-1">
-        <ReaderToc
-          chapters={book.chapters}
-          currentIndex={chapterIndex}
-          onSelect={selectChapter}
-          className="hidden md:flex"
-        />
+        {isWide ? (
+          tocOpen ? (
+            <ReaderToc
+              chapters={book.chapters}
+              currentIndex={chapterIndex}
+              onSelect={selectChapter}
+            />
+          ) : null
+        ) : (
+          <Sheet
+            open={tocOpen}
+            onOpenChange={(open) => {
+              if (!open) setTocOpen(false);
+            }}
+          >
+            <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
+              <ReaderToc
+                variant="sheet"
+                chapters={book.chapters}
+                currentIndex={chapterIndex}
+                onSelect={selectChapter}
+              />
+            </SheetContent>
+          </Sheet>
+        )}
 
         <div className="flex min-w-0 flex-1 flex-col">
           <div
@@ -1142,12 +1311,18 @@ function DemoReader({
                 chapterKey={`chapter:${chapterIndex}`}
                 chapterTitle={chapter.title}
                 getChapterText={async () => chapter.paragraphs.join("\n\n")}
-                onClose={() => setConceptMapOpen(false)}
+                onClose={() => {
+                  setConceptMapOpen(false);
+                  focusToolbarButton("reader-toolbar-concept-map");
+                }}
               />
             ) : null}
           </div>
 
           <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
+            <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
+              第 {chapterIndex + 1} / {chapterCount} 章 · {chapter.title}
+            </span>
             <div
               className="bg-muted h-1 flex-1 overflow-hidden rounded-full"
               role="progressbar"

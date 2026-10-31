@@ -200,4 +200,14 @@ describe("ConceptMapPanel", () => {
       useConceptMapStore.getState().get("book-1", "sec:3")?.nodes,
     ).toEqual([{ id: "n1", label: "旧地图" }]);
   });
+
+  it("按 Esc 触发 onClose（布局重排 P8）", async () => {
+    render(<ConceptMapPanel {...PROPS} />);
+    await eventually(() =>
+      expect(screen.getByText(/还没有这一章的概念地图/)).toBeInTheDocument(),
+    );
+
+    await userEvent.keyboard("{Escape}");
+    expect(PROPS.onClose).toHaveBeenCalledOnce();
+  });
 });

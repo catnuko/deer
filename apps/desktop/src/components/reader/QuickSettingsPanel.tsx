@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -41,6 +42,15 @@ export function QuickSettingsPanel({
   onPageFlowChange,
   onClose,
 }: QuickSettingsPanelProps) {
+  // Esc 关闭（布局重排 P8）：与其他阅读页浮层行为对齐。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div
       role="group"

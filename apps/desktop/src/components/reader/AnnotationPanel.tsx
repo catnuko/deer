@@ -9,6 +9,8 @@ type AnnotationPanelProps = {
   onSelect: (cfi: string) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
+  /** dock：左栏固定宽；sheet：塞进小窗浮层，撑满容器。 */
+  variant?: "dock" | "sheet";
 };
 
 export function formatTime(createdAt: number): string {
@@ -23,11 +25,13 @@ export function AnnotationPanel({
   onSelect,
   onDelete,
   onClose,
+  variant = "dock",
 }: AnnotationPanelProps) {
   return (
     <aside
       className={cn(
-        "border-border bg-sidebar flex w-72 shrink-0 flex-col border-r",
+        "border-border bg-sidebar flex shrink-0 flex-col",
+        variant === "sheet" ? "h-full w-full" : "w-72 border-r",
       )}
       aria-label="笔记列表"
     >

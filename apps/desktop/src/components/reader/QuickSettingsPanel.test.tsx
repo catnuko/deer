@@ -102,4 +102,12 @@ describe("QuickSettingsPanel", () => {
     await user.click(screen.getByLabelText("关闭显示设置"));
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it("按 Esc 触发 onClose（布局重排 P8）", async () => {
+    const onClose = vi.fn();
+    render(<QuickSettingsPanel {...baseProps} onClose={onClose} />);
+
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 });

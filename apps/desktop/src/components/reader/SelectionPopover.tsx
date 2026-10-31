@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
+  ArrowLeft,
   Copy,
   Highlighter,
   NotebookPen,
@@ -19,7 +20,7 @@ import { HIGHLIGHT_COLORS } from "./highlightColors";
  * x/y/placement 由 popoverPlacement 算好传入。
  * 「高亮」展开色条、「笔记」展开输入框，都是菜单内的二级面板；
  * 菜单何时关闭由父级（清掉 selection 状态）决定。
- * `existing` 传入时是编辑已有高亮的菜单：改色 / 笔记 / 删除。
+ * `existing` 传入时是编辑已有高亮的菜单：复制 / 改色 / 笔记 / 删除（提供 onCopy 才出复制）。
  */
 export function SelectionPopover({
   x,
@@ -60,6 +61,13 @@ export function SelectionPopover({
       >
         {mode === "menu" && existing ? (
           <div className="divide-border flex divide-x">
+            {onCopy ? (
+              <MenuButton
+                icon={Copy}
+                label="复制"
+                onClick={() => onCopy(text)}
+              />
+            ) : null}
             <MenuButton
               icon={Palette}
               label="改色"
@@ -95,6 +103,14 @@ export function SelectionPopover({
         ) : null}
         {mode === "colors" ? (
           <div className="flex items-center gap-2.5 p-2.5">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="返回菜单"
+              onClick={() => setMode("menu")}
+            >
+              <ArrowLeft className="size-3" />
+            </Button>
             {HIGHLIGHT_COLORS.map((color) => (
               <button
                 key={color.key}

@@ -67,6 +67,15 @@ export function ConceptMapPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tauri] = useState(() => isTauriRuntime());
 
+  // Esc 关闭（布局重排 P8）：与显示设置面板行为对齐。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   // 打开面板时先查缓存：有就直接展示，没有停在「未生成」。
   useEffect(() => {
     let cancelled = false;

@@ -126,16 +126,44 @@ describe("SelectionPopover 编辑已有高亮", () => {
     return renderPopover({ existing, ...overrides });
   }
 
-  it("编辑模式只出改色/笔记/删除三个动作，不出复制和高亮", () => {
+  it("编辑模式出复制/改色/笔记/删除四个动作，不出高亮和问 Deer", () => {
     renderEditPopover();
 
-    for (const name of ["改色", "笔记", "删除"]) {
+    for (const name of ["复制", "改色", "笔记", "删除"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
-    expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "高亮" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "问 Deer" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("编辑模式点复制，把摘录交给 onCopy（布局重排 1.5）", async () => {
+    const props = renderEditPopover();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "复制" }));
+    expect(props.onCopy).toHaveBeenCalledWith("被划选的句子");
+  });
+
+  it("没提供 onCopy 时编辑模式不显示复制", () => {
+    renderEditPopover({ onCopy: undefined });
+    expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+  });
+
+  it("色板态有返回按钮，点回主菜单（布局重排 1.5）", async () => {
+    renderEditPopover();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "改色" }));
+    expect(
+      screen.queryByRole("button", { name: "改色" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "返回菜单" }));
+    expect(screen.getByRole("button", { name: "改色" })).toBeInTheDocument();
   });
 
   it("点改色展开色条，选色把颜色值交给 onHighlight", async () => {

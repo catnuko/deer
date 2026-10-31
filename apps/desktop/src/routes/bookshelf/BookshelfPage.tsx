@@ -12,6 +12,12 @@ import {
   Settings as SettingsIcon,
   Trash2,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -205,24 +211,38 @@ export function BookshelfPage() {
         title="书架"
         description="导入、整理与阅读你的本地电子书。"
         actions={
-          <>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="打开笔记"
-              onClick={() => navigate("/notes")}
-            >
-              <NotebookText />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="打开设置"
-              onClick={() => navigate("/settings")}
-            >
-              <SettingsIcon />
-            </Button>
-          </>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="打开笔记"
+                    onClick={() => navigate("/notes")}
+                  />
+                }
+              >
+                <NotebookText />
+              </TooltipTrigger>
+              <TooltipContent>笔记</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="打开设置"
+                    onClick={() => navigate("/settings")}
+                  />
+                }
+              >
+                <SettingsIcon />
+              </TooltipTrigger>
+              <TooltipContent>设置</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         }
       />
 
@@ -232,14 +252,23 @@ export function BookshelfPage() {
             <span className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
               书架
             </span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="新建书架"
-              onClick={() => setShelfForm({ mode: "create" })}
-            >
-              <FolderPlus />
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="新建书架"
+                      onClick={() => setShelfForm({ mode: "create" })}
+                    />
+                  }
+                >
+                  <FolderPlus />
+                </TooltipTrigger>
+                <TooltipContent>新建书架</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
 
           <nav className="flex flex-col gap-0.5 px-2 py-1">
