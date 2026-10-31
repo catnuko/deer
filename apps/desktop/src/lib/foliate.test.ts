@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ebookFormatOf,
   fileExtensionOf,
+  imageExtensionOf,
   makeBookFile,
   readingStyles,
 } from "./foliate";
@@ -50,6 +51,34 @@ describe("makeBookFile", () => {
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(
       new Uint8Array([0xff, 0x00, 0x7f]),
     );
+  });
+});
+
+describe("imageExtensionOf", () => {
+  it("按魔数识别 png/jpeg/gif/webp", () => {
+    expect(imageExtensionOf(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d]))).toBe("png");
+    expect(imageExtensionOf(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe("jpg");
+    expect(imageExtensionOf(new Uint8Array([0x47, 0x49, 0x46, 0x38]))).toBe("gif");
+    expect(
+      imageExtensionOf(
+        new Uint8Array([
+          0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+        ]),
+      ),
+    ).toBe("webp");
+  });
+
+  it("认不出与非图片字节返回 undefined", () => {
+    expect(imageExtensionOf(new Uint8Array([1, 2, 3, 4]))).toBeUndefined();
+    // RIFF 头但不是 WEBP（WAV 等）
+    expect(
+      imageExtensionOf(
+        new Uint8Array([
+          0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45,
+        ]),
+      ),
+    ).toBeUndefined();
+    expect(imageExtensionOf(new Uint8Array())).toBeUndefined();
   });
 });
 

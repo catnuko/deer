@@ -128,6 +128,35 @@ function coverExtensionOf(mimeType: string): string {
   return COVER_EXTENSIONS[mimeType.toLowerCase()] ?? "jpg";
 }
 
+/** 按图片魔数认真实格式；认不出返回 undefined，由调用方兜底。 */
+export function imageExtensionOf(bytes: Uint8Array): string | undefined {
+  if (
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "png";
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "jpg";
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    return "gif";
+  }
+  if (
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "webp";
+  }
+  return undefined;
+}
+
 /**
  * 用 foliate 读非 EPUB 格式的元数据与封面。
  * 解析失败由调用方降级为「文件名 + 未知作者 + 无封面」，不阻断导入。
@@ -145,7 +174,10 @@ export async function readImportedMetadata(
       const cover = await book.getCover();
       if (cover?.size) {
         coverBytes = new Uint8Array(await cover.arrayBuffer());
-        coverExtension = coverExtensionOf(cover.type || "");
+        // foliate 对 MOBI/KF8/CBZ 的封面常不带 MIME，按 MIME 兜底成 jpg 会把
+        // PNG 封面写错扩展名；魔数嗅探是准的，MIME 只作认不出时的兜底。
+        coverExtension =
+          imageExtensionOf(coverBytes) ?? coverExtensionOf(cover.type || "");
       }
     }
     return {
