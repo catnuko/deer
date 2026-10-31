@@ -20,6 +20,36 @@ exit=0 total=15.723s lines=182
 169 个正文块在 3.6 秒内陆续到达（~47 块/秒）——acpx 在非 TTY 管道下不攒批。
 前 11 秒是适配器冷启动 + 模型首 token 延迟。
 
+## 探针 2.5：直连链路同环境对照（补充任务，direct_timing_probe.py）
+
+应用户要求补一组对照：与 acpx 探针**同 prompt、同环境**，按 claude_acp.rs 同款
+方式直接 spawn `@zed-industries/claude-code-acp` 适配器（node 跑 dist/index.js，
+env 注入 CLAUDE_CODE_EXECUTABLE，stdout 管道），完成 initialize → session/new →
+session/prompt 握手，逐行记录 NDJSON 到达时间。原始输出
+`evidence/acpx-streaming/direct_probe_output.txt`。
+
+```
+initialize result      0.128s
+session/new result     3.545s（适配器自身初始化 ~3.4s）
+首正文块              10.068s（session/prompt 发出后 ~6.5s，模型首 token）
+末正文块              16.468s
+message chunks=204 span=6.400s rate=31.9/s
+```
+
+**三情形判定：两条链路在子进程层都是逐块流式，均无攒批。**
+
+| 链路 | 块数 | 首块 | 块跨度 | 速率 |
+|---|---|---|---|---|
+| 直连（zed 适配器） | 204 | 10.07s | 6.40s | 31.9/s |
+| acpx（acpx→claude 适配器） | 169 | 11.06s | 3.60s | 46.9/s |
+
+- 情形 1（直连也一次性出来 → 共用环节攒批）：**不成立**——直连子进程层
+  204 块在 6.4 秒内陆续到达，无攒批；
+- 情形 2（仅 acpx 不流 → acpx 缓冲）：**不成立**——acpx 层同样逐块流出；
+- 情形 3 的替代解释成立：两条链路观感相同，根因都是「首 token 前静默
+  ~10–17s（适配器冷启动 + 网关首 token 延迟）→ 短回复 3–6s 内倾泻完」，
+  与 CHAT_GATE、emit 路径无关（CHAT_GATE 只做跨后端串行，不拦中途事件）。
+
 ## 探针 2：深度思考（MAX_THINKING_TOKENS=10000）思考块是否先行
 
 `think_probe.py`，prompt「解释什么是闭包」：
