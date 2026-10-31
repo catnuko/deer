@@ -20,11 +20,39 @@ export type ClaudeChatResult = {
   sessionId: string;
 };
 
+/** 聊天后端（harness）：claude = 内置直连，acpx = acpx 连接层。 */
+export type ChatHarness = "claude" | "acpx";
+
+/** acpx 环境自检结果（Node ≥22.13、acpx@0.21.x 已装）。 */
+export type AcpxEnvStatus = {
+  ok: boolean;
+  nodeOk: boolean;
+  nodeVersion: string | null;
+  acpxVersion: string | null;
+  message: string;
+};
+
 export function isTauriRuntime(): boolean {
   return (
     typeof window !== "undefined" &&
     "__TAURI_INTERNALS__" in (window as object)
   );
+}
+
+/** 监听流式增量事件并按 messageId 路由到正文/思考回调，返回解绑函数。 */
+async function listenChunks(
+  messageId: string,
+  opts: { onDelta: (delta: string) => void; onThoughtDelta?: (delta: string) => void },
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return await listen<ClaudeChunkPayload>(CLAUDE_CHUNK_EVENT, (event) => {
+    if (event.payload.messageId !== messageId) return;
+    if (event.payload.kind === "thought") {
+      opts.onThoughtDelta?.(event.payload.delta);
+    } else {
+      opts.onDelta(event.payload.delta);
+    }
+  });
 }
 
 export async function claudeChat(opts: {
@@ -39,20 +67,8 @@ export async function claudeChat(opts: {
   /** 深度思考增量（kind=thought）；不传则丢弃。 */
   onThoughtDelta?: (delta: string) => void;
 }): Promise<ClaudeChatResult> {
-  const { listen } = await import("@tauri-apps/api/event");
   const { invoke } = await import("@tauri-apps/api/core");
-
-  const unlisten = await listen<ClaudeChunkPayload>(
-    CLAUDE_CHUNK_EVENT,
-    (event) => {
-      if (event.payload.messageId !== opts.messageId) return;
-      if (event.payload.kind === "thought") {
-        opts.onThoughtDelta?.(event.payload.delta);
-      } else {
-        opts.onDelta(event.payload.delta);
-      }
-    },
-  );
+  const unlisten = await listenChunks(opts.messageId, opts);
   try {
     return await invoke<ClaudeChatResult>("claude_chat", {
       prompt: opts.prompt,
@@ -63,4 +79,37 @@ export async function claudeChat(opts: {
   } finally {
     unlisten();
   }
+}
+
+/** acpx 连接层聊天：会话由 acpx 管理（命名会话 deer-<threadId>），事件与直连同构。 */
+export async function acpxChat(opts: {
+  prompt: string;
+  messageId: string;
+  /** 前端聊天线程 id，Rust 侧据此映射 acpx 命名会话。 */
+  threadId: string;
+  /** 该线程上一轮的 ACP session id（NO_SESSION 恢复用）；为空则新建。 */
+  resumeSessionId?: string | null;
+  deepThinking?: boolean;
+  onDelta: (delta: string) => void;
+  onThoughtDelta?: (delta: string) => void;
+}): Promise<ClaudeChatResult> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const unlisten = await listenChunks(opts.messageId, opts);
+  try {
+    return await invoke<ClaudeChatResult>("acpx_chat", {
+      prompt: opts.prompt,
+      messageId: opts.messageId,
+      threadId: opts.threadId,
+      resumeSessionId: opts.resumeSessionId ?? null,
+      deepThinking: opts.deepThinking ?? false,
+    });
+  } finally {
+    unlisten();
+  }
+}
+
+/** acpx 环境自检：Node 版本、acpx 安装与版本锁定线。 */
+export async function acpxEnvCheck(): Promise<AcpxEnvStatus> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<AcpxEnvStatus>("acpx_env_check");
 }

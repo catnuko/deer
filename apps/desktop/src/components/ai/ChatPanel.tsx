@@ -13,11 +13,25 @@ import { ArrowUp, Brain, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
-import { claudeChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
+import {
+  acpxChat,
+  acpxEnvCheck,
+  claudeChat,
+  isTauriRuntime,
+  type AcpxEnvStatus,
+  type ChatHarness,
+} from "@/lib/ai/claudeBackend";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { GradientHeading } from "@/components/ui/gradient-heading";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { CurrentBook } from "@/lib/ai/currentBook";
 import { useChatStore } from "@/store/chatStore";
 
@@ -226,6 +240,35 @@ export function ChatPanel({
   }, [readingContext]);
   // 运行时环境整个会话不会变，取一次即可。
   const [tauri] = useState(() => isTauriRuntime());
+  // 聊天后端（harness）与 acpx 环境自检结果。
+  const harness = useChatStore((s) => s.harness);
+  const [envStatus, setEnvStatus] = useState<AcpxEnvStatus | null>(null);
+
+  // 切到 acpx（或带 acpx 状态启动）时检查一次环境；失败只提示，不拦发送
+  // （Rust 侧 acpx_chat 自带同样的检查与指引）。
+  useEffect(() => {
+    if (!tauri || harness !== "acpx") return;
+    let alive = true;
+    setEnvStatus(null);
+    acpxEnvCheck()
+      .then((s) => {
+        if (alive) setEnvStatus(s);
+      })
+      .catch((err) => {
+        if (alive) {
+          setEnvStatus({
+            ok: false,
+            nodeOk: false,
+            nodeVersion: null,
+            acpxVersion: null,
+            message: `acpx 环境检查失败：${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tauri, harness]);
 
   useEffect(() => {
     if (!ready) void load();
@@ -279,32 +322,56 @@ export function ChatPanel({
         return;
       }
 
-      // 桌面端：走本地 claude（ACP），同书追问续接上一轮会话上下文。
+      // 桌面端：按 harness 走本地 claude（内置直连）或 acpx 连接层。
       const assistant = appendMessage(threadId, "assistant", "");
-      const resumeSessionId =
-        useChatStore.getState().claudeSessionByBook[book.id] ?? null;
+      const state = useChatStore.getState();
       try {
-        const result = await claudeChat({
-          prompt: claudePrompt,
-          messageId: assistant.id,
-          resumeSessionId,
-          deepThinking: useChatStore.getState().deepThinking,
-          onDelta: (delta) => {
-            useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
-          },
-          onThoughtDelta: (delta) => {
-            useChatStore
-              .getState()
-              .appendToMessageThinking(threadId, assistant.id, delta);
-          },
-        });
+        let result;
+        if (state.harness === "acpx") {
+          // acpx：会话按线程命名（deer-<threadId>），acpx 负责跨进程恢复；
+          // Deer 只存 ACP session id，NO_SESSION 时回传给它接回旧会话。
+          result = await acpxChat({
+            prompt: claudePrompt,
+            messageId: assistant.id,
+            threadId,
+            resumeSessionId: state.acpxSessionByThread[threadId] ?? null,
+            deepThinking: state.deepThinking,
+            onDelta: (delta) => {
+              useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
+            },
+            onThoughtDelta: (delta) => {
+              useChatStore
+                .getState()
+                .appendToMessageThinking(threadId, assistant.id, delta);
+            },
+          });
+          useChatStore
+            .getState()
+            .setAcpxSession(threadId, result.sessionId);
+        } else {
+          // 内置直连：同书追问续接上一轮会话上下文。
+          result = await claudeChat({
+            prompt: claudePrompt,
+            messageId: assistant.id,
+            resumeSessionId: state.claudeSessionByBook[book.id] ?? null,
+            deepThinking: state.deepThinking,
+            onDelta: (delta) => {
+              useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
+            },
+            onThoughtDelta: (delta) => {
+              useChatStore
+                .getState()
+                .appendToMessageThinking(threadId, assistant.id, delta);
+            },
+          });
+          useChatStore
+            .getState()
+            .setClaudeSession(book.id, result.sessionId);
+        }
         // 以 Rust 侧累计的完整正文为准落库（含持久化）。
         useChatStore
           .getState()
           .setMessageContent(threadId, assistant.id, result.text);
-        useChatStore
-          .getState()
-          .setClaudeSession(book.id, result.sessionId);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         useChatStore
@@ -395,7 +462,11 @@ export function ChatPanel({
           </p>
         </div>
         <Badge variant="secondary" className="mt-1 shrink-0 text-[11px]">
-          {tauri ? "本地 Claude Code" : "未接后端（浏览器预览）"}
+          {tauri
+            ? harness === "acpx"
+              ? "acpx · Claude"
+              : "本地 Claude Code"
+            : "未接后端（浏览器预览）"}
         </Badge>
         <Button
           variant="ghost"
@@ -418,9 +489,49 @@ export function ChatPanel({
       </header>
 
       <div className="bg-secondary/60 text-secondary-foreground border-border border-b px-4 py-2 text-[11px] leading-relaxed">
-        {tauri
-          ? "本地 Claude Code (ACP)：回复由你本机的 claude CLI 生成，会话按书隔离，追问自动续接上下文。"
-          : "浏览器预览：没有 Tauri 后端，回复是写死的占位文本，不会联网。"}
+        {tauri ? (
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground shrink-0">AI 引擎</span>
+            <Select
+              value={harness}
+              onValueChange={(value) => useChatStore.getState().setHarness(value as ChatHarness)}
+            >
+              <SelectTrigger
+                aria-label="选择 AI 引擎"
+                data-testid="harness-select"
+                className="h-6 flex-1 px-2 text-[11px]"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="claude">Claude（内置直连）</SelectItem>
+                <SelectItem value="acpx">acpx · Claude（多 harness）</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        ) : (
+          "浏览器预览：没有 Tauri 后端，回复是写死的占位文本，不会联网。"
+        )}
+        {tauri && harness === "acpx" && (
+          <p
+            data-testid="acpx-env-note"
+            className={cn(
+              "mt-1",
+              envStatus && !envStatus.ok ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {envStatus
+              ? envStatus.ok
+                ? "acpx 连接层：会话由 acpx 管理，每个会话线程独立命名并跨进程恢复。"
+                : envStatus.message
+              : "正在检查 acpx 环境…"}
+          </p>
+        )}
+        {tauri && harness === "claude" && (
+          <p className="text-muted-foreground mt-1">
+            本地 Claude Code (ACP)：回复由你本机的 claude CLI 生成，会话按书隔离，追问自动续接上下文。
+          </p>
+        )}
       </div>
 
       <AssistantRuntimeProvider runtime={runtime}>

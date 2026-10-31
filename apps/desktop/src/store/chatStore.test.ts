@@ -17,6 +17,8 @@ function reset() {
     messages: {},
     activeThreadByBook: {},
     feedback: {},
+    harness: "claude",
+    acpxSessionByThread: {},
     deepThinking: false,
     ready: true,
   });
@@ -112,5 +114,59 @@ describe("chatStore", () => {
     const saved = useChatStore.getState().messages[thread.id][0];
     expect(saved.thinking).toBe("先想一下");
     expect(saved.content).toBe("");
+  });
+
+  it("harness 默认 claude（现有单链路行为不变），切换后持久化", () => {
+    expect(useChatStore.getState().harness).toBe("claude");
+
+    useChatStore.getState().setHarness("acpx");
+    expect(useChatStore.getState().harness).toBe("acpx");
+
+    const saved = JSON.parse(memory.get("deer.chat.v1") ?? "{}");
+    expect(saved.harness).toBe("acpx");
+
+    useChatStore.getState().setHarness("claude");
+    expect(
+      JSON.parse(memory.get("deer.chat.v1") ?? "{}").harness,
+    ).toBe("claude");
+  });
+
+  it("acpx 会话映射按线程存取，clearThread 一并清掉", () => {
+    const store = useChatStore.getState();
+    const thread = store.ensureThread("book-a", "甲书");
+
+    store.setAcpxSession(thread.id, "acp-session-1");
+    expect(useChatStore.getState().acpxSessionByThread[thread.id]).toBe(
+      "acp-session-1",
+    );
+    // 持久化里也要有，重启后才能拿它恢复 acpx 命名会话
+    expect(
+      JSON.parse(memory.get("deer.chat.v1") ?? "{}").acpxSessionByThread[
+        thread.id
+      ],
+    ).toBe("acp-session-1");
+
+    store.setAcpxSession(thread.id, "acp-session-2");
+    expect(useChatStore.getState().acpxSessionByThread[thread.id]).toBe(
+      "acp-session-2",
+    );
+
+    store.clearThread(thread.id);
+    expect(
+      useChatStore.getState().acpxSessionByThread[thread.id],
+    ).toBeUndefined();
+  });
+
+  it("setAcpxSession 传 undefined 清除单个线程映射，不影响其他线程", () => {
+    const store = useChatStore.getState();
+    const a = store.ensureThread("book-a", "甲书");
+    const b = store.ensureThread("book-b", "乙书");
+    store.setAcpxSession(a.id, "acp-a");
+    store.setAcpxSession(b.id, "acp-b");
+
+    store.setAcpxSession(a.id, undefined);
+    const map = useChatStore.getState().acpxSessionByThread;
+    expect(map[a.id]).toBeUndefined();
+    expect(map[b.id]).toBe("acp-b");
   });
 });
