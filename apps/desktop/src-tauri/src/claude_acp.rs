@@ -21,13 +21,13 @@ use tokio::sync::mpsc;
 use crate::claude_cli::read_oauth_token;
 use crate::deer_log::{log, LOG_HINT};
 
-const EVENT_CHUNK: &str = "claude://chunk";
-const PROMPT_TIMEOUT: Duration = Duration::from_secs(180);
+pub(crate) const EVENT_CHUNK: &str = "claude://chunk";
+pub(crate) const PROMPT_TIMEOUT: Duration = Duration::from_secs(180);
 /// 第一个文本增量到达前的静默上限：正常一轮几秒内就有输出，超时基本意味着
 /// claude 启动时被系统弹窗（钥匙串等）或网络问题挂住。
-const IDLE_BEFORE_FIRST_CHUNK: Duration = Duration::from_secs(20);
+pub(crate) const IDLE_BEFORE_FIRST_CHUNK: Duration = Duration::from_secs(20);
 /// 已经流式输出后两段之间的静默上限：长回答中途偶尔停顿，给更宽的余量。
-const IDLE_BETWEEN_CHUNKS: Duration = Duration::from_secs(120);
+pub(crate) const IDLE_BETWEEN_CHUNKS: Duration = Duration::from_secs(120);
 const ADAPTER_PACKAGE: &str = "@zed-industries/claude-code-acp";
 const ADAPTER_ENTRY: &str = "dist/index.js";
 const STDERR_TAIL_LINES: usize = 20;
@@ -36,7 +36,8 @@ const STDERR_TAIL_LINES: usize = 20;
 const CHAT_QUEUE_WAIT: Duration = Duration::from_secs(120);
 
 /// 全局聊天串行化门闩：同一 app 进程内同一时刻只跑一个 ACP 会话。
-static CHAT_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// acpx 后端（acpx.rs）与直连链路共用这一把门闩，跨后端也串行。
+pub(crate) static CHAT_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Serialize)]
 pub struct ClaudeChatResult {
@@ -168,7 +169,7 @@ fn chunk_text(params: &Value, session_update: &str) -> Option<String> {
 
 /// GUI 环境（从 Finder 拉起）的 PATH 拿不到 ~/.local/bin 等目录，
 /// 依次探测常见安装位置，找不到再退化到 PATH 里的 `node`。
-fn find_node() -> PathBuf {
+pub(crate) fn find_node() -> PathBuf {
     let mut candidates = vec![];
     if let Ok(home) = std::env::var("HOME") {
         candidates.push(PathBuf::from(&home).join(".local/bin/node"));

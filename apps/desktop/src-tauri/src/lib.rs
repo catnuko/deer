@@ -1,3 +1,4 @@
+mod acpx;
 mod claude_acp;
 mod claude_cli;
 mod deer_log;
@@ -14,7 +15,12 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, claude_acp::claude_chat])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            claude_acp::claude_chat,
+            acpx::acpx_chat,
+            acpx::acpx_env_check
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

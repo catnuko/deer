@@ -127,7 +127,7 @@ pub(crate) fn resolve_from_candidates(candidates: &[PathBuf]) -> Result<PathBuf,
 
 /// 登录 shell 里 PATH 通常才带上 nvm、用户自定义目录；用 marker 把 PATH 从
 /// rc 文件输出噪音里隔出来。超时或失败只影响候选覆盖面，不报错。
-async fn probe_shell_path() -> Option<Vec<PathBuf>> {
+pub(crate) async fn probe_shell_path() -> Option<Vec<PathBuf>> {
     let shell = std::env::var("SHELL").ok()?;
     let output = tokio::process::Command::new(&shell)
         .args([
