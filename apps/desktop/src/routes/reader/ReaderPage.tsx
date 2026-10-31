@@ -94,6 +94,8 @@ function useIsDarkTheme(): boolean {
 export function ReaderPage() {
   const [searchParams] = useSearchParams();
   const bookId = searchParams.get("book");
+  // 笔记跳转（M5b）：URL 带 cfi 时打开书直接落位，优先于上次阅读位置。
+  const targetCfi = searchParams.get("cfi");
 
   const fontSize = useReadingSettings((state) => state.fontSize);
   const lineHeight = useReadingSettings((state) => state.lineHeight);
@@ -510,7 +512,8 @@ export function ReaderPage() {
 
         // 恢复上次位置（M5a）：init 对解析不了的 CFI 自带回落，
         // 这里再兜一层 try，保证恢复失败最多回到开头而不是报错页。
-        const savedCfi = shelfBook.lastLocationCfi;
+        // 笔记跳转（M5b）带 cfi 进来时优先落位到那条笔记。
+        const savedCfi = targetCfi ?? shelfBook.lastLocationCfi;
         try {
           await view.init({ lastLocation: savedCfi, showTextStart: true });
         } catch {
@@ -571,7 +574,7 @@ export function ReaderPage() {
       element?.remove();
       viewRef.current = null;
     };
-  }, [bookKey, updateBook]);
+  }, [bookKey, targetCfi, updateBook]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
   // 纸色只在浅色主题生效：深色主题传 undefined，保持深色背景。

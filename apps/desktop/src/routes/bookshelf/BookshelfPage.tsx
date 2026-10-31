@@ -7,6 +7,7 @@ import {
   Layers,
   Library,
   MoreHorizontal,
+  NotebookText,
   Pencil,
   Settings as SettingsIcon,
   Trash2,
@@ -204,14 +205,24 @@ export function BookshelfPage() {
         title="书架"
         description="导入、整理与阅读你的本地电子书。"
         actions={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="打开设置"
-            onClick={() => navigate("/settings")}
-          >
-            <SettingsIcon />
-          </Button>
+          <>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="打开笔记"
+              onClick={() => navigate("/notes")}
+            >
+              <NotebookText />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="打开设置"
+              onClick={() => navigate("/settings")}
+            >
+              <SettingsIcon />
+            </Button>
+          </>
         }
       />
 
