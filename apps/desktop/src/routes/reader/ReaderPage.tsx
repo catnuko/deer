@@ -13,6 +13,7 @@ import { Overlayer } from "@/vendor/foliate-js/overlayer.js";
 import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { AnnotationPanel } from "@/components/reader/AnnotationPanel";
+import { ConceptMapPanel } from "@/components/reader/ConceptMapPanel";
 import { QuickSettingsPanel } from "@/components/reader/QuickSettingsPanel";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
@@ -145,6 +146,32 @@ export function ReaderPage() {
   // 章节总结用：relocate 时记录当前 spine section（TOC 的章可能跨多个 section，
   // v1 先总结当前 section，跨 section 章只总结当前一小节）。
   const currentSectionRef = useRef(0);
+  // 概念地图（R2）：入口打开时记下当时的 section 作为缓存 key，
+  // 面板开着时翻章不换 key（关掉重开才跟到新章）。
+  const [conceptMapOpen, setConceptMapOpen] = useState(false);
+  const [conceptMapChapterKey, setConceptMapChapterKey] = useState<string | null>(
+    null,
+  );
+
+  // 读当前 spine section 的可读正文；抽不出（图片书/空章节）返回 null。
+  const readCurrentSectionText = async (): Promise<string | null> => {
+    const view = viewRef.current;
+    const section = view?.book.sections[currentSectionRef.current];
+    if (!view || !section) return null;
+    try {
+      const doc = await section.createDocument?.();
+      if (!doc) return null;
+      const text = extractSectionText(doc);
+      return text || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const openConceptMap = () => {
+    setConceptMapChapterKey(`sec:${currentSectionRef.current}`);
+    setConceptMapOpen(true);
+  };
 
   const askDeer = useCallback((text: string) => {
     const formatted = formatSelectionDraft(text);
@@ -273,28 +300,18 @@ export function ReaderPage() {
 
   // 总结当前 spine section：走 N1 的上下文注入，气泡里只显示「总结本章」。
   const summarizeCurrentSection = async () => {
-    const view = viewRef.current;
-    const section = view?.book.sections[currentSectionRef.current];
-    if (!view || !section) return;
-    try {
-      // CBZ/PDF 的图片 section 没有 createDocument，空正文直接不响应。
-      const doc = await section.createDocument?.();
-      if (!doc) return;
-      const text = extractSectionText(doc);
-      if (!text) return;
-      const prompt = buildPrompt(buildChapterSummaryPrompt(text).prompt, {
-        bookTitle: shelfBook?.title ?? "",
-        chapterTitle:
-          realPhase.status === "ready"
-            ? (realPhase.toc[realPhase.currentIndex]?.title ?? null)
-            : null,
-        progress: scrollProgress,
-      });
-      panelRef.current?.send(prompt, "总结本章");
-      setChatOpen(true);
-    } catch {
-      // 抽不出正文就当没点，不打断阅读。
-    }
+    const text = await readCurrentSectionText();
+    if (!text) return;
+    const prompt = buildPrompt(buildChapterSummaryPrompt(text).prompt, {
+      bookTitle: shelfBook?.title ?? "",
+      chapterTitle:
+        realPhase.status === "ready"
+          ? (realPhase.toc[realPhase.currentIndex]?.title ?? null)
+          : null,
+      progress: scrollProgress,
+    });
+    panelRef.current?.send(prompt, "总结本章");
+    setChatOpen(true);
   };
 
   // 换书即重置真实渲染状态：在渲染期比较上一本书 id（React 认可的模式，
@@ -667,6 +684,11 @@ export function ReaderPage() {
         onHighlightSelection={highlightSelection}
         onNoteSelection={noteSelection}
         onSummarizeChapter={() => void summarizeCurrentSection()}
+        conceptMapOpen={conceptMapOpen && conceptMapChapterKey !== null}
+        conceptMapChapterKey={conceptMapChapterKey}
+        onOpenConceptMap={openConceptMap}
+        onCloseConceptMap={() => setConceptMapOpen(false)}
+        getChapterText={readCurrentSectionText}
         onClosePanel={() => setChatOpen(false)}
       />
     );
@@ -728,6 +750,11 @@ type RealReaderProps = {
   onHighlightSelection: (color: string, cfi: string | null, text: string) => void;
   onNoteSelection: (note: string, cfi: string | null, text: string) => void;
   onSummarizeChapter: () => void;
+  conceptMapOpen: boolean;
+  conceptMapChapterKey: string | null;
+  onOpenConceptMap: () => void;
+  onCloseConceptMap: () => void;
+  getChapterText: () => Promise<string | null>;
   onClosePanel: () => void;
 };
 
@@ -770,6 +797,11 @@ function RealReader({
   onHighlightSelection,
   onNoteSelection,
   onSummarizeChapter,
+  conceptMapOpen,
+  conceptMapChapterKey,
+  onOpenConceptMap,
+  onCloseConceptMap,
+  getChapterText,
   onClosePanel,
 }: RealReaderProps) {
   const tocEntries: ReaderTocEntry[] =
@@ -787,6 +819,7 @@ function RealReader({
         fontSize={fontSize}
         lineHeight={lineHeight as 1.6 | 1.8 | 2}
         onSummarizeChapter={onSummarizeChapter}
+        onOpenConceptMap={onOpenConceptMap}
         onOpenNotes={onToggleNotes}
         onOpenQuickSettings={onToggleQuickSettings}
       />
@@ -850,6 +883,20 @@ function RealReader({
               <div className="text-destructive absolute inset-0 flex items-center justify-center px-8 text-center text-sm">
                 打开本书失败：{phase.message}
               </div>
+            ) : null}
+            {conceptMapOpen && conceptMapChapterKey ? (
+              <ConceptMapPanel
+                bookId={bookId}
+                bookTitle={title}
+                chapterKey={conceptMapChapterKey}
+                chapterTitle={
+                  phase.status === "ready"
+                    ? (phase.toc[phase.currentIndex]?.title ?? null)
+                    : null
+                }
+                getChapterText={getChapterText}
+                onClose={onCloseConceptMap}
+              />
             ) : null}
             {annotationMenu ? (
               <SelectionPopover
@@ -958,6 +1005,10 @@ function DemoReader({
   const chapter = book.chapters[chapterIndex] ?? book.chapters[0];
   const chapterCount = book.chapters.length;
 
+  // 概念地图（R2）：演示书按章节序号做缓存 key，正文就是段落列表。
+  const [conceptMapOpen, setConceptMapOpen] = useState(false);
+  const openConceptMap = () => setConceptMapOpen(true);
+
   // 总结本章（N3）：演示书章节就是段落列表，走 N1 上下文注入发送。
   const summarizeChapter = () => {
     const prompt = buildPrompt(
@@ -1048,6 +1099,7 @@ function DemoReader({
         fontSize={fontSize}
         lineHeight={lineHeight as 1.6 | 1.8 | 2}
         onSummarizeChapter={summarizeChapter}
+        onOpenConceptMap={openConceptMap}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -1081,6 +1133,16 @@ function DemoReader({
                 onHighlight={() => closeSelection()}
                 onNote={() => closeSelection()}
                 onAsk={() => askDeer(selection.text)}
+              />
+            ) : null}
+            {conceptMapOpen ? (
+              <ConceptMapPanel
+                bookId={bookId ?? book.id}
+                bookTitle={book.title}
+                chapterKey={`chapter:${chapterIndex}`}
+                chapterTitle={chapter.title}
+                getChapterText={async () => chapter.paragraphs.join("\n\n")}
+                onClose={() => setConceptMapOpen(false)}
               />
             ) : null}
           </div>

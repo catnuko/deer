@@ -13,6 +13,8 @@ type ReaderToolbarProps = {
   lineHeight: LineHeight;
   /** 提供时显示「总结本章」入口（章节总结 N3）。 */
   onSummarizeChapter?: () => void;
+  /** 提供时显示「概念地图」入口（章节概念地图 R2）。 */
+  onOpenConceptMap?: () => void;
   /** 提供时显示「笔记」入口（笔记管理面板 M3）。 */
   onOpenNotes?: () => void;
   /** 提供时显示「显示设置」入口（阅读页快捷设置面板 M4）。 */
@@ -27,6 +29,7 @@ export function ReaderToolbar({
   fontSize,
   lineHeight,
   onSummarizeChapter,
+  onOpenConceptMap,
   onOpenNotes,
   onOpenQuickSettings,
 }: ReaderToolbarProps) {
@@ -54,6 +57,11 @@ export function ReaderToolbar({
         <Badge variant="outline">
           字号 {fontSize} · 行距 {lineHeight.toFixed(1)}
         </Badge>
+        {onOpenConceptMap ? (
+          <Button variant="ghost" size="sm" onClick={onOpenConceptMap}>
+            概念地图
+          </Button>
+        ) : null}
         {onOpenNotes ? (
           <Button variant="ghost" size="sm" onClick={onOpenNotes}>
             笔记
