@@ -2,6 +2,7 @@ mod acpx;
 mod claude_acp;
 mod claude_cli;
 mod deer_log;
+pub mod mcp_server;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
