@@ -24,6 +24,7 @@ function resetStore() {
     activeThreadByBook: {},
     feedback: {},
     claudeSessionByBook: {},
+    deepThinking: false,
     ready: true,
   });
 }
@@ -336,5 +337,97 @@ describe("ChatPanel", () => {
     const threadId = activeThread();
     const assistantMessage = useChatStore.getState().messages[threadId][1];
     expect(useChatStore.getState().feedback[assistantMessage.id]).toBe("up");
+  });
+
+  it("深度思考开关默认关，点击打开并持久化", async () => {
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    const toggle = screen.getByRole("button", { name: "深度思考" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(useChatStore.getState().deepThinking).toBe(false);
+
+    const user = userEvent.setup();
+    await user.click(toggle);
+
+    expect(useChatStore.getState().deepThinking).toBe(true);
+    expect(screen.getByRole("button", { name: "深度思考" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(JSON.parse(localStorage.getItem("deer.chat.v1") ?? "{}").deepThinking).toBe(
+      true,
+    );
+  });
+
+  it("深度思考开启时发送，claudeChat 收到 deepThinking: true", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(claudeChat).mockResolvedValue({
+      text: "想过了，回答是……",
+      sessionId: "sess_dt",
+    });
+    useChatStore.getState().setDeepThinking(true);
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("为什么");
+
+    await eventually(() => expect(claudeChat).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(claudeChat).mock.calls[0][0].deepThinking).toBe(true);
+  });
+
+  it("深度思考关闭时发送，claudeChat 收到 deepThinking: false", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(claudeChat).mockResolvedValue({
+      text: "直接回答",
+      sessionId: "sess_plain",
+    });
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("为什么");
+
+    await eventually(() => expect(claudeChat).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(claudeChat).mock.calls[0][0].deepThinking).toBe(false);
+  });
+
+  it("带思考内容的回复渲染折叠思考块，正文照常显示", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    let captured!: { prompt: string; messageId: string; deepThinking?: boolean };
+    vi.mocked(claudeChat).mockImplementation(async (opts) => {
+      captured = opts;
+      opts.onThoughtDelta?.("正在思考这本书的主题……");
+      return { text: "思考完了，正文在这里", sessionId: "sess_think" };
+    });
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("聊聊主题");
+    await eventually(() =>
+      expect(screen.getByText("思考完了，正文在这里")).toBeInTheDocument(),
+    );
+
+    // 思考内容落库到 thinking 字段，与正文分开。
+    const threadId = activeThread();
+    const [assistant] = useChatStore.getState().messages[threadId].slice(-1);
+    expect(assistant.thinking).toBe("正在思考这本书的主题……");
+    expect(captured.deepThinking).toBe(false);
+
+    // 渲染侧：思考块折叠展示，正文不受影响。
+    expect(screen.getByTestId("thinking-block")).toBeInTheDocument();
+    expect(screen.getByText(/正在思考这本书的主题/)).toBeInTheDocument();
+    expect(screen.getByText("思考完了，正文在这里")).toBeInTheDocument();
+  });
+
+  it("没有思考内容的回复不渲染思考块", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(claudeChat).mockResolvedValue({
+      text: "普通回复",
+      sessionId: "sess_no_think",
+    });
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("你好");
+    await eventually(() =>
+      expect(screen.getByText("普通回复")).toBeInTheDocument(),
+    );
+
+    expect(screen.queryByTestId("thinking-block")).not.toBeInTheDocument();
   });
 });

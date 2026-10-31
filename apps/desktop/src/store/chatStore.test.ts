@@ -17,6 +17,7 @@ function reset() {
     messages: {},
     activeThreadByBook: {},
     feedback: {},
+    deepThinking: false,
     ready: true,
   });
 }
@@ -88,5 +89,28 @@ describe("chatStore", () => {
     const state = useChatStore.getState();
     expect(state.messages[thread.id]).toHaveLength(0);
     expect(state.threads["book-a"]).toHaveLength(1);
+  });
+
+  it("深度思考默认关闭，打开后持久化", () => {
+    expect(useChatStore.getState().deepThinking).toBe(false);
+
+    useChatStore.getState().setDeepThinking(true);
+    expect(useChatStore.getState().deepThinking).toBe(true);
+
+    const saved = JSON.parse(memory.get("deer.chat.v1") ?? "{}");
+    expect(saved.deepThinking).toBe(true);
+  });
+
+  it("思考增量追加到消息的 thinking 字段，与正文分开", () => {
+    const store = useChatStore.getState();
+    const thread = store.ensureThread("book-a", "甲书");
+    const msg = store.appendMessage(thread.id, "assistant", "");
+
+    store.appendToMessageThinking(thread.id, msg.id, "先想");
+    store.appendToMessageThinking(thread.id, msg.id, "一下");
+
+    const saved = useChatStore.getState().messages[thread.id][0];
+    expect(saved.thinking).toBe("先想一下");
+    expect(saved.content).toBe("");
   });
 });

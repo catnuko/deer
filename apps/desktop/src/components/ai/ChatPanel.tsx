@@ -9,7 +9,7 @@ import {
   useAui,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { ArrowUp, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
+import { ArrowUp, Brain, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
@@ -42,6 +42,20 @@ function TextPart({ text }: { text: string }) {
         <span className="ml-0.5 inline-block animate-pulse">▍</span>
       </MessagePartPrimitive.InProgress>
     </>
+  );
+}
+
+/** 深度思考过程：默认折叠的 details，点开看全文。 */
+function ReasoningPart({ text }: { text?: string }) {
+  if (!text) return null;
+  return (
+    <details
+      className="border-border bg-secondary/40 mb-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted-foreground"
+      data-testid="thinking-block"
+    >
+      <summary className="cursor-pointer select-none">深度思考</summary>
+      <p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{text}</p>
+    </details>
   );
 }
 
@@ -84,7 +98,7 @@ function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="mb-4">
       <div className="bg-card text-card-foreground border-border max-w-[92%] rounded-2xl rounded-bl-sm border px-3.5 py-2.5 text-sm leading-relaxed shadow-sm">
-        <MessagePrimitive.Parts components={{ Text: TextPart }} />
+        <MessagePrimitive.Parts components={{ Text: TextPart, Reasoning: ReasoningPart }} />
       </div>
       <ActionBarPrimitive.Root className="mt-1 ml-1 flex items-center gap-0.5">
         <FeedbackButton direction="up" />
@@ -109,9 +123,25 @@ function EmptyState({ book }: { book: CurrentBook }) {
 }
 
 function Composer() {
+  const deepThinking = useChatStore((s) => s.deepThinking);
+  const setDeepThinking = useChatStore((s) => s.setDeepThinking);
   return (
     <ComposerPrimitive.Root className="border-border bg-background border-t p-3">
       <div className="border-input bg-card focus-within:border-ring/60 flex items-end gap-2 rounded-xl border p-2 transition-colors">
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "size-8 shrink-0 rounded-lg",
+            deepThinking && "text-primary bg-accent",
+          )}
+          aria-pressed={deepThinking}
+          aria-label="深度思考"
+          title="深度思考：回答前先展示思考过程"
+          onClick={() => setDeepThinking(!deepThinking)}
+        >
+          <Brain className="size-4" />
+        </Button>
         <ComposerPrimitive.Input
           rows={1}
           placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
@@ -258,8 +288,14 @@ export function ChatPanel({
           prompt: claudePrompt,
           messageId: assistant.id,
           resumeSessionId,
+          deepThinking: useChatStore.getState().deepThinking,
           onDelta: (delta) => {
             useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
+          },
+          onThoughtDelta: (delta) => {
+            useChatStore
+              .getState()
+              .appendToMessageThinking(threadId, assistant.id, delta);
           },
         });
         // 以 Rust 侧累计的完整正文为准落库（含持久化）。
@@ -299,7 +335,14 @@ export function ChatPanel({
     convertMessage: (m) => ({
       id: m.id,
       role: m.role,
-      content: m.content,
+      // 深度思考：thinking 作为 reasoning 部件放在正文前，渲染成折叠块。
+      content:
+        m.role === "assistant" && m.thinking
+          ? [
+              { type: "reasoning" as const, text: m.thinking },
+              { type: "text" as const, text: m.content },
+            ]
+          : m.content,
       createdAt: new Date(m.createdAt),
       metadata: feedback[m.id]
         ? {

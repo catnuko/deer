@@ -36,6 +36,8 @@ export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** 深度思考的过程文本（开启深度思考的回复才有），折叠展示。 */
+  thinking?: string;
   createdAt: number;
 };
 

@@ -47,8 +47,13 @@ pub struct ClaudeChatResult {
 #[derive(Debug, Clone, Serialize)]
 struct ChunkPayload {
     message_id: String,
+    /// "message" = 正文增量，"thought" = 深度思考增量。
+    kind: &'static str,
     delta: String,
 }
+
+const KIND_MESSAGE: &str = "message";
+const KIND_THOUGHT: &str = "thought";
 
 /* ------------------------------------------------------------------ */
 /* JSON-RPC 消息解析（纯函数，供单测覆盖）                              */
@@ -125,10 +130,29 @@ pub(crate) fn delta_from_line(line: &str) -> Option<String> {
     text_delta(v.get("params")?)
 }
 
+/// 整行若是 session/update 通知，返回其 params（正文/思考增量的公共入口）。
+fn session_update_params(line: &str) -> Option<Value> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    if v.get("method")?.as_str()? != "session/update" {
+        return None;
+    }
+    v.get("params").cloned()
+}
+
 /// `session/update` 通知里的文本增量（agent_message_chunk）。
 pub(crate) fn text_delta(params: &Value) -> Option<String> {
+    chunk_text(params, "agent_message_chunk")
+}
+
+/// 深度思考增量（agent_thought_chunk）。思考块不算正文，
+/// 单独解析后以 kind=thought 推给前端折叠展示。
+pub(crate) fn thought_delta(params: &Value) -> Option<String> {
+    chunk_text(params, "agent_thought_chunk")
+}
+
+fn chunk_text(params: &Value, session_update: &str) -> Option<String> {
     let update = params.get("update")?;
-    if update.get("sessionUpdate")?.as_str()? != "agent_message_chunk" {
+    if update.get("sessionUpdate")?.as_str()? != session_update {
         return None;
     }
     let content = update.get("content")?;
@@ -199,10 +223,13 @@ struct Conn {
     next_id: u64,
     /// 本连接收到的助手文本增量累计（正文以它为准，result 只有 stopReason）。
     accumulated: String,
+    /// 本连接是否已收到任何输出（正文或思考）：思考块不算正文，但同样
+    /// 证明链路活着，空闲计时应从「首个增量前」放宽到「段间」。
+    saw_output: bool,
 }
 
 impl Conn {
-    async fn spawn(claude_cli: Option<&Path>) -> Result<Self, String> {
+    async fn spawn(claude_cli: Option<&Path>, deep_thinking: bool) -> Result<Self, String> {
         let node = find_node();
         let entry = find_adapter_entry()?;
         // 指向用户真实的 claude CLI（见 claude_cli 模块），SDK 会把它用作
@@ -211,6 +238,13 @@ impl Conn {
         cmd.arg(&entry);
         if let Some(cli) = claude_cli {
             cmd.env("CLAUDE_CODE_EXECUTABLE", cli);
+        }
+        // 深度思考：适配器在每次 session/prompt 时读 MAX_THINKING_TOKENS
+        // 传给 SDK 的 maxThinkingTokens，CLI 产出的 thinking 内容再以
+        // agent_thought_chunk 流回。每轮对话 spawn 新进程，所以按轮注入即可。
+        if deep_thinking {
+            cmd.env("MAX_THINKING_TOKENS", "10000");
+            log("chat", "深度思考已开启（MAX_THINKING_TOKENS=10000）");
         }
         // 官方绕开钥匙串的途径：CLAUDE_CODE_OAUTH_TOKEN 优先于钥匙串读取
         // （CLI 2.x 二进制内证）。令牌来自 `claude setup-token` 的输出，用户
@@ -285,6 +319,7 @@ impl Conn {
             stderr_tail,
             next_id: 0,
             accumulated: String::new(),
+            saw_output: false,
         })
     }
 
@@ -306,7 +341,7 @@ impl Conn {
     ///
     /// `stage` 用于空闲超时的报错文案。静默上限：第一个文本增量前 20 秒
     /// （正常一轮几秒内就有输出），流式输出开始后放宽到 120 秒。
-    async fn wait_response<F: FnMut(&str, String) + Send>(
+    async fn wait_response<F: FnMut(&str, &'static str, String) + Send>(
         &mut self,
         message_id: &str,
         target_id: u64,
@@ -314,7 +349,7 @@ impl Conn {
         on_chunk: &mut F,
     ) -> Result<Value, String> {
         loop {
-            let idle = if self.accumulated.is_empty() {
+            let idle = if !self.saw_output {
                 IDLE_BEFORE_FIRST_CHUNK
             } else {
                 IDLE_BETWEEN_CHUNKS
@@ -329,12 +364,14 @@ impl Conn {
             };
             match msg {
                 Some(ReaderMsg::Line(line)) => {
-                    if let Some(delta) = delta_from_line(&line) {
-                        self.accumulated.push_str(&delta);
-                        on_chunk(
-                            message_id,
-                            delta,
-                        );
+                    if let Some(params) = session_update_params(&line) {
+                        self.saw_output = true;
+                        if let Some(delta) = text_delta(&params) {
+                            self.accumulated.push_str(&delta);
+                            on_chunk(message_id, KIND_MESSAGE, delta);
+                        } else if let Some(delta) = thought_delta(&params) {
+                            on_chunk(message_id, KIND_THOUGHT, delta);
+                        }
                         continue;
                     }
                     if let Some(resp) = parse_rpc_response(&line) {
@@ -395,19 +432,22 @@ impl Conn {
 }
 
 /// 跑一轮完整对话。返回助手全文与 ACP session id。
-/// `on_chunk` 收到每个文本增量（生产路径用它向前端 emit 事件）。
-async fn run_chat<F: FnMut(&str, String) + Send>(
+/// `on_chunk` 收到每个文本增量（生产路径用它向前端 emit 事件），
+/// kind 区分正文（message）与深度思考（thought）。
+async fn run_chat<F: FnMut(&str, &'static str, String) + Send>(
     on_chunk: &mut F,
     message_id: &str,
     prompt: &str,
     resume_session_id: Option<&str>,
+    deep_thinking: bool,
 ) -> Result<ClaudeChatResult, String> {
     let t0 = Instant::now();
     log(
         "start",
         &format!(
-            "message_id={message_id} resume={} prompt_chars={}",
+            "message_id={message_id} resume={} thinking={} prompt_chars={}",
             resume_session_id.is_some(),
+            deep_thinking,
             prompt.chars().count()
         ),
     );
@@ -435,7 +475,7 @@ async fn run_chat<F: FnMut(&str, String) + Send>(
     let keychain = crate::claude_cli::keychain_probe().await;
     log("keychain", &keychain);
 
-    let mut conn = Conn::spawn(Some(cli.as_path())).await?;
+    let mut conn = Conn::spawn(Some(cli.as_path()), deep_thinking).await?;
 
     let init_id = conn
         .send("initialize", json!({"protocolVersion": 1, "clientCapabilities": {}}))
@@ -531,6 +571,7 @@ pub async fn claude_chat(
     prompt: String,
     message_id: String,
     resume_session_id: Option<String>,
+    deep_thinking: Option<bool>,
 ) -> Result<ClaudeChatResult, String> {
     if prompt.trim().is_empty() {
         return Err("消息不能为空".to_string());
@@ -556,16 +597,24 @@ pub async fn claude_chat(
     let _guard = permit;
 
     let app_for_chunks = app.clone();
-    let mut emit_chunk = move |mid: &str, delta: String| {
+    let mut emit_chunk = move |mid: &str, kind: &'static str, delta: String| {
         let _ = app_for_chunks.emit(
             EVENT_CHUNK,
             ChunkPayload {
                 message_id: mid.to_string(),
+                kind,
                 delta,
             },
         );
     };
-    run_chat(&mut emit_chunk, &message_id, &prompt, resume_session_id.as_deref()).await
+    run_chat(
+        &mut emit_chunk,
+        &message_id,
+        &prompt,
+        resume_session_id.as_deref(),
+        deep_thinking.unwrap_or(false),
+    )
+    .await
 }
 
 /* ------------------------------------------------------------------ */
@@ -613,6 +662,18 @@ mod tests {
             RpcMessage::Notification { params, .. } => assert!(text_delta(&params).is_none()),
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_thought_chunk_as_thought_not_message() {
+        let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"abc","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"先想想"}}}}"#;
+        let params = session_update_params(line).unwrap();
+        assert_eq!(thought_delta(&params).as_deref(), Some("先想想"));
+        assert_eq!(text_delta(&params), None, "思考块不得混进正文");
+
+        // 非 session/update 的行不产出思考增量
+        assert!(session_update_params(r#"{"jsonrpc":"2.0","id":3,"result":{}}"#).is_none());
+        assert!(session_update_params("not json").is_none());
     }
 
     #[test]
@@ -723,10 +784,11 @@ mod tests {
 
         let chunks = std::sync::Mutex::new(Vec::<String>::new());
         let result = run_chat(
-            &mut |_, delta: String| chunks.lock().unwrap().push(delta),
+            &mut |_, _, delta: String| chunks.lock().unwrap().push(delta),
             "test-msg-1",
             "回复两个字：收到",
             None,
+            false,
         )
         .await;
 

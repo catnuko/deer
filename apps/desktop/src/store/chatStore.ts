@@ -15,6 +15,8 @@ export type ChatStoreState = {
   feedback: Record<string, ChatFeedback>;
   /** bookId -> 该书当前会话对应的 ACP session id（本地 claude 续接上下文用）。 */
   claudeSessionByBook: Record<string, string>;
+  /** 深度思考开关：开启后回复先流思考（折叠展示）再流正文。 */
+  deepThinking: boolean;
   ready: boolean;
 };
 
@@ -38,6 +40,9 @@ export type ChatStore = ChatStoreState & {
   setFeedback(messageId: string, value: ChatFeedback | undefined): void;
   /** 记录/清除该书当前会话的 ACP session id（undefined = 清除，下一条开新会话）。 */
   setClaudeSession(bookId: string, sessionId: string | undefined): void;
+  setDeepThinking(value: boolean): void;
+  /** 流式追加：给已有消息的思考过程追加一段增量。 */
+  appendToMessageThinking(threadId: string, messageId: string, delta: string): void;
   clearThread(threadId: string): void;
 };
 
@@ -61,6 +66,7 @@ const EMPTY: ChatStoreState = {
   activeThreadByBook: {},
   feedback: {},
   claudeSessionByBook: {},
+  deepThinking: false,
   ready: false,
 };
 
@@ -87,6 +93,7 @@ async function writePersisted(state: ChatStoreState): Promise<void> {
     activeThreadByBook: state.activeThreadByBook,
     feedback: state.feedback,
     claudeSessionByBook: state.claudeSessionByBook,
+    deepThinking: state.deepThinking,
     ready: true,
   };
   try {
@@ -272,6 +279,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
         return { claudeSessionByBook: next };
       });
       persist();
+    },
+
+    setDeepThinking(value) {
+      set({ deepThinking: value });
+      persist();
+    },
+
+    appendToMessageThinking(threadId, messageId, delta) {
+      set((s) => ({
+        messages: {
+          ...s.messages,
+          [threadId]: (s.messages[threadId] ?? []).map((m) =>
+            m.id === messageId
+              ? { ...m, thinking: (m.thinking ?? "") + delta }
+              : m,
+          ),
+        },
+      }));
     },
   };
 });

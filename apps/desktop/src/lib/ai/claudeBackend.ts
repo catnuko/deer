@@ -8,6 +8,8 @@ export const CLAUDE_CHUNK_EVENT = "claude://chunk";
 
 export type ClaudeChunkPayload = {
   messageId: string;
+  /** "message" = 正文增量，"thought" = 深度思考增量。 */
+  kind?: string;
   delta: string;
 };
 
@@ -31,7 +33,11 @@ export async function claudeChat(opts: {
   messageId: string;
   /** 该书上一轮的 ACP session id；为空则开新会话。 */
   resumeSessionId?: string | null;
+  /** 深度思考：后端注入 MAX_THINKING_TOKENS，回复先流思考再流正文。 */
+  deepThinking?: boolean;
   onDelta: (delta: string) => void;
+  /** 深度思考增量（kind=thought）；不传则丢弃。 */
+  onThoughtDelta?: (delta: string) => void;
 }): Promise<ClaudeChatResult> {
   const { listen } = await import("@tauri-apps/api/event");
   const { invoke } = await import("@tauri-apps/api/core");
@@ -39,7 +45,10 @@ export async function claudeChat(opts: {
   const unlisten = await listen<ClaudeChunkPayload>(
     CLAUDE_CHUNK_EVENT,
     (event) => {
-      if (event.payload.messageId === opts.messageId) {
+      if (event.payload.messageId !== opts.messageId) return;
+      if (event.payload.kind === "thought") {
+        opts.onThoughtDelta?.(event.payload.delta);
+      } else {
         opts.onDelta(event.payload.delta);
       }
     },
@@ -49,6 +58,7 @@ export async function claudeChat(opts: {
       prompt: opts.prompt,
       messageId: opts.messageId,
       resumeSessionId: opts.resumeSessionId ?? null,
+      deepThinking: opts.deepThinking ?? false,
     });
   } finally {
     unlisten();
