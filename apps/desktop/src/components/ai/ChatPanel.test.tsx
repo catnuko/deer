@@ -9,6 +9,8 @@ vi.mock("@/lib/ai/claudeBackend", () => ({
   CLAUDE_CHUNK_EVENT: "claude://chunk",
   isTauriRuntime: vi.fn(() => false),
   claudeChat: vi.fn(),
+  acpxChat: vi.fn(),
+  acpxEnvCheck: vi.fn(),
 }));
 
 const { isTauriRuntime, claudeChat } = await import("@/lib/ai/claudeBackend");
@@ -429,5 +431,73 @@ describe("ChatPanel", () => {
     );
 
     expect(screen.queryByTestId("thinking-block")).not.toBeInTheDocument();
+  });
+
+  // 流式回归（真机反馈「等很久后一次性出现」）：增量回调逐块触发时，
+  // 已到达的部分必须在回复完成前就渲染出来，而不是憋到 resolve 一次性显示。
+  it("流式增量逐块渲染：正文块到达即显示，不等回复完成", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(claudeChat).mockImplementation(async (opts) => {
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      opts.onDelta("第一块，");
+      await sleep(120);
+      opts.onDelta("第二块，");
+      await sleep(120);
+      opts.onDelta("第三块。");
+      return { text: "第一块，第二块，第三块。", sessionId: "sess_stream" };
+    });
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("测流式");
+
+    // 第一块到达后就该看到它（不等后续块）。
+    await eventually(() =>
+      expect(screen.getByText(/第一块/)).toBeInTheDocument(),
+    );
+    // 回复尚未 resolve：完整正文不该已经在 DOM 里。
+    expect(screen.queryByText(/第三块/)).not.toBeInTheDocument();
+
+    // 完成后以 Rust 累计的完整正文落库。
+    await eventually(() =>
+      expect(screen.getByText(/第三块/)).toBeInTheDocument(),
+    );
+    const threadId = activeThread();
+    const messages = useChatStore.getState().messages[threadId];
+    expect(messages[1].content).toBe("第一块，第二块，第三块。");
+  });
+
+  it("acpx 引擎：流式增量同样逐块渲染，session id 落到 acpx 映射", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    const { acpxChat, acpxEnvCheck } = await import("@/lib/ai/claudeBackend");
+    vi.mocked(acpxChat).mockImplementation(async (opts) => {
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      opts.onDelta("acpx一");
+      await sleep(120);
+      opts.onDelta("acpx二");
+      return { text: "acpx一acpx二", sessionId: "acpx_sess_1" };
+    });
+    useChatStore.getState().setHarness("acpx");
+    vi.mocked(acpxEnvCheck).mockResolvedValue({
+      ok: true,
+      nodeOk: true,
+      nodeVersion: "v24.20.0",
+      acpxVersion: "0.21.1",
+      message: "",
+    });
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("测 acpx 流式");
+
+    await eventually(() =>
+      expect(screen.getByText(/acpx一/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/acpx二/)).not.toBeInTheDocument();
+    await eventually(() =>
+      expect(screen.getByText(/acpx二/)).toBeInTheDocument(),
+    );
+    const threadId = activeThread();
+    expect(useChatStore.getState().acpxSessionByThread[threadId]).toBe(
+      "acpx_sess_1",
+    );
   });
 });

@@ -770,9 +770,16 @@ mod tests {
     #[ignore = "依赖本机 acpx 与已登录的 claude CLI，手工跑"]
     async fn real_acpx_chat_named_session_resume_round_trip() {
         let record = record_name("selftest-e2e");
-        let chunks = std::sync::Mutex::new(Vec::<String>::new());
+        // 逐块到达时间（毫秒）：验证流式是否真的逐块（攒批会在日志里一眼看出）
+        let chunks = std::sync::Mutex::new(Vec::<(u128, String)>::new());
+        let t0 = std::time::Instant::now();
         let result = run_acpx_chat(
-            &mut |_, _, delta: String| chunks.lock().unwrap().push(delta),
+            &mut |_, _, delta: String| {
+                chunks
+                    .lock()
+                    .unwrap()
+                    .push((t0.elapsed().as_millis(), delta));
+            },
             "e2e-msg-1",
             "回复两个字：收到",
             &record,
@@ -787,7 +794,16 @@ mod tests {
             result.text
         );
         assert!(!result.session_id.is_empty(), "应返回 ACP session id");
-        assert!(!chunks.lock().unwrap().is_empty(), "第一轮应收到流式增量");
+        let arrived = chunks.lock().unwrap();
+        assert!(!arrived.is_empty(), "第一轮应收到流式增量");
+        eprintln!(
+            "E2E 流式到达：{} 块，首块 {} ms，末块 {} ms，跨度 {} ms",
+            arrived.len(),
+            arrived.first().unwrap().0,
+            arrived.last().unwrap().0,
+            arrived.last().unwrap().0 - arrived.first().unwrap().0
+        );
+        drop(arrived);
 
         // 跨进程恢复：同一 record 起全新 acpx 进程，模型应记得上一轮约定
         let chunks2 = std::sync::Mutex::new(Vec::<String>::new());
