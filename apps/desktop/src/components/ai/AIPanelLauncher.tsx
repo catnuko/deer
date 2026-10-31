@@ -35,7 +35,7 @@ export function AIPanelLauncher() {
     <TextureButton
       variant="primary"
       size="default"
-      className="fixed right-6 bottom-6 z-30 shadow-lg"
+      className="fixed right-6 bottom-6 z-30 w-auto shadow-lg"
       onClick={() => setOpen(true)}
       aria-label="打开 AI 伴读面板"
     >

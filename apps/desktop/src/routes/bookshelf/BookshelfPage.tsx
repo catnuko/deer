@@ -398,7 +398,7 @@ export function BookshelfPage() {
             </div>
           )}
 
-          <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
+          <div className="min-h-0 flex-1 overflow-auto px-6 pt-5 pb-24">
             {isReady && continueReading ? (
               <div className="mb-5 max-w-xl">
                 <ContinueReadingCard

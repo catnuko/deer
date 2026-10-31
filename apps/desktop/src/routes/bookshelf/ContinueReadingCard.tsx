@@ -78,9 +78,10 @@ export function ContinueReadingCard({
       <button
         type="button"
         onClick={() => onContinue(book)}
+        aria-label={`继续阅读《${book.title}》`}
         className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
       >
-        继续阅读《{book.title}》
+        继续阅读
       </button>
     </MinimalCard>
   );
