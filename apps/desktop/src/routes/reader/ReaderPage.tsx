@@ -894,218 +894,220 @@ function RealReader({
   );
 
   return (
-    <div className="flex h-full flex-col">
-      <ReaderToolbar
-        bookTitle={title}
-        author={author}
-        tocOpen={tocOpen && !tocEmpty}
-        tocDisabled={tocEmpty}
-        onToggleToc={onToggleToc}
-        notesOpen={notesOpen}
-        onToggleNotes={onToggleNotes}
-        quickSettingsOpen={quickSettingsOpen}
-        onToggleQuickSettings={onToggleQuickSettings}
-        conceptMapOpen={conceptMapOpen}
-        onToggleConceptMap={onToggleConceptMap}
-        onSummarizeChapter={onSummarizeChapter}
-      />
+    <div className="flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <ReaderToolbar
+          bookTitle={title}
+          author={author}
+          tocOpen={tocOpen && !tocEmpty}
+          tocDisabled={tocEmpty}
+          onToggleToc={onToggleToc}
+          notesOpen={notesOpen}
+          onToggleNotes={onToggleNotes}
+          quickSettingsOpen={quickSettingsOpen}
+          onToggleQuickSettings={onToggleQuickSettings}
+          conceptMapOpen={conceptMapOpen}
+          onToggleConceptMap={onToggleConceptMap}
+          onSummarizeChapter={onSummarizeChapter}
+        />
 
-      <div className="flex min-h-0 flex-1">
-        {wideViewport ? (
-          tocOpen && !tocEmpty ? renderToc("dock") : null
-        ) : (
-          <Sheet
-            open={tocOpen && !tocEmpty}
-            onOpenChange={(open) => {
-              if (!open) onToggleToc();
-            }}
-          >
-            <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
-              {renderToc("sheet")}
-            </SheetContent>
-          </Sheet>
-        )}
+        <div className="flex min-h-0 flex-1">
+          {wideViewport ? (
+            tocOpen && !tocEmpty ? renderToc("dock") : null
+          ) : (
+            <Sheet
+              open={tocOpen && !tocEmpty}
+              onOpenChange={(open) => {
+                if (!open) onToggleToc();
+              }}
+            >
+              <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
+                {renderToc("sheet")}
+              </SheetContent>
+            </Sheet>
+          )}
 
-        {wideViewport ? (
-          notesOpen ? (
-            <AnnotationPanel
-              annotations={annotations ?? []}
-              onSelect={onSelectAnnotation}
-              onDelete={onDeleteAnnotationById}
-              onClose={onCloseNotes}
-            />
-          ) : null
-        ) : (
-          <Sheet
-            open={notesOpen}
-            onOpenChange={(open) => {
-              if (!open) onCloseNotes();
-            }}
-          >
-            <SheetContent side="left" showCloseButton={false} className="w-80 gap-0 p-0">
+          {wideViewport ? (
+            notesOpen ? (
               <AnnotationPanel
-                variant="sheet"
                 annotations={annotations ?? []}
                 onSelect={onSelectAnnotation}
                 onDelete={onDeleteAnnotationById}
                 onClose={onCloseNotes}
               />
-            </SheetContent>
-          </Sheet>
-        )}
-
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div
-            className="relative min-h-0 flex-1 overflow-hidden"
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              const x = (event.clientX - rect.left) / rect.width;
-              // 左右 15% 边缘翻页，中间区域留给文字选择。
-              if (x < 0.15) onPageTurn("prev");
-              else if (x > 0.85) onPageTurn("next");
-            }}
-          >
-            <div ref={viewerRef} className="h-full w-full" />
-            {/* 正文渲染在 foliate 的 iframe 里，点击不会冒泡到父文档，
-                所以边缘翻页靠这两个透明捕获层接住。 */}
-            <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
-            <div className="absolute inset-y-0 right-0 w-[15%]" aria-hidden="true" />
-            {quickSettingsOpen ? (
-              <QuickSettingsPanel
-                fontSize={fontSize}
-                paperColor={paperColor}
-                pageFlow={pageFlow}
-                paperColorDisabled={isDark}
-                onFontSizeChange={onFontSizeChange}
-                onPaperColorChange={onPaperColorChange}
-                onPageFlowChange={onPageFlowChange}
-                onClose={onCloseQuickSettings}
-              />
-            ) : null}
-            {phase.status === "loading" ? (
-              <div className="text-muted-foreground absolute inset-0 flex items-center justify-center text-sm">
-                正在加载书籍…
-              </div>
-            ) : null}
-            {phase.status === "error" ? (
-              <div className="text-destructive absolute inset-0 flex items-center justify-center px-8 text-center text-sm">
-                打开本书失败：{phase.message}
-              </div>
-            ) : null}
-            {conceptMapOpen && conceptMapChapterKey ? (
-              <ConceptMapPanel
-                bookId={bookId}
-                bookTitle={title}
-                chapterKey={conceptMapChapterKey}
-                chapterTitle={
-                  phase.status === "ready"
-                    ? (phase.toc[phase.currentIndex]?.title ?? null)
-                    : null
-                }
-                getChapterText={getChapterText}
-                onClose={onCloseConceptMap}
-              />
-            ) : null}
-            {annotationMenu ? (
-              <SelectionPopover
-                x={annotationMenu.x}
-                y={annotationMenu.y}
-                placement={annotationMenu.placement}
-                text={annotationMenu.annotation.excerpt ?? ""}
-                existing={{
-                  color: annotationMenu.annotation.color,
-                  note: annotationMenu.annotation.note,
-                }}
-                onCopy={
-                  annotationMenu.annotation.excerpt
-                    ? onCopyAnnotation
-                    : undefined
-                }
-                onHighlight={onChangeAnnotationColor}
-                onNote={onEditAnnotationNote}
-                onDelete={onDeleteAnnotation}
-              />
-            ) : selection ? (
-              <SelectionPopover
-                x={selection.x}
-                y={selection.y}
-                placement={selection.placement}
-                text={selection.text}
-                onCopy={onCopySelection}
-                onHighlight={(color) =>
-                  onHighlightSelection(color, selection.cfi, selection.text)
-                }
-                onNote={(note) =>
-                  onNoteSelection(note, selection.cfi, selection.text)
-                }
-                onAsk={() => onAskSelection(selection.text)}
-              />
-            ) : null}
-          </div>
-
-          <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
-            <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
-              第 {currentIndex + 1} / {Math.max(tocEntries.length, 1)} 章
-              {phase.status === "ready" && phase.toc[currentIndex]
-                ? ` · ${phase.toc[currentIndex].title}`
-                : ""}
-            </span>
-            <div
-              className="bg-muted h-1 flex-1 overflow-hidden rounded-full"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent}
-              aria-label="全书阅读进度"
+            ) : null
+          ) : (
+            <Sheet
+              open={notesOpen}
+              onOpenChange={(open) => {
+                if (!open) onCloseNotes();
+              }}
             >
-              <div
-                className="bg-primary h-full rounded-full transition-[width] duration-150 ease-out"
-                style={{ width: `${percent}%` }}
-              />
-            </div>
-            <span className="text-muted-foreground w-10 text-right text-xs tabular-nums">
-              {percent}%
-            </span>
-            {pageFlow === "paginated" ? (
-              <div className="flex shrink-0 items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="上一页"
-                  onClick={() => onPageTurn("prev")}
-                >
-                  <ChevronLeft className="size-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="下一页"
-                  onClick={() => onPageTurn("next")}
-                >
-                  <ChevronRight className="size-4" />
-                </Button>
-              </div>
-            ) : null}
-          </footer>
-        </div>
+              <SheetContent side="left" showCloseButton={false} className="w-80 gap-0 p-0">
+                <AnnotationPanel
+                  variant="sheet"
+                  annotations={annotations ?? []}
+                  onSelect={onSelectAnnotation}
+                  onDelete={onDeleteAnnotationById}
+                  onClose={onCloseNotes}
+                />
+              </SheetContent>
+            </Sheet>
+          )}
 
-        <ChatPanel
-          ref={panelRef}
-          book={{ id: bookId, title }}
-          embedded
-          readingContext={{
-            bookTitle: title,
-            chapterTitle:
-              phase.status === "ready"
-                ? (phase.toc[phase.currentIndex]?.title ?? null)
-                : null,
-            progress: scrollProgress,
-          }}
-          draft={draft}
-          onClose={onClosePanel}
-          className={chatOpen ? "flex" : "hidden"}
-        />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div
+              className="relative min-h-0 flex-1 overflow-hidden"
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const x = (event.clientX - rect.left) / rect.width;
+                // 左右 15% 边缘翻页，中间区域留给文字选择。
+                if (x < 0.15) onPageTurn("prev");
+                else if (x > 0.85) onPageTurn("next");
+              }}
+            >
+              <div ref={viewerRef} className="h-full w-full" />
+              {/* 正文渲染在 foliate 的 iframe 里，点击不会冒泡到父文档，
+                  所以边缘翻页靠这两个透明捕获层接住。 */}
+              <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
+              <div className="absolute inset-y-0 right-0 w-[15%]" aria-hidden="true" />
+              {quickSettingsOpen ? (
+                <QuickSettingsPanel
+                  fontSize={fontSize}
+                  paperColor={paperColor}
+                  pageFlow={pageFlow}
+                  paperColorDisabled={isDark}
+                  onFontSizeChange={onFontSizeChange}
+                  onPaperColorChange={onPaperColorChange}
+                  onPageFlowChange={onPageFlowChange}
+                  onClose={onCloseQuickSettings}
+                />
+              ) : null}
+              {phase.status === "loading" ? (
+                <div className="text-muted-foreground absolute inset-0 flex items-center justify-center text-sm">
+                  正在加载书籍…
+                </div>
+              ) : null}
+              {phase.status === "error" ? (
+                <div className="text-destructive absolute inset-0 flex items-center justify-center px-8 text-center text-sm">
+                  打开本书失败：{phase.message}
+                </div>
+              ) : null}
+              {conceptMapOpen && conceptMapChapterKey ? (
+                <ConceptMapPanel
+                  bookId={bookId}
+                  bookTitle={title}
+                  chapterKey={conceptMapChapterKey}
+                  chapterTitle={
+                    phase.status === "ready"
+                      ? (phase.toc[phase.currentIndex]?.title ?? null)
+                      : null
+                  }
+                  getChapterText={getChapterText}
+                  onClose={onCloseConceptMap}
+                />
+              ) : null}
+              {annotationMenu ? (
+                <SelectionPopover
+                  x={annotationMenu.x}
+                  y={annotationMenu.y}
+                  placement={annotationMenu.placement}
+                  text={annotationMenu.annotation.excerpt ?? ""}
+                  existing={{
+                    color: annotationMenu.annotation.color,
+                    note: annotationMenu.annotation.note,
+                  }}
+                  onCopy={
+                    annotationMenu.annotation.excerpt
+                      ? onCopyAnnotation
+                      : undefined
+                  }
+                  onHighlight={onChangeAnnotationColor}
+                  onNote={onEditAnnotationNote}
+                  onDelete={onDeleteAnnotation}
+                />
+              ) : selection ? (
+                <SelectionPopover
+                  x={selection.x}
+                  y={selection.y}
+                  placement={selection.placement}
+                  text={selection.text}
+                  onCopy={onCopySelection}
+                  onHighlight={(color) =>
+                    onHighlightSelection(color, selection.cfi, selection.text)
+                  }
+                  onNote={(note) =>
+                    onNoteSelection(note, selection.cfi, selection.text)
+                  }
+                  onAsk={() => onAskSelection(selection.text)}
+                />
+              ) : null}
+            </div>
+
+            <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
+              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
+                第 {currentIndex + 1} / {Math.max(tocEntries.length, 1)} 章
+                {phase.status === "ready" && phase.toc[currentIndex]
+                  ? ` · ${phase.toc[currentIndex].title}`
+                  : ""}
+              </span>
+              <div
+                className="bg-muted h-1 flex-1 overflow-hidden rounded-full"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                aria-label="全书阅读进度"
+              >
+                <div
+                  className="bg-primary h-full rounded-full transition-[width] duration-150 ease-out"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+              <span className="text-muted-foreground w-10 text-right text-xs tabular-nums">
+                {percent}%
+              </span>
+              {pageFlow === "paginated" ? (
+                <div className="flex shrink-0 items-center gap-0.5">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="上一页"
+                    onClick={() => onPageTurn("prev")}
+                  >
+                    <ChevronLeft className="size-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="下一页"
+                    onClick={() => onPageTurn("next")}
+                  >
+                    <ChevronRight className="size-4" />
+                  </Button>
+                </div>
+              ) : null}
+            </footer>
+          </div>
+        </div>
       </div>
+
+      <ChatPanel
+        ref={panelRef}
+        book={{ id: bookId, title }}
+        embedded
+        readingContext={{
+          bookTitle: title,
+          chapterTitle:
+            phase.status === "ready"
+              ? (phase.toc[phase.currentIndex]?.title ?? null)
+              : null,
+          progress: scrollProgress,
+        }}
+        draft={draft}
+        onClose={onClosePanel}
+        className={chatOpen ? "flex" : "hidden"}
+      />
     </div>
   );
 }
@@ -1241,122 +1243,124 @@ function DemoReader({
   const percent = Math.round(scrollProgress * 100);
 
   return (
-    <div className="flex h-full flex-col">
-      <ReaderToolbar
-        bookTitle={book.title}
-        author={book.author}
-        tocOpen={tocOpen}
-        onToggleToc={() => setTocOpen((open) => !open)}
-        conceptMapOpen={conceptMapOpen}
-        onToggleConceptMap={() => setConceptMapOpen((open) => !open)}
-        onSummarizeChapter={summarizeChapter}
-      />
+    <div className="flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <ReaderToolbar
+          bookTitle={book.title}
+          author={book.author}
+          tocOpen={tocOpen}
+          onToggleToc={() => setTocOpen((open) => !open)}
+          conceptMapOpen={conceptMapOpen}
+          onToggleConceptMap={() => setConceptMapOpen((open) => !open)}
+          onSummarizeChapter={summarizeChapter}
+        />
 
-      <div className="flex min-h-0 flex-1">
-        {isWide ? (
-          tocOpen ? (
-            <ReaderToc
-              chapters={book.chapters}
-              currentIndex={chapterIndex}
-              onSelect={selectChapter}
-            />
-          ) : null
-        ) : (
-          <Sheet
-            open={tocOpen}
-            onOpenChange={(open) => {
-              if (!open) setTocOpen(false);
-            }}
-          >
-            <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
+        <div className="flex min-h-0 flex-1">
+          {isWide ? (
+            tocOpen ? (
               <ReaderToc
-                variant="sheet"
                 chapters={book.chapters}
                 currentIndex={chapterIndex}
                 onSelect={selectChapter}
               />
-            </SheetContent>
-          </Sheet>
-        )}
-
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div
-            ref={scrollHostRef}
-            className="relative min-h-0 flex-1"
-            onMouseUp={onMouseUp}
-          >
-            <ScrollArea className="h-full">
-              <ReaderArticle
-                chapter={chapter}
-                fontSize={fontSize}
-                lineHeight={lineHeight as 1.6 | 1.8 | 2}
-              />
-            </ScrollArea>
-            {selection ? (
-              <SelectionPopover
-                x={selection.x}
-                y={selection.y}
-                placement={selection.placement}
-                text={selection.text}
-                onCopy={onCopySelection}
-                onHighlight={() => closeSelection()}
-                onNote={() => closeSelection()}
-                onAsk={() => askDeer(selection.text)}
-              />
-            ) : null}
-            {conceptMapOpen ? (
-              <ConceptMapPanel
-                bookId={bookId ?? book.id}
-                bookTitle={book.title}
-                chapterKey={`chapter:${chapterIndex}`}
-                chapterTitle={chapter.title}
-                getChapterText={async () => chapter.paragraphs.join("\n\n")}
-                onClose={() => {
-                  setConceptMapOpen(false);
-                  focusToolbarButton("reader-toolbar-concept-map");
-                }}
-              />
-            ) : null}
-          </div>
-
-          <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
-            <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
-              第 {chapterIndex + 1} / {chapterCount} 章 · {chapter.title}
-            </span>
-            <div
-              className="bg-muted h-1 flex-1 overflow-hidden rounded-full"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent}
-              aria-label="本章阅读进度"
+            ) : null
+          ) : (
+            <Sheet
+              open={tocOpen}
+              onOpenChange={(open) => {
+                if (!open) setTocOpen(false);
+              }}
             >
-              <div
-                className="bg-primary h-full rounded-full transition-[width] duration-150 ease-out"
-                style={{ width: `${percent}%` }}
-              />
-            </div>
-            <span className="text-muted-foreground w-10 text-right text-xs tabular-nums">
-              {percent}%
-            </span>
-          </footer>
-        </div>
+              <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
+                <ReaderToc
+                  variant="sheet"
+                  chapters={book.chapters}
+                  currentIndex={chapterIndex}
+                  onSelect={selectChapter}
+                />
+              </SheetContent>
+            </Sheet>
+          )}
 
-        <ChatPanel
-          ref={panelRef}
-          book={{ id: bookId ?? book.id, title: book.title }}
-          embedded
-          // 演示书没有全书概念，scrollProgress 是本章内的进度，不冒充全书进度。
-          readingContext={{
-            bookTitle: book.title,
-            chapterTitle: chapter.title,
-            progress: null,
-          }}
-          draft={draft}
-          onClose={onClosePanel}
-          className={chatOpen ? "flex" : "hidden"}
-        />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div
+              ref={scrollHostRef}
+              className="relative min-h-0 flex-1"
+              onMouseUp={onMouseUp}
+            >
+              <ScrollArea className="h-full">
+                <ReaderArticle
+                  chapter={chapter}
+                  fontSize={fontSize}
+                  lineHeight={lineHeight as 1.6 | 1.8 | 2}
+                />
+              </ScrollArea>
+              {selection ? (
+                <SelectionPopover
+                  x={selection.x}
+                  y={selection.y}
+                  placement={selection.placement}
+                  text={selection.text}
+                  onCopy={onCopySelection}
+                  onHighlight={() => closeSelection()}
+                  onNote={() => closeSelection()}
+                  onAsk={() => askDeer(selection.text)}
+                />
+              ) : null}
+              {conceptMapOpen ? (
+                <ConceptMapPanel
+                  bookId={bookId ?? book.id}
+                  bookTitle={book.title}
+                  chapterKey={`chapter:${chapterIndex}`}
+                  chapterTitle={chapter.title}
+                  getChapterText={async () => chapter.paragraphs.join("\n\n")}
+                  onClose={() => {
+                    setConceptMapOpen(false);
+                    focusToolbarButton("reader-toolbar-concept-map");
+                  }}
+                />
+              ) : null}
+            </div>
+
+            <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
+              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
+                第 {chapterIndex + 1} / {chapterCount} 章 · {chapter.title}
+              </span>
+              <div
+                className="bg-muted h-1 flex-1 overflow-hidden rounded-full"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                aria-label="本章阅读进度"
+              >
+                <div
+                  className="bg-primary h-full rounded-full transition-[width] duration-150 ease-out"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+              <span className="text-muted-foreground w-10 text-right text-xs tabular-nums">
+                {percent}%
+              </span>
+            </footer>
+          </div>
+        </div>
       </div>
+
+      <ChatPanel
+        ref={panelRef}
+        book={{ id: bookId ?? book.id, title: book.title }}
+        embedded
+        // 演示书没有全书概念，scrollProgress 是本章内的进度，不冒充全书进度。
+        readingContext={{
+          bookTitle: book.title,
+          chapterTitle: chapter.title,
+          progress: null,
+        }}
+        draft={draft}
+        onClose={onClosePanel}
+        className={chatOpen ? "flex" : "hidden"}
+      />
     </div>
   );
 }
