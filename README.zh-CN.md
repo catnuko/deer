@@ -36,17 +36,26 @@ Deer 不替你读书；它帮你读得更好、想得更远，也享受这段旅
 
 ## 开发
 
-Deer 使用 Next.js（App Router）和 TypeScript 构建。
+Deer 是一个本地桌面应用，使用 Tauri v2 + React 19 + TypeScript + Tailwind v4 构建。
+界面由两套组件库组成：`@assistant-ui` 负责 AI 聊天面板，`cult-ui` 负责其余界面。
+全部代码在 `apps/desktop`。
 
 ```bash
-npm install
-npm run dev
-npm run lint
-npm test
-npm run build
+pnpm install
+pnpm dev          # 浏览器里预览界面（没有原生能力）
+pnpm tauri dev    # 真正的桌面窗口
+pnpm lint
+pnpm test
+pnpm build
 ```
 
-交付遵循 GitHub DevOps 流程：需求 → PR → 评审 → 人工合并 → 独立验收 → 发布 PR → 人工合并 → Tag 与 GitHub Release。
+AI 面板目前返回的是占位回复——还没有接入任何模型。
+
+### 目录
+
+- `apps/desktop` —— Tauri + React 应用（书架、阅读、笔记、设置、AI 面板）
+- `apps/desktop/src-tauri` —— Rust 外壳、插件注册与能力权限
+- `docs/` —— UX 规范与设计交接（token、设计板）
 
 ---
 

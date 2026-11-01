@@ -36,17 +36,26 @@ Deer doesn't read for you; it helps you read better, think further, and enjoy th
 
 ## Development
 
-Deer is built with Next.js (App Router) and TypeScript.
+Deer is a local desktop app built with Tauri v2, React 19, TypeScript and Tailwind v4.
+The interface is assembled from two component libraries: `@assistant-ui` for the AI chat
+panel and `cult-ui` for the rest of the UI. Everything lives in `apps/desktop`.
 
 ```bash
-npm install
-npm run dev
-npm run lint
-npm test
-npm run build
+pnpm install
+pnpm dev          # web preview in the browser (no native APIs)
+pnpm tauri dev    # the real desktop window
+pnpm lint
+pnpm test
+pnpm build
 ```
 
-Delivery follows the GitHub DevOps flow: requirement → PR → review → human merge → independent verification → release PR → human merge → tag and GitHub Release.
+The AI panel currently returns placeholder replies — no model is connected yet.
+
+### Layout
+
+- `apps/desktop` — the Tauri + React application (bookshelf, reader, notes, settings, AI panel)
+- `apps/desktop/src-tauri` — Rust shell, plugin registration and capability permissions
+- `docs/` — UX spec and design handoff (tokens, boards)
 
 ---
 

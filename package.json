@@ -3,33 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.3.4",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint .",
-    "test": "vitest run"
+    "dev": "pnpm -C apps/desktop dev",
+    "build": "pnpm -C apps/desktop build",
+    "lint": "pnpm -C apps/desktop lint",
+    "test": "pnpm -C apps/desktop test",
+    "tauri": "pnpm -C apps/desktop tauri"
   },
   "engines": {
     "node": ">=20"
-  },
-  "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.85",
-    "@ai-sdk/openai": "^4.0.99",
-    "@ai-sdk/react": "^4.0.152",
-    "ai": "^7.0.148",
-    "next": "^16.4.2",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "react-markdown": "^10.1.0"
-  },
-  "devDependencies": {
-    "@types/node": "^26.6.5",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "eslint": "^9.39.5",
-    "eslint-config-next": "^16.4.2",
-    "typescript": "^6.0.3",
-    "vitest": "^5.0.5"
   }
 }

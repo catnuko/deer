@@ -1,0 +1,11 @@
+packages:
+  - 'apps/*'
+
+allowBuilds:
+  core-js: set this to true or false
+  es5-ext: set this to true or false
+  unrs-resolver: true
+
+minimumReleaseAgeExclude:
+  - react-router-dom@7.18.5
+  - react-router@7.18.5
