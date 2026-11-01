@@ -26,24 +26,28 @@ jobs:
           VERSION="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Check if tag exists on remote
-        id: tag
+      - name: Check if release exists
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
         run: |
-          TAG="v${{ steps.version.outputs.version }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create tag and release
-        if: steps.tag.outputs.exists == 'false'
+        if: steps.release.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ steps.version.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-          gh release create "$TAG" --title "$TAG" --generate-release-notes --verify-tag
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
+          gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
