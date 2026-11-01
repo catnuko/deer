@@ -1,18 +1,20 @@
-//! acpx 连接层（多 harness 一期）：spawn 一次性 `acpx claude` 进程，
+//! acpx 连接层（聊天唯一链路）：spawn 一次性 `acpx claude` 进程，
 //! 会话记录由 acpx 管理（~/.acpx，命名会话 `-s deer-<threadId>`），stdout
 //! 是未经包装的 ACP JSON-RPC NDJSON（spike 报告 docs/spike-acpx.md），
 //! 文本/思考增量解析直接复用 claude_acp 模块的纯函数。
 //!
-//! 与直连链路（claude_acp.rs）的关键差异：
-//! - Deer 不再自管 ACP 会话生命周期：每个聊天线程映射一个 acpx 命名会话，
+//! 关键设计：
+//! - Deer 不自管 ACP 会话生命周期：每个聊天线程映射一个 acpx 命名会话，
 //!   跨进程恢复、队列、落盘都由 acpx 完成；Deer 只在 NO_SESSION 时用
 //!   存下的 ACP session id 走 `sessions new --resume-session` 修复映射。
 //! - 冷环境直接 prompt 会报 -32002 NO_SESSION，需先 `sessions new`；
 //!   npm 首拉偶发 `spawn Unknown system error -88`，spawn/ensure 均需重试。
-//! - 权限策略 `--deny-all`：伴读聊天不允许 agent 用工具（与直连链路对
-//!   权限申请一律拒绝的行为一致）；仅放行 Deer 书架 MCP server 的三个
-//!   工具（--mcp-config + --allowed-tools，见 mcp_server.rs），推荐书籍
-//!   时模型能查书架/读进度，工具结果里的书单经 books 事件推给前端成书卡。
+//! - 权限策略 `--deny-all`：伴读聊天不允许 agent 用工具；仅放行 Deer 书架
+//!   MCP server 的三个工具（--mcp-config + --allowed-tools，见
+//!   mcp_server.rs），推荐书籍时模型能查书架/读进度，工具结果里的书单经
+//!   books 事件推给前端成书卡。
+//! - 深度思考恒开：每轮注入 MAX_THINKING_TOKENS=10000，回复先流思考
+//!   （agent_thought_chunk，前端折叠展示）再流正文。
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -42,7 +44,8 @@ const MIN_NODE: (u64, u64) = (22, 13);
 /// Deer 的 acpx 命名会话前缀，后接前端线程 id（映射规则：deer-<threadId>）。
 const RECORD_PREFIX: &str = "deer-";
 const STDERR_TAIL_LINES: usize = 20;
-/// CHAT_QUEUE_WAIT 已在 claude_acp 定义；这里同样排队 120 秒上限。
+/// 聊天请求的排队等待上限：在途时后来的请求最多等这么久拿门闩，超时拒绝。
+/// （CHAT_GATE 是单门闩，实际最多 1 个在排队 + 1 个在跑。）
 const CHAT_QUEUE_WAIT: Duration = Duration::from_secs(120);
 /// 瞬时 spawn 失败（npm exec 冷缓存 -88）的重试上限与间隔。
 const TRANSIENT_RETRIES: usize = 3;
@@ -276,7 +279,7 @@ async fn acpx_version(acpx: &Path) -> Option<String> {
 }
 
 /// Tauri command：acpx 环境自检（Node ≥22.13、acpx 已装且版本在锁定线内）。
-/// 前端 harness 选择器用它决定是否放行 acpx 并给出安装引导。
+/// 前端进入聊天即调用（acpx 是唯一链路，不达标时安装引导是唯一路径）。
 #[tauri::command]
 pub async fn acpx_env_check() -> AcpxEnvStatus {
     let node = find_node();
@@ -377,7 +380,8 @@ fn spawn_cmd(acpx: &Path, args: &[String], home: &Path) -> Command {
         let path = std::env::var("PATH").unwrap_or_default();
         cmd.env("PATH", format!("{}:{}", node_dir.display(), path));
     }
-    // 与直连链路同一份可选 OAuth 令牌（用户自管的 ~/.config/deer/claude-oauth-token）。
+    // 可选 OAuth 令牌（用户自管的 ~/.config/deer/claude-oauth-token）：
+    // acpx 拉起的 claude-agent-acp 适配器同样吃这个环境变量。
     if let Some(token) = read_oauth_token() {
         cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
     }
@@ -430,7 +434,6 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
     record: &str,
     prompt: &str,
     message_id: &str,
-    deep_thinking: bool,
     mcp_config: Option<&Path>,
     on_chunk: &mut F,
 ) -> Result<PromptOutcome, String> {
@@ -439,12 +442,10 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
     let home = PathBuf::from(&home);
     let args = prompt_args(record, mcp_config);
     let mut cmd = spawn_cmd(acpx, &args, &home);
-    // 深度思考沿用直连链路的环境变量机制（每轮注入；对 acpx 拉起的
-    // claude-agent-acp 适配器是否生效属未验证项，不生效则只是没有思考块）。
-    if deep_thinking {
-        cmd.env("MAX_THINKING_TOKENS", "10000");
-        log("acpx", "深度思考已开启（MAX_THINKING_TOKENS=10000）");
-    }
+    // 深度思考恒开：每轮注入 MAX_THINKING_TOKENS，claude-agent-acp 会把它
+    // 传给 SDK 的 maxThinkingTokens，思考内容以 agent_thought_chunk 流回。
+    cmd.env("MAX_THINKING_TOKENS", "10000");
+    log("acpx", "深度思考恒开（MAX_THINKING_TOKENS=10000）");
     let mut child = cmd.spawn().map_err(|e| {
         let msg = format!("启动 acpx 失败（{}）：{e}", acpx.display());
         log("spawn", &msg);
@@ -674,7 +675,6 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
     prompt: &str,
     record: &str,
     resume_session_id: Option<&str>,
-    deep_thinking: bool,
 ) -> Result<crate::claude_acp::ClaudeChatResult, String> {
     let acpx = verify_env().await?;
     // MCP 挂载配置每轮重写（指向当前二进制的 --mcp-server 模式）；写不出
@@ -692,7 +692,6 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
         record,
         prompt,
         message_id,
-        deep_thinking,
         mcp_config.as_deref(),
         on_chunk,
     )
@@ -706,7 +705,6 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
                 record,
                 prompt,
                 message_id,
-                deep_thinking,
                 mcp_config.as_deref(),
                 on_chunk,
             )
@@ -724,10 +722,10 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
     })
 }
 
-/// Tauri command：经 acpx 跑一轮聊天（多 harness 一期只通 claude）。
+/// Tauri command：经 acpx 跑一轮聊天（唯一聊天链路，只通 claude）。
 /// 会话映射：thread_id → acpx 命名会话 deer-<threadId>（record_name）。
-/// 与 claude_chat 共用 CHAT_GATE（同一时刻只跑一个会话，跨后端串行）；
-/// 增量事件与直连链路同名同构（claude://chunk），前端渲染无差别。
+/// 全局串行（CHAT_GATE，同一时刻只跑一个会话）；增量事件经 claude://chunk
+/// 实时推送，前端渲染无差别。
 #[tauri::command]
 pub async fn acpx_chat(
     app: AppHandle,
@@ -735,7 +733,6 @@ pub async fn acpx_chat(
     message_id: String,
     thread_id: String,
     resume_session_id: Option<String>,
-    deep_thinking: Option<bool>,
 ) -> Result<crate::claude_acp::ClaudeChatResult, String> {
     if prompt.trim().is_empty() {
         return Err("消息不能为空".to_string());
@@ -780,7 +777,6 @@ pub async fn acpx_chat(
         &prompt,
         &record,
         resume_session_id.as_deref(),
-        deep_thinking.unwrap_or(false),
     )
     .await
 }
@@ -952,7 +948,6 @@ mod tests {
             "回复两个字：收到",
             &record,
             None,
-            false,
         )
         .await
         .expect("第一轮 acpx 会话应成功");
@@ -981,7 +976,6 @@ mod tests {
             "我上一条消息让你回复的是哪两个字？只答那两个字。",
             &record,
             Some(&result.session_id),
-            false,
         )
         .await
         .expect("第二轮 acpx 会话（跨进程恢复）应成功");

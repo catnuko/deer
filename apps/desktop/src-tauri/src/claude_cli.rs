@@ -1,28 +1,20 @@
-//! 定位本机用户真实安装的 claude CLI，并做登录态预检。
+//! 本机安装位置探测与可选 OAuth 令牌读取（acpx 连接层的辅助模块）。
 //!
 //! GUI 应用（从 Finder 拉起）继承的 PATH 只有系统默认几条目录，拿不到
-//! ~/.local/bin、homebrew、nvm 等用户安装位置；而适配器捆绑的 agent-sdk
-//! CLI 没有用户登录态（表现为聊天一用就报授权失败）。这里仿 OpenMausBot
-//! 的 harness 扫描：已知安装目录 + 登录 shell 探测合成候选路径，找到用户
-//! 真实的 claude 后经 CLAUDE_CODE_EXECUTABLE 交给适配器（SDK 的
-//! pathToClaudeCodeExecutable，支持 native binary），让 CLI 用上用户的
-//! Keychain 登录态。
+//! ~/.local/bin、homebrew、nvm 等用户安装位置。这里仿 OpenMausBot 的
+//! harness 扫描：已知安装目录 + 登录 shell 探测，供 acpx（及 node、claude
+//! CLI）定位用户真实安装的可执行文件。
+//!
+//! 历史说明：原直连 claude 链路的 CLI 定位（resolve_claude）、登录态预检
+//! （auth_precheck）与钥匙串探测随 claude_chat 一并移除，聊天统一走
+//! acpx 关联本机 claude CLI。
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use serde_json::Value;
-
-use crate::deer_log::log;
-
-const AUTH_TIMEOUT: Duration = Duration::from_secs(8);
 const SHELL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(3);
 const SHELL_PROBE_MARKER: &str = "__DEER_PATH__";
-const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
-
-const CLI_NOT_FOUND: &str = "未找到本机 claude CLI（已探测 ~/.local/bin、~/.claude/local、~/.npm-global/bin、nvm、homebrew 与 PATH）。请在终端安装 claude（curl -fsSL https://claude.ai/install.sh | bash）后重启应用。";
 
 /* ------------------------------------------------------------------ */
 /* 纯函数（供单测覆盖）                                                 */
@@ -62,7 +54,7 @@ pub(crate) fn known_bin_dirs(home: Option<&str>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = home {
         let home = PathBuf::from(home);
-        dirs.push(home.join(".local/bin")); // claude 官方安装器默认位置
+        dirs.push(home.join(".local/bin")); // claude / acpx 官方安装器常见位置
         dirs.push(home.join(".claude/local")); // claude 本地安装
         dirs.push(home.join(".npm-global/bin")); // npm 全局前缀
         if let Some(bin) = nvm_latest_bin(&home.join(".nvm/versions/node")) {
@@ -95,34 +87,8 @@ pub(crate) fn extract_probe_path(output: &str) -> Option<String> {
     }
 }
 
-/// 候选顺序：已知安装目录 → 登录 shell PATH → 继承的 PATH（用户自装优先）。
-pub(crate) fn claude_candidates(
-    known: &[PathBuf],
-    shell_dirs: &[PathBuf],
-    path_dirs: &[PathBuf],
-) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for dir in known.iter().chain(shell_dirs).chain(path_dirs) {
-        let candidate = dir.join("claude");
-        if seen.insert(candidate.to_string_lossy().into_owned()) {
-            out.push(candidate);
-        }
-    }
-    out
-}
-
-/// 返回第一个真实存在的候选；都不存在则给出安装指引文案。
-pub(crate) fn resolve_from_candidates(candidates: &[PathBuf]) -> Result<PathBuf, String> {
-    candidates
-        .iter()
-        .find(|p| p.is_file())
-        .cloned()
-        .ok_or_else(|| CLI_NOT_FOUND.to_string())
-}
-
 /* ------------------------------------------------------------------ */
-/* I/O：登录 shell 探测、解析入口、登录态预检                            */
+/* I/O：登录 shell 探测                                                 */
 /* ------------------------------------------------------------------ */
 
 /// 登录 shell 里 PATH 通常才带上 nvm、用户自定义目录；用 marker 把 PATH 从
@@ -141,109 +107,6 @@ pub(crate) async fn probe_shell_path() -> Option<Vec<PathBuf>> {
     let output = tokio::time::timeout(SHELL_PROBE_TIMEOUT, output).await.ok()?.ok()?;
     let path = extract_probe_path(&String::from_utf8_lossy(&output.stdout))?;
     Some(split_path_env(&path))
-}
-
-/// 真实调用入口：从环境变量取 HOME/PATH，合成候选并定位 claude。
-pub async fn resolve_claude() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").ok();
-    let known = known_bin_dirs(home.as_deref());
-    let shell_dirs = probe_shell_path().await.unwrap_or_default();
-    let path_dirs = std::env::var("PATH")
-        .ok()
-        .as_deref()
-        .map(split_path_env)
-        .unwrap_or_default();
-    resolve_from_candidates(&claude_candidates(&known, &shell_dirs, &path_dirs))
-}
-
-/// 登录态预检：跑 `claude auth status --json`。
-/// 只有明确解析出 loggedIn=false 才判为未登录；命令失败（如旧版 CLI 没有
-/// auth 子命令）、输出无法解析或超时（Keychain 弹窗会挂住 stdout）都不
-/// 武断下结论，交给后续真实对话流程去暴露真实错误。
-pub async fn auth_precheck(cli: &Path) -> Result<(), String> {
-    let output = tokio::time::timeout(
-        AUTH_TIMEOUT,
-        tokio::process::Command::new(cli)
-            .args(["auth", "status", "--json"])
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await;
-    let Ok(Ok(output)) = output else {
-        log("auth", "预检未得到结果（超时或命令无法执行），跳过判定");
-        return Ok(());
-    };
-    if !output.status.success() {
-        log("auth", &format!("预检命令退出码 {:?}，跳过判定", output.status.code()));
-        return Ok(());
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    match summarize_auth_status(&stdout) {
-        Some(summary) => log("auth", &summary),
-        None => log("auth", "预检输出无法解析，跳过判定"),
-    }
-    let parsed: Value = match serde_json::from_slice(&output.stdout) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
-    if parsed.get("loggedIn") == Some(&Value::Bool(false)) {
-        return Err("claude CLI 未登录。请在终端执行 `claude login` 完成登录后重试。".to_string());
-    }
-    Ok(())
-}
-
-/// 登录态摘要（只取三个非敏感字段，用于日志）。
-pub(crate) fn summarize_auth_status(stdout: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(stdout).ok()?;
-    let logged_in = v.get("loggedIn")?.as_bool()?;
-    Some(format!(
-        "loggedIn={logged_in} authMethod={} apiProvider={}",
-        v.get("authMethod").and_then(Value::as_str).unwrap_or("?"),
-        v.get("apiProvider").and_then(Value::as_str).unwrap_or("?")
-    ))
-}
-
-/// 钥匙串探测：确认 claude 的凭据条目当前是否可读，把结论写进日志。
-///
-/// 只跑 `security find-generic-password` 做只读访问，**绝不记录命令输出**
-/// （那是 token 本身）；超时/被拒这类情况正好是 GUI 里被安全弹窗拦住的
-/// 证据。CLI 自己读取钥匙串时有 2 秒超时，所以这里的结果只用于诊断。
-pub async fn keychain_probe() -> String {
-    let user = std::env::var("USER").unwrap_or_default();
-    let output = tokio::time::timeout(
-        KEYCHAIN_TIMEOUT,
-        tokio::process::Command::new("/usr/bin/security")
-            .args(["find-generic-password", "-a", &user, "-w", "-s", KEYCHAIN_SERVICE])
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await;
-    match output {
-        Err(_) => format!(
-            "读取超时（>{} 秒）：可能有系统授权弹窗在等待，或 securityd 无响应",
-            KEYCHAIN_TIMEOUT.as_secs()
-        ),
-        Ok(Err(e)) => format!("无法执行 security 命令：{e}"),
-        Ok(Ok(out)) => classify_keychain_result(out.status.code(), &String::from_utf8_lossy(&out.stderr)),
-    }
-}
-
-/// 把 security 命令的退出码/stderr 归成一句诊断结论（不涉及条目内容）。
-pub(crate) fn classify_keychain_result(code: Option<i32>, stderr: &str) -> String {
-    let lower = stderr.to_lowercase();
-    if code == Some(0) {
-        return "凭据条目存在且可读".to_string();
-    }
-    if lower.contains("could not be found") || lower.contains("item not found") {
-        return "钥匙串中没有 claude 凭据条目".to_string();
-    }
-    if lower.contains("user interaction is not allowed") {
-        return "钥匙串访问被拒绝（当前进程没有可交互的授权会话）".to_string();
-    }
-    if lower.contains("not allowed") || lower.contains("denied") {
-        return "钥匙串访问被拒绝（可能需要在系统弹窗里允许）".to_string();
-    }
-    format!("读取失败（security 退出码 {code:?}）")
 }
 
 /* ------------------------------------------------------------------ */
@@ -352,54 +215,6 @@ mod tests {
     }
 
     #[test]
-    fn candidates_are_ordered_and_deduped() {
-        let known = vec![PathBuf::from("/k1"), PathBuf::from("/k2")];
-        let shell = vec![PathBuf::from("/k2"), PathBuf::from("/s1")];
-        let path = vec![PathBuf::from("/s1"), PathBuf::from("/p1")];
-        let candidates = claude_candidates(&known, &shell, &path);
-        assert_eq!(
-            candidates,
-            vec![
-                PathBuf::from("/k1/claude"),
-                PathBuf::from("/k2/claude"),
-                PathBuf::from("/s1/claude"),
-                PathBuf::from("/p1/claude"),
-            ]
-        );
-    }
-
-    #[test]
-    fn summarizes_auth_status_for_logging() {
-        let json = r#"{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty","email":"x@y.z"}"#;
-        let summary = summarize_auth_status(json).unwrap();
-        assert!(summary.contains("loggedIn=true"));
-        assert!(summary.contains("authMethod=oauth_token"));
-        // 摘要里不能出现邮箱等个人字段
-        assert!(!summary.contains("x@y.z"));
-        // 缺字段/坏 JSON 不产出摘要
-        assert!(summarize_auth_status(r#"{"authMethod":"x"}"#).is_none());
-        assert!(summarize_auth_status("not json").is_none());
-    }
-
-    #[test]
-    fn classifies_keychain_probe_results() {
-        assert!(classify_keychain_result(Some(0), "").contains("可读"));
-        assert!(classify_keychain_result(
-            Some(44),
-            "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain."
-        )
-        .contains("没有 claude 凭据条目"));
-        assert!(classify_keychain_result(
-            Some(36),
-            "security: SecKeychainItemCopyContent: User interaction is not allowed."
-        )
-        .contains("被拒绝"));
-        assert!(classify_keychain_result(Some(1), "something else").contains("退出码"));
-        // 结论里不能带出 stderr 原文（可能含路径以外的信息）
-        assert!(!classify_keychain_result(Some(44), "The specified item could not be found").contains("specified item"));
-    }
-
-    #[test]
     fn token_needs_nonblank_content() {
         assert_eq!(token_from_content("  sk-ant-oat01-x\n"), Some("sk-ant-oat01-x".to_string()));
         assert_eq!(token_from_content("   \n\t"), None);
@@ -413,21 +228,6 @@ mod tests {
         assert_eq!(read_token_at(&path), None);
         std::fs::write(&path, "  tok-1 \n").unwrap();
         assert_eq!(read_token_at(&path), Some("tok-1".to_string()));
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn resolves_first_existing_candidate() {
-        let root = tmp_root("resolve");
-        let dir = root.join("bin");
-        std::fs::create_dir_all(&dir).unwrap();
-        let cli = dir.join("claude");
-        std::fs::write(&cli, b"#!/bin/sh\n").unwrap();
-
-        let missing = vec![PathBuf::from("/nonexistent/claude")];
-        let present = vec![PathBuf::from("/nonexistent/claude"), cli.clone()];
-        assert_eq!(resolve_from_candidates(&present).unwrap(), cli);
-        assert!(resolve_from_candidates(&missing).is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

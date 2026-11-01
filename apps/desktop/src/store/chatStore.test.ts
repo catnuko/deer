@@ -17,9 +17,7 @@ function reset() {
     messages: {},
     activeThreadByBook: {},
     feedback: {},
-    harness: "claude",
     acpxSessionByThread: {},
-    deepThinking: false,
     ready: true,
   });
 }
@@ -93,14 +91,63 @@ describe("chatStore", () => {
     expect(state.threads["book-a"]).toHaveLength(1);
   });
 
-  it("深度思考默认关闭，打开后持久化", () => {
-    expect(useChatStore.getState().deepThinking).toBe(false);
+  it("深度思考恒开：store 不再有开关状态，旧版落盘值读入即丢弃", async () => {
+    // 直连链路时代的落盘数据：深度思考 false、引擎 claude、按书会话映射。
+    memory.set(
+      "deer.chat.v1",
+      JSON.stringify({
+        threads: {},
+        messages: {},
+        activeThreadByBook: {},
+        feedback: {},
+        deepThinking: false,
+        harness: "claude",
+        claudeSessionByBook: { "book-a": "session-a1" },
+        ready: true,
+      }),
+    );
 
-    useChatStore.getState().setDeepThinking(true);
-    expect(useChatStore.getState().deepThinking).toBe(true);
+    await useChatStore.getState().load();
 
+    const state = useChatStore.getState() as unknown as Record<string, unknown>;
+    expect(state.deepThinking).toBeUndefined();
+    expect(state.harness).toBeUndefined();
+    expect(state.claudeSessionByBook).toBeUndefined();
+
+    // 再落盘时旧字段不复写回（迁移彻底，不留死数据）。
+    useChatStore.getState().setAcpxSession("t-1", "acp-1");
+    await new Promise((r) => setTimeout(r, 0));
     const saved = JSON.parse(memory.get("deer.chat.v1") ?? "{}");
-    expect(saved.deepThinking).toBe(true);
+    expect(saved.deepThinking).toBeUndefined();
+    expect(saved.harness).toBeUndefined();
+    expect(saved.claudeSessionByBook).toBeUndefined();
+  });
+
+  it("appendToMessage 增量累计正文，不影响其他消息", () => {
+    const store = useChatStore.getState();
+    const thread = store.ensureThread("book-a", "甲书");
+    const user = store.appendMessage(thread.id, "user", "问题");
+    const assistant = store.appendMessage(thread.id, "assistant", "");
+
+    store.appendToMessage(thread.id, assistant.id, "你好");
+    store.appendToMessage(thread.id, assistant.id, "呀");
+
+    const messages = useChatStore.getState().messages[thread.id] ?? [];
+    expect(messages.find((m) => m.id === user.id)?.content).toBe("问题");
+    expect(messages.find((m) => m.id === assistant.id)?.content).toBe("你好呀");
+  });
+
+  it("setMessageContent 整体替换正文（失败提示 / 兜底用）", () => {
+    const store = useChatStore.getState();
+    const thread = store.ensureThread("book-a", "甲书");
+    const assistant = store.appendMessage(thread.id, "assistant", "半截");
+
+    store.setMessageContent(thread.id, assistant.id, "（出错了）超时");
+
+    const messages = useChatStore.getState().messages[thread.id] ?? [];
+    expect(messages.find((m) => m.id === assistant.id)?.content).toBe(
+      "（出错了）超时",
+    );
   });
 
   it("思考增量追加到消息的 thinking 字段，与正文分开", () => {
@@ -149,21 +196,6 @@ describe("chatStore", () => {
     expect(useChatStore.getState().messages[thread.id][0].books).toHaveLength(1);
     expect(useChatStore.getState().messages[thread.id][1].books).toBeUndefined();
     expect(second.content).toBe("第二条");
-  });
-
-  it("harness 默认 claude（现有单链路行为不变），切换后持久化", () => {
-    expect(useChatStore.getState().harness).toBe("claude");
-
-    useChatStore.getState().setHarness("acpx");
-    expect(useChatStore.getState().harness).toBe("acpx");
-
-    const saved = JSON.parse(memory.get("deer.chat.v1") ?? "{}");
-    expect(saved.harness).toBe("acpx");
-
-    useChatStore.getState().setHarness("claude");
-    expect(
-      JSON.parse(memory.get("deer.chat.v1") ?? "{}").harness,
-    ).toBe("claude");
   });
 
   it("acpx 会话映射按线程存取，clearThread 一并清掉", () => {

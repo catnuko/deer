@@ -9,12 +9,13 @@ import type { ChatPanelHandle } from "./ChatPanel";
 vi.mock("@/lib/ai/claudeBackend", () => ({
   CLAUDE_CHUNK_EVENT: "claude://chunk",
   isTauriRuntime: vi.fn(() => false),
-  claudeChat: vi.fn(),
   acpxChat: vi.fn(),
   acpxEnvCheck: vi.fn(),
 }));
 
-const { isTauriRuntime, claudeChat } = await import("@/lib/ai/claudeBackend");
+const { isTauriRuntime, acpxChat, acpxEnvCheck } = await import(
+  "@/lib/ai/claudeBackend"
+);
 const { ChatPanel } = await import("./ChatPanel");
 const { useChatStore } = await import("@/store/chatStore");
 
@@ -26,8 +27,7 @@ function resetStore() {
     messages: {},
     activeThreadByBook: {},
     feedback: {},
-    claudeSessionByBook: {},
-    deepThinking: false,
+    acpxSessionByThread: {},
     ready: true,
   });
 }
@@ -58,7 +58,15 @@ beforeEach(() => {
   localStorage.clear();
   resetStore();
   vi.mocked(isTauriRuntime).mockReturnValue(false);
-  vi.mocked(claudeChat).mockReset();
+  vi.mocked(acpxChat).mockReset();
+  vi.mocked(acpxEnvCheck).mockReset();
+  vi.mocked(acpxEnvCheck).mockResolvedValue({
+    ok: true,
+    nodeOk: true,
+    nodeVersion: "v24.20.0",
+    acpxVersion: "0.21.1",
+    message: "",
+  });
 });
 
 afterEach(() => {
@@ -77,12 +85,35 @@ describe("ChatPanel", () => {
     expect(screen.getByText(/和《三体》聊聊/)).toBeInTheDocument();
   });
 
-  it("桌面端模式显示「本地 Claude Code」徽标与说明", () => {
+  it("桌面端显示「acpx · Claude」徽标与环境自检说明", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
 
-    expect(screen.getByText("本地 Claude Code")).toBeInTheDocument();
-    expect(screen.getByText(/回复由你本机的 claude CLI 生成/)).toBeInTheDocument();
+    expect(screen.getByText("acpx · Claude")).toBeInTheDocument();
+    await eventually(() =>
+      expect(screen.getByTestId("acpx-env-note")).toHaveTextContent(
+        "acpx 连接层",
+      ),
+    );
+  });
+
+  it("桌面端进入聊天即做 acpx 环境自检（唯一链路，不达标给安装引导）", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(acpxEnvCheck).mockResolvedValue({
+      ok: false,
+      nodeOk: true,
+      nodeVersion: "v24.20.0",
+      acpxVersion: null,
+      message: "未找到 acpx，请在终端执行 npm install -g acpx@0.21.1。",
+    });
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await eventually(() => expect(acpxEnvCheck).toHaveBeenCalledTimes(1));
+    await eventually(() =>
+      expect(screen.getByTestId("acpx-env-note")).toHaveTextContent(
+        "npm install -g acpx@0.21.1",
+      ),
+    );
   });
 
   it("浏览器预览模式发送后先出现用户消息，再收到演示回复", async () => {
@@ -102,9 +133,9 @@ describe("ChatPanel", () => {
     expect(useChatStore.getState().messages[threadId]).toHaveLength(2);
   });
 
-  it("桌面端走 claudeChat，回复正文与 session id 落库", async () => {
+  it("桌面端走 acpxChat，回复正文与 session id 落到线程映射", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockResolvedValue({
+    vi.mocked(acpxChat).mockResolvedValue({
       text: "桌面端的完整回复",
       sessionId: "sess_42",
     });
@@ -119,15 +150,15 @@ describe("ChatPanel", () => {
     const messages = useChatStore.getState().messages[threadId];
     expect(messages).toHaveLength(2);
     expect(messages[1].content).toBe("桌面端的完整回复");
-    expect(useChatStore.getState().claudeSessionByBook[BOOK.id]).toBe(
+    expect(useChatStore.getState().acpxSessionByThread[threadId]).toBe(
       "sess_42",
     );
   });
 
-  it("桌面端 claudeChat 报错时，把原因写进消息而不是白屏", async () => {
+  it("桌面端 acpxChat 报错时，把原因写进消息而不是白屏", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockRejectedValue(
-      new Error("claude 未安装或不在应用 PATH 中，请在终端安装 claude"),
+    vi.mocked(acpxChat).mockRejectedValue(
+      new Error("acpx 需要 Node ≥22.13，当前 v18.0.0"),
     );
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
 
@@ -135,16 +166,18 @@ describe("ChatPanel", () => {
 
     await eventually(() =>
       expect(
-        screen.getByText(/（出错了）claude 未安装或不在应用 PATH 中/),
+        screen.getByText(/（出错了）acpx 需要 Node ≥22.13/),
       ).toBeInTheDocument(),
     );
-    expect(useChatStore.getState().claudeSessionByBook[BOOK.id]).toBeUndefined();
+    expect(
+      useChatStore.getState().acpxSessionByThread[activeThread()],
+    ).toBeUndefined();
   });
 
   it("等待回复期间显示「正在输入…」", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
     let resolveChat!: (v: { text: string; sessionId: string }) => void;
-    vi.mocked(claudeChat).mockReturnValue(
+    vi.mocked(acpxChat).mockReturnValue(
       new Promise((resolve) => {
         resolveChat = resolve;
       }),
@@ -165,7 +198,7 @@ describe("ChatPanel", () => {
   it("回复在途时即使输入了文字也无法发送，回复结束后恢复", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
     let resolveChat!: (v: { text: string; sessionId: string }) => void;
-    vi.mocked(claudeChat).mockReturnValue(
+    vi.mocked(acpxChat).mockReturnValue(
       new Promise((resolve) => {
         resolveChat = resolve;
       }),
@@ -190,12 +223,12 @@ describe("ChatPanel", () => {
     await eventually(() =>
       expect(screen.getByRole("button", { name: "发送" })).toBeEnabled(),
     );
-    expect(claudeChat).toHaveBeenCalledTimes(1);
+    expect(acpxChat).toHaveBeenCalledTimes(1);
   });
 
   it("桌面端发送时 prompt 自动带上阅读上下文行（书名/章节/进度）", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockResolvedValue({
+    vi.mocked(acpxChat).mockResolvedValue({
       text: "好的",
       sessionId: "sess_ctx",
     });
@@ -213,8 +246,8 @@ describe("ChatPanel", () => {
 
     await sendMessage("主角是谁");
 
-    await eventually(() => expect(claudeChat).toHaveBeenCalledTimes(1));
-    const prompt = vi.mocked(claudeChat).mock.calls[0][0].prompt;
+    await eventually(() => expect(acpxChat).toHaveBeenCalledTimes(1));
+    const prompt = vi.mocked(acpxChat).mock.calls[0][0].prompt;
     expect(prompt).toBe(
       [
         "你是《三体》这本书的伴读助手。",
@@ -237,7 +270,7 @@ describe("ChatPanel", () => {
     const input = screen.getByPlaceholderText(/问点什么/);
     await eventually(() => expect(input).toHaveValue(draft.text));
     // 没有自动发送：会话里没有消息。
-    expect(claudeChat).not.toHaveBeenCalled();
+    expect(acpxChat).not.toHaveBeenCalled();
     const threadId = activeThread();
     expect(useChatStore.getState().messages[threadId]).toHaveLength(0);
 
@@ -250,12 +283,12 @@ describe("ChatPanel", () => {
       />,
     );
     await eventually(() => expect(input).toHaveValue(draft.text));
-    expect(claudeChat).not.toHaveBeenCalled();
+    expect(acpxChat).not.toHaveBeenCalled();
   });
 
-  it("ref.send：气泡显示 displayText，发给 claude 的是完整 prompt", async () => {
+  it("ref.send：气泡显示 displayText，发给 acpx 的是完整 prompt", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockResolvedValue({
+    vi.mocked(acpxChat).mockResolvedValue({
       text: "本章总结如下……",
       sessionId: "sess_sum",
     });
@@ -272,7 +305,7 @@ describe("ChatPanel", () => {
     await eventually(() =>
       expect(screen.getByText("本章总结如下……")).toBeInTheDocument(),
     );
-    const prompt = vi.mocked(claudeChat).mock.calls[0][0].prompt;
+    const prompt = vi.mocked(acpxChat).mock.calls[0][0].prompt;
     expect(prompt).toBe("完整的总结 prompt");
     const threadId = activeThread();
     const messages = useChatStore.getState().messages[threadId];
@@ -283,7 +316,7 @@ describe("ChatPanel", () => {
   it("ref.send 在回复在途时不并发发送", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
     let resolveChat!: (v: { text: string; sessionId: string }) => void;
-    vi.mocked(claudeChat).mockReturnValue(
+    vi.mocked(acpxChat).mockReturnValue(
       new Promise((resolve) => {
         resolveChat = resolve;
       }),
@@ -298,7 +331,7 @@ describe("ChatPanel", () => {
     await eventually(() =>
       expect(screen.getByText("第一条的回复")).toBeInTheDocument(),
     );
-    expect(claudeChat).toHaveBeenCalledTimes(1);
+    expect(acpxChat).toHaveBeenCalledTimes(1);
   });
 
   it("清空按钮清空当前会话并回到空状态", async () => {
@@ -342,60 +375,30 @@ describe("ChatPanel", () => {
     expect(useChatStore.getState().feedback[assistantMessage.id]).toBe("up");
   });
 
-  it("深度思考开关默认关，点击打开并持久化", async () => {
-    render(<ChatPanel book={BOOK} onClose={() => {}} />);
-
-    const toggle = screen.getByRole("button", { name: "深度思考" });
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(useChatStore.getState().deepThinking).toBe(false);
-
-    const user = userEvent.setup();
-    await user.click(toggle);
-
-    expect(useChatStore.getState().deepThinking).toBe(true);
-    expect(screen.getByRole("button", { name: "深度思考" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(JSON.parse(localStorage.getItem("deer.chat.v1") ?? "{}").deepThinking).toBe(
-      true,
-    );
-  });
-
-  it("深度思考开启时发送，claudeChat 收到 deepThinking: true", async () => {
+  it("深度思考开关已移除（恒开）：面板无开关按钮，发送不带 deepThinking 参数", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockResolvedValue({
+    vi.mocked(acpxChat).mockResolvedValue({
       text: "想过了，回答是……",
       sessionId: "sess_dt",
     });
-    useChatStore.getState().setDeepThinking(true);
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    expect(
+      screen.queryByRole("button", { name: "深度思考" }),
+    ).not.toBeInTheDocument();
 
     await sendMessage("为什么");
 
-    await eventually(() => expect(claudeChat).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(claudeChat).mock.calls[0][0].deepThinking).toBe(true);
-  });
-
-  it("深度思考关闭时发送，claudeChat 收到 deepThinking: false", async () => {
-    vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockResolvedValue({
-      text: "直接回答",
-      sessionId: "sess_plain",
-    });
-    render(<ChatPanel book={BOOK} onClose={() => {}} />);
-
-    await sendMessage("为什么");
-
-    await eventually(() => expect(claudeChat).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(claudeChat).mock.calls[0][0].deepThinking).toBe(false);
+    await eventually(() => expect(acpxChat).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(acpxChat).mock.calls[0][0] as Record<string, unknown>;
+    expect("deepThinking" in call).toBe(false);
+    // 思考恒开由 Rust 侧保证，前端不再传递开关状态。
+    expect(call.prompt).toContain("为什么");
   });
 
   it("带思考内容的回复渲染折叠思考块，正文照常显示", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    let captured!: { prompt: string; messageId: string; deepThinking?: boolean };
-    vi.mocked(claudeChat).mockImplementation(async (opts) => {
-      captured = opts;
+    vi.mocked(acpxChat).mockImplementation(async (opts) => {
       opts.onThoughtDelta?.("正在思考这本书的主题……");
       return { text: "思考完了，正文在这里", sessionId: "sess_think" };
     });
@@ -410,7 +413,6 @@ describe("ChatPanel", () => {
     const threadId = activeThread();
     const [assistant] = useChatStore.getState().messages[threadId].slice(-1);
     expect(assistant.thinking).toBe("正在思考这本书的主题……");
-    expect(captured.deepThinking).toBe(false);
 
     // 渲染侧：思考块折叠展示，正文不受影响。
     expect(screen.getByTestId("thinking-block")).toBeInTheDocument();
@@ -420,7 +422,7 @@ describe("ChatPanel", () => {
 
   it("没有思考内容的回复不渲染思考块", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockResolvedValue({
+    vi.mocked(acpxChat).mockResolvedValue({
       text: "普通回复",
       sessionId: "sess_no_think",
     });
@@ -438,7 +440,7 @@ describe("ChatPanel", () => {
   // 已到达的部分必须在回复完成前就渲染出来，而不是憋到 resolve 一次性显示。
   it("流式增量逐块渲染：正文块到达即显示，不等回复完成", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockImplementation(async (opts) => {
+    vi.mocked(acpxChat).mockImplementation(async (opts) => {
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       opts.onDelta("第一块，");
       await sleep(120);
@@ -469,21 +471,12 @@ describe("ChatPanel", () => {
 
   it("acpx 引擎：流式增量同样逐块渲染，session id 落到 acpx 映射", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    const { acpxChat, acpxEnvCheck } = await import("@/lib/ai/claudeBackend");
     vi.mocked(acpxChat).mockImplementation(async (opts) => {
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       opts.onDelta("acpx一");
       await sleep(120);
       opts.onDelta("acpx二");
       return { text: "acpx一acpx二", sessionId: "acpx_sess_1" };
-    });
-    useChatStore.getState().setHarness("acpx");
-    vi.mocked(acpxEnvCheck).mockResolvedValue({
-      ok: true,
-      nodeOk: true,
-      nodeVersion: "v24.20.0",
-      acpxVersion: "0.21.1",
-      message: "",
     });
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
 
@@ -504,21 +497,12 @@ describe("ChatPanel", () => {
 
   it("acpx 书架工具返回书单时渲染成书卡，点击打开对应书", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    const { acpxChat, acpxEnvCheck } = await import("@/lib/ai/claudeBackend");
     // 模拟 Rust 侧从书架 MCP 工具结果抽出书单后推来的 books 事件。
     vi.mocked(acpxChat).mockImplementation(async (opts) => {
       opts.onBooks?.([
         { id: "b1", title: "球状闪电", author: "刘慈欣", format: "epub", progress: 0.2 },
       ]);
       return { text: "为你找到一本《球状闪电》", sessionId: "acpx_sess_2" };
-    });
-    useChatStore.getState().setHarness("acpx");
-    vi.mocked(acpxEnvCheck).mockResolvedValue({
-      ok: true,
-      nodeOk: true,
-      nodeVersion: "v24.20.0",
-      acpxVersion: "0.21.1",
-      message: "",
     });
     render(
       <MemoryRouter initialEntries={["/bookshelf"]}>

@@ -6,10 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/ai/claudeBackend", () => ({
   CLAUDE_CHUNK_EVENT: "claude://chunk",
   isTauriRuntime: vi.fn(() => false),
-  claudeChat: vi.fn(),
+  acpxChat: vi.fn(),
 }));
 
-const { isTauriRuntime, claudeChat } = await import("@/lib/ai/claudeBackend");
+const { isTauriRuntime, acpxChat } = await import("@/lib/ai/claudeBackend");
 const { ConceptMapPanel } = await import("./ConceptMapPanel");
 const { useConceptMapStore } = await import("@/store/conceptMapStore");
 
@@ -43,7 +43,7 @@ beforeEach(() => {
   localStorage.clear();
   resetStore();
   vi.mocked(isTauriRuntime).mockReturnValue(false);
-  vi.mocked(claudeChat).mockReset();
+  vi.mocked(acpxChat).mockReset();
   PROPS.getChapterText.mockClear();
   PROPS.onClose.mockClear();
 });
@@ -112,7 +112,7 @@ describe("ConceptMapPanel", () => {
 
   it("桌面端生成：claude 输出解析成功后渲染并落缓存", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockResolvedValue({
+    vi.mocked(acpxChat).mockResolvedValue({
       text: `好的，这是地图：\n\`\`\`json\n${MODEL_JSON}\n\`\`\``,
       sessionId: "s1",
     });
@@ -123,9 +123,9 @@ describe("ConceptMapPanel", () => {
     await eventually(() =>
       expect(screen.getByTestId("concept-map-svg")).toHaveTextContent("记忆"),
     );
-    expect(claudeChat).toHaveBeenCalledTimes(1);
+    expect(acpxChat).toHaveBeenCalledTimes(1);
     // prompt 带 N1 上下文行和章节全文。
-    const call = vi.mocked(claudeChat).mock.calls[0]![0]!;
+    const call = vi.mocked(acpxChat).mock.calls[0]![0]!;
     expect(call.prompt).toContain("《三体》");
     expect(call.prompt).toContain("章节全文");
     expect(
@@ -151,7 +151,7 @@ describe("ConceptMapPanel", () => {
       expect(screen.getByText(/没有可读正文/)).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
-    expect(claudeChat).not.toHaveBeenCalled();
+    expect(acpxChat).not.toHaveBeenCalled();
     expect(useConceptMapStore.getState().get("book-1", "sec:3")).toBeUndefined();
   });
 
@@ -161,9 +161,9 @@ describe("ConceptMapPanel", () => {
   ])("桌面端兜底：%s 时显示错误与重试，不落缓存", async (_name, result, errorText) => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
     if (result instanceof Error) {
-      vi.mocked(claudeChat).mockRejectedValue(result);
+      vi.mocked(acpxChat).mockRejectedValue(result);
     } else {
-      vi.mocked(claudeChat).mockResolvedValue(result);
+      vi.mocked(acpxChat).mockResolvedValue(result);
     }
     const user = userEvent.setup();
     render(<ConceptMapPanel {...PROPS} />);
@@ -182,7 +182,7 @@ describe("ConceptMapPanel", () => {
       edges: [],
     });
     vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(claudeChat).mockResolvedValue({
+    vi.mocked(acpxChat).mockResolvedValue({
       text: "解析不了",
       sessionId: "s1",
     });

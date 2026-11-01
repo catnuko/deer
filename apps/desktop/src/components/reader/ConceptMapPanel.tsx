@@ -7,7 +7,7 @@ import {
   type ConceptMapData,
 } from "@/lib/ai/conceptMap";
 import { buildPrompt } from "@/lib/ai/readingContext";
-import { claudeChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
+import { acpxChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
 import { useConceptMapStore } from "@/store/conceptMapStore";
 import { cn } from "@/lib/utils";
 
@@ -119,9 +119,12 @@ export function ConceptMapPanel({
           chapterTitle,
           progress: null,
         });
-        const result = await claudeChat({
+        // 概念地图不走聊天面板：用「书 + 章」稳定的线程 id 映射 acpx 命名会话，
+        // 每次生成都开新会话（resumeSessionId 恒空，模型不需要上一轮上下文）。
+        const result = await acpxChat({
           prompt,
           messageId: `conceptmap_${Date.now()}`,
+          threadId: `conceptmap-${bookId}-${chapterKey}`,
           resumeSessionId: null,
           onDelta: () => undefined,
         });

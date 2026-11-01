@@ -22,7 +22,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: (...args: Parameters<typeof listen>) => listen(...args),
 }));
 
-const { claudeChat, acpxChat } = await import("./claudeBackend");
+const { acpxChat } = await import("./claudeBackend");
 
 function emitChunk(payload: ClaudeChunkPayload) {
   chunkHandler?.({ payload });
@@ -56,11 +56,11 @@ afterEach(() => {
 });
 
 describe("claudeBackend 诊断埋点", () => {
-  it("claudeChat 每个增量块打一行 fe-chunk，带引擎名、序号与 kind，开始/结束各一行", async () => {
+  it("acpxChat 每个增量块打一行 fe-chunk，带引擎名、序号与 kind，开始/结束各一行", async () => {
     // chat invoke 挂起，等监听就绪后逐块喂事件
     let resolveChat: (v: unknown) => void = () => {};
     invoke.mockImplementation((cmd: string) =>
-      cmd === "claude_chat"
+      cmd === "acpx_chat"
         ? new Promise((res) => {
             resolveChat = res;
           })
@@ -68,9 +68,10 @@ describe("claudeBackend 诊断埋点", () => {
     );
 
     const deltas: string[] = [];
-    const p = claudeChat({
+    const p = acpxChat({
       prompt: "你好",
       messageId: "m-1",
+      threadId: "t-1",
       onDelta: (d) => deltas.push(d),
     });
     await eventually(() => expect(chunkHandler).not.toBeNull());
@@ -87,7 +88,7 @@ describe("claudeBackend 诊断埋点", () => {
 
     const diag = diagCalls();
     expect(diag[0].tag).toBe("fe-start");
-    expect(diag[0].msg).toContain("engine=claude");
+    expect(diag[0].msg).toContain("engine=acpx");
     expect(diag[0].msg).toContain("id=m-1");
 
     const chunks = diag.filter((d) => d.tag === "fe-chunk");
@@ -100,13 +101,13 @@ describe("claudeBackend 诊断埋点", () => {
 
     const done = diag[diag.length - 1];
     expect(done.tag).toBe("fe-done");
-    expect(done.msg).toContain("engine=claude");
+    expect(done.msg).toContain("engine=acpx");
 
     expect(deltas).toEqual(["春", "天"]);
     expect(result.sessionId).toBe("s-1");
   });
 
-  it("acpxChat 埋点带 engine=acpx，块序号跨 kind 连续", async () => {
+  it("acpxChat 调 acpx_chat 命令并回传线程 id，块序号跨 kind 连续", async () => {
     let resolveChat: (v: unknown) => void = () => {};
     invoke.mockImplementation((cmd: string) =>
       cmd === "acpx_chat"
@@ -145,16 +146,17 @@ describe("claudeBackend 诊断埋点", () => {
   it("diag_log invoke 失败静默：埋点挂掉不影响增量路由", async () => {
     let resolveChat: (v: unknown) => void = () => {};
     invoke.mockImplementation((cmd: string) =>
-      cmd === "claude_chat"
+      cmd === "acpx_chat"
         ? new Promise((res) => {
             resolveChat = res;
           })
         : Promise.reject(new Error("log sink gone")),
     );
     const deltas: string[] = [];
-    const p = claudeChat({
+    const p = acpxChat({
       prompt: "你好",
       messageId: "m-3",
+      threadId: "t-1",
       onDelta: (d) => deltas.push(d),
     });
     await eventually(() => expect(chunkHandler).not.toBeNull());

@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import type { ChatBookRef, ChatMessage, ChatThread } from "@/lib/types";
-import type { ChatHarness } from "@/lib/ai/claudeBackend";
 
 /** 点赞/点踩的本地 UI 状态，只存不发请求。 */
 export type ChatFeedback = "up" | "down";
@@ -14,14 +13,8 @@ export type ChatStoreState = {
   activeThreadByBook: Record<string, string>;
   /** messageId -> 用户给过的反馈（仅本地）。 */
   feedback: Record<string, ChatFeedback>;
-  /** bookId -> 该书当前会话对应的 ACP session id（本地 claude 续接上下文用）。 */
-  claudeSessionByBook: Record<string, string>;
-  /** 聊天后端：claude = 内置直连（默认），acpx = acpx 连接层（多 harness）。 */
-  harness: ChatHarness;
   /** threadId -> 该线程的 ACP session id（acpx 命名会话恢复用）。 */
   acpxSessionByThread: Record<string, string>;
-  /** 深度思考开关：开启后回复先流思考（折叠展示）再流正文。 */
-  deepThinking: boolean;
   ready: boolean;
 };
 
@@ -43,12 +36,7 @@ export type ChatStore = ChatStoreState & {
   /** 整体替换某条消息的正文（失败提示、空回复兜底用）。 */
   setMessageContent(threadId: string, messageId: string, content: string): void;
   setFeedback(messageId: string, value: ChatFeedback | undefined): void;
-  /** 记录/清除该书当前会话的 ACP session id（undefined = 清除，下一条开新会话）。 */
-  setClaudeSession(bookId: string, sessionId: string | undefined): void;
-  setHarness(value: ChatHarness): void;
-  /** 记录/清除线程的 ACP session id（acpx 命名会话恢复用）。 */
   setAcpxSession(threadId: string, sessionId: string | undefined): void;
-  setDeepThinking(value: boolean): void;
   /** 流式追加：给已有消息的思考过程追加一段增量。 */
   appendToMessageThinking(threadId: string, messageId: string, delta: string): void;
   /** 书架工具返回的书单并入消息（按书 id 去重，后到的覆盖先到的）。 */
@@ -68,6 +56,9 @@ const STORE_FILE = "chat.json";
 const STORE_KEY = "chat";
 const LS_KEY = "deer.chat.v1";
 
+/** 旧版落盘字段（直连链路时代）：读入时丢弃，深度思考恒开、无引擎概念。 */
+const LEGACY_KEYS = ["claudeSessionByBook", "harness", "deepThinking"] as const;
+
 function isTauri(): boolean {
   return (
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in (window as object)
@@ -79,10 +70,7 @@ const EMPTY: ChatStoreState = {
   messages: {},
   activeThreadByBook: {},
   feedback: {},
-  claudeSessionByBook: {},
-  harness: "claude",
   acpxSessionByThread: {},
-  deepThinking: false,
   ready: false,
 };
 
@@ -108,10 +96,7 @@ async function writePersisted(state: ChatStoreState): Promise<void> {
     messages: state.messages,
     activeThreadByBook: state.activeThreadByBook,
     feedback: state.feedback,
-    claudeSessionByBook: state.claudeSessionByBook,
-    harness: state.harness,
     acpxSessionByThread: state.acpxSessionByThread,
-    deepThinking: state.deepThinking,
     ready: true,
   };
   try {
@@ -165,6 +150,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     async load() {
       const data = await readPersisted();
+      // 旧版落盘字段（直连链路时代的开关/引擎/按书会话映射）读入即丢弃：
+      // 深度思考恒开，acpx 是唯一链路，没有任何状态可迁。
+      if (data) {
+        for (const key of LEGACY_KEYS) delete (data as Record<string, unknown>)[key];
+      }
       set({ ...EMPTY, ...(data ?? {}), ready: true });
     },
 
@@ -252,13 +242,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           ...s,
           messages: { ...s.messages, [threadId]: [] },
         };
-        // 清空会话 = 重新开新会话：同步清掉 claude / acpx 两条链路的会话映射。
-        for (const [bookId, threads] of Object.entries(next.threads)) {
-          if (threads.some((t) => t.id === threadId)) {
-            next.claudeSessionByBook = { ...next.claudeSessionByBook };
-            delete next.claudeSessionByBook[bookId];
-          }
-        }
+        // 清空会话 = 重新开新会话：同步清掉 acpx 会话映射。
         next.acpxSessionByThread = { ...next.acpxSessionByThread };
         delete next.acpxSessionByThread[threadId];
         return next;
@@ -291,21 +275,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
       persist();
     },
 
-    setClaudeSession(bookId, sessionId) {
-      set((s) => {
-        const next = { ...s.claudeSessionByBook };
-        if (sessionId === undefined) delete next[bookId];
-        else next[bookId] = sessionId;
-        return { claudeSessionByBook: next };
-      });
-      persist();
-    },
-
-    setHarness(value) {
-      set({ harness: value });
-      persist();
-    },
-
     setAcpxSession(threadId, sessionId) {
       set((s) => {
         const next = { ...s.acpxSessionByThread };
@@ -313,11 +282,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
         else next[threadId] = sessionId;
         return { acpxSessionByThread: next };
       });
-      persist();
-    },
-
-    setDeepThinking(value) {
-      set({ deepThinking: value });
       persist();
     },
 

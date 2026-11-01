@@ -18,7 +18,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,
-            claude_acp::claude_chat,
             acpx::acpx_chat,
             acpx::acpx_env_check,
             deer_log::diag_log
