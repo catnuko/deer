@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from tauri.conf.json
+        id: version
+        run: |
+          VERSION="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag exists on remote
+        id: tag
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag and release
+        if: steps.tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --generate-release-notes --verify-tag
