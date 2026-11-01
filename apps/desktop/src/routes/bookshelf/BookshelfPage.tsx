@@ -10,6 +10,7 @@ import {
   NotebookText,
   Pencil,
   Settings as SettingsIcon,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import {
@@ -43,6 +44,7 @@ import { PREVIEW_BOOKS, PREVIEW_SHELVES } from "@/lib/preview";
 import { isTauri } from "@/lib/platform";
 import type { Book, Shelf } from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
+import { useAIPanelStore } from "@/store/aiPanelStore";
 import { BookCard } from "./BookCard";
 import { ContinueReadingCard } from "./ContinueReadingCard";
 import { continueReadingBookOf } from "./continueReading";
@@ -55,6 +57,8 @@ type ShelfForm =
 export function BookshelfPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const aiPanelOpen = useAIPanelStore((s) => s.open);
+  const setAIPanelOpen = useAIPanelStore((s) => s.setOpen);
   // 只有浏览器里（没有 Tauri）用 ?preview=1 看界面用，桌面应用不会走到这条分支。
   const preview = !isTauri() && searchParams.get("preview") === "1";
 
@@ -242,6 +246,23 @@ export function BookshelfPage() {
               </TooltipTrigger>
               <TooltipContent>设置</TooltipContent>
             </Tooltip>
+            {!aiPanelOpen && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="打开 AI 伴读面板"
+                      onClick={() => setAIPanelOpen(true)}
+                    />
+                  }
+                >
+                  <Sparkles />
+                </TooltipTrigger>
+                <TooltipContent>AI 伴读</TooltipContent>
+              </Tooltip>
+            )}
           </TooltipProvider>
         }
       />
