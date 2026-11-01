@@ -15,15 +15,15 @@ export function PageHeader({
   onBack,
 }: {
   title: string;
-  description: string;
+  description?: string;
   /** 页头右侧动作区（M5a：书架的设置齿轮放这里）。 */
   actions?: ReactNode;
   /** 提供时在标题左侧渲染「← 返回书架」图标按钮（布局重排：返回归位左上）。 */
   onBack?: () => void;
 }) {
   return (
-    <header className="border-border flex items-start justify-between gap-4 border-b px-8 py-6">
-      <div className="flex min-w-0 items-start gap-3">
+    <header className="border-border flex items-center justify-between gap-4 border-b px-8 py-3">
+      <div className="flex min-w-0 items-center gap-3">
         {onBack ? (
           <TooltipProvider>
             <Tooltip>
@@ -34,7 +34,7 @@ export function PageHeader({
                     size="icon-sm"
                     aria-label="返回书架"
                     onClick={onBack}
-                    className="mt-1 shrink-0"
+                    className="shrink-0"
                   />
                 }
               >
@@ -45,8 +45,10 @@ export function PageHeader({
           </TooltipProvider>
         ) : null}
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">{description}</p>
+          <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+          {description ? (
+            <p className="text-muted-foreground mt-0.5 text-sm">{description}</p>
+          ) : null}
         </div>
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}

@@ -213,7 +213,6 @@ export function BookshelfPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="书架"
-        description="导入、整理与阅读你的本地电子书。"
         actions={
           <TooltipProvider>
             <Tooltip>
