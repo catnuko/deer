@@ -239,7 +239,6 @@ export function ChatPanel({
   useEffect(() => {
     if (!tauri) return;
     let alive = true;
-    setEnvStatus(null);
     acpxEnvCheck()
       .then((s) => {
         if (alive) setEnvStatus(s);

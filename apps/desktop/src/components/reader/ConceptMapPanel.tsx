@@ -76,11 +76,19 @@ export function ConceptMapPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // 打开面板或切章时重置：渲染期比对 key 调整状态（React 推荐做法），
+  // 避免 effect 内同步 setState；重挂载时初值本就是 idle/null，天然幂等。
+  const panelKey = `${bookId}\u0000${chapterKey}`;
+  const [prevPanelKey, setPrevPanelKey] = useState(panelKey);
+  if (prevPanelKey !== panelKey) {
+    setPrevPanelKey(panelKey);
+    setPhase({ status: "idle" });
+    setSelectedId(null);
+  }
+
   // 打开面板时先查缓存：有就直接展示，没有停在「未生成」。
   useEffect(() => {
     let cancelled = false;
-    setPhase({ status: "idle" });
-    setSelectedId(null);
     void (async () => {
       await load();
       if (cancelled) return;

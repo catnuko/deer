@@ -45,7 +45,6 @@ describe("SelectionPopover", () => {
     const onCopy = vi.fn();
     const onHostClick = vi.fn();
     const user = userEvent.setup();
-    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     render(
       <div onClick={onHostClick}>
         <SelectionPopover

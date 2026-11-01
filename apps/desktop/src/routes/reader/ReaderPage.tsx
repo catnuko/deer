@@ -53,6 +53,9 @@ import {
   positionPatchOf,
 } from "@/routes/reader/readingPosition";
 
+/** 宽窄窗断点（布局重排 v1）：目录/笔记面板 dock ↔ Sheet 切换共用。 */
+const WIDE_MEDIA_QUERY = "(min-width: 768px)";
+
 /** foliate 的 paginator 实现 setStyles，但 Renderer 接口没有声明它。 */
 type StyleableRenderer = HTMLElement & {
   setStyles?: (styles: string) => void;
@@ -199,19 +202,26 @@ export function ReaderPage() {
   // 阅读页快捷显示设置面板（M4）。
   const [quickSettingsOpen, setQuickSettingsOpen] = useState(false);
   // 目录开关（布局重排 v1）：宽窗默认展开 dock；窄窗走 Sheet 浮层，默认收起。
-  const isWide = useMediaQuery("(min-width: 768px)");
+  const isWide = useMediaQuery(WIDE_MEDIA_QUERY);
   const [tocOpen, setTocOpen] = useState(
     () =>
       typeof window.matchMedia === "function" &&
-      window.matchMedia("(min-width: 768px)").matches,
+      window.matchMedia(WIDE_MEDIA_QUERY).matches,
   );
   // 跨越到窄窗时把 dock 形态的面板收起，避免 Sheet 突然盖到正文上。
+  // 窄窗下挂载时初值本就是收起，只需监听断点跨越事件（不在 effect 里同步 setState）。
   useEffect(() => {
-    if (!isWide) {
-      setTocOpen(false);
-      setNotesOpen(false);
-    }
-  }, [isWide]);
+    if (typeof window.matchMedia !== "function") return;
+    const mediaQueryList = window.matchMedia(WIDE_MEDIA_QUERY);
+    const onChange = (event: MediaQueryListEvent) => {
+      if (!event.matches) {
+        setTocOpen(false);
+        setNotesOpen(false);
+      }
+    };
+    mediaQueryList.addEventListener("change", onChange);
+    return () => mediaQueryList.removeEventListener("change", onChange);
+  }, []);
 
   // 浮层互斥（规范 1.3）：显示设置与概念地图同时只开一个。
   const toggleQuickSettings = () => {
@@ -1143,15 +1153,21 @@ function DemoReader({
   const scrollHostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<ChatPanelHandle | null>(null);
   // 目录开关（布局重排 v1），与 RealReader 同一套宽窄窗行为。
-  const isWide = useMediaQuery("(min-width: 768px)");
+  const isWide = useMediaQuery(WIDE_MEDIA_QUERY);
   const [tocOpen, setTocOpen] = useState(
     () =>
       typeof window.matchMedia === "function" &&
-      window.matchMedia("(min-width: 768px)").matches,
+      window.matchMedia(WIDE_MEDIA_QUERY).matches,
   );
   useEffect(() => {
-    if (!isWide) setTocOpen(false);
-  }, [isWide]);
+    if (typeof window.matchMedia !== "function") return;
+    const mediaQueryList = window.matchMedia(WIDE_MEDIA_QUERY);
+    const onChange = (event: MediaQueryListEvent) => {
+      if (!event.matches) setTocOpen(false);
+    };
+    mediaQueryList.addEventListener("change", onChange);
+    return () => mediaQueryList.removeEventListener("change", onChange);
+  }, []);
 
   const chapter = book.chapters[chapterIndex] ?? book.chapters[0];
   const chapterCount = book.chapters.length;
