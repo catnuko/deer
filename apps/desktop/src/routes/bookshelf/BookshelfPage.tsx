@@ -3,10 +3,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
   BookPlus,
+  ChevronDown,
   FolderPlus,
   Layers,
   Library,
-  MoreHorizontal,
   NotebookText,
   Pencil,
   Settings as SettingsIcon,
@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -39,7 +40,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TextureButton } from "@/components/ui/texture-button";
-import { cn } from "@/lib/utils";
 import { PREVIEW_BOOKS, PREVIEW_SHELVES } from "@/lib/preview";
 import { isTauri } from "@/lib/platform";
 import type { Book, Shelf } from "@/lib/types";
@@ -266,19 +266,93 @@ export function BookshelfPage() {
         }
       />
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="border-border flex w-56 shrink-0 flex-col border-r">
-          <div className="flex items-center justify-between px-4 pt-4 pb-2">
-            <span className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-              书架
-            </span>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <section className="flex min-w-0 flex-1 flex-col">
+          <div className="border-border flex flex-wrap items-center gap-3 border-b px-6 py-3">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-auto"
+                    aria-label="选择书架"
+                  />
+                }
+              >
+                {activeShelf ? <Layers /> : <Library />}
+                <span className="max-w-40 truncate">
+                  {activeShelf ? activeShelf.name : "全部书籍"}
+                </span>
+                <span className="text-muted-foreground text-xs">
+                  {visibleBooks.length} 本
+                </span>
+                <ChevronDown className="text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuCheckboxItem
+                  checked={effectiveShelfId === null}
+                  closeOnClick
+                  onClick={() => setActiveShelfId(null)}
+                >
+                  <Library className="size-3.5" />
+                  <span className="flex-1">全部书籍</span>
+                  <span className="text-muted-foreground text-xs">
+                    {books.length}
+                  </span>
+                </DropdownMenuCheckboxItem>
+
+                {shelves.map((shelf) => (
+                  <DropdownMenuCheckboxItem
+                    key={shelf.id}
+                    checked={effectiveShelfId === shelf.id}
+                    closeOnClick
+                    onClick={() => setActiveShelfId(shelf.id)}
+                  >
+                    <Layers className="size-3.5" />
+                    <span className="flex-1 truncate">{shelf.name}</span>
+                    <span className="text-muted-foreground text-xs">
+                      {countInShelf(shelf.id)}
+                    </span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+
+                {shelves.length === 0 && (
+                  <DropdownMenuItem disabled>
+                    还没有书架，点旁边的 + 新建一个
+                  </DropdownMenuItem>
+                )}
+
+                {activeShelf && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() =>
+                        setShelfForm({ mode: "rename", shelf: activeShelf })
+                      }
+                    >
+                      <Pencil />
+                      重命名书架
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => setShelfToDelete(activeShelf)}
+                    >
+                      <Trash2 />
+                      删除书架
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <Button
                       variant="ghost"
-                      size="icon-xs"
+                      size="icon-sm"
                       aria-label="新建书架"
                       onClick={() => setShelfForm({ mode: "create" })}
                     />
@@ -289,95 +363,7 @@ export function BookshelfPage() {
                 <TooltipContent>新建书架</TooltipContent>
               </Tooltip>
             </TooltipProvider>
-          </div>
 
-          <nav className="flex flex-col gap-0.5 px-2 py-1">
-            <button
-              type="button"
-              onClick={() => setActiveShelfId(null)}
-              className={cn(
-                "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-                effectiveShelfId === null
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                  : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
-              )}
-            >
-              <Library className="size-3.5" />
-              <span className="flex-1 truncate text-left">全部书籍</span>
-              <span className="text-xs">{books.length}</span>
-            </button>
-
-            {shelves.map((shelf) => (
-              <div
-                key={shelf.id}
-                className={cn(
-                  "flex items-center gap-0.5 rounded-md",
-                  effectiveShelfId === shelf.id && "bg-sidebar-accent",
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => setActiveShelfId(shelf.id)}
-                  className={cn(
-                    "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-                    effectiveShelfId === shelf.id
-                      ? "text-sidebar-accent-foreground font-medium"
-                      : "text-muted-foreground hover:text-sidebar-accent-foreground",
-                  )}
-                >
-                  <Layers className="size-3.5 shrink-0" />
-                  <span className="flex-1 truncate text-left">{shelf.name}</span>
-                  <span className="text-xs">{countInShelf(shelf.id)}</span>
-                </button>
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`管理书架「${shelf.name}」`}
-                      />
-                    }
-                  >
-                    <MoreHorizontal />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuItem
-                      onClick={() => setShelfForm({ mode: "rename", shelf })}
-                    >
-                      <Pencil />
-                      重命名
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => setShelfToDelete(shelf)}
-                    >
-                      <Trash2 />
-                      删除书架
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            ))}
-
-            {shelves.length === 0 && (
-              <p className="text-muted-foreground px-2 py-1.5 text-xs leading-relaxed">
-                还没有书架，点右上角 + 建一个来归类书籍。
-              </p>
-            )}
-          </nav>
-
-          <div className="mt-auto px-4 py-3">
-            <p className="text-muted-foreground text-[11px] leading-relaxed">
-              书籍文件保存在应用数据目录
-            </p>
-          </div>
-        </aside>
-
-        <section className="flex min-w-0 flex-1 flex-col">
-          <div className="border-border flex flex-wrap items-center gap-3 border-b px-6 py-3">
             <TextureButton
               variant="primary"
               size="sm"
@@ -388,11 +374,6 @@ export function BookshelfPage() {
               <BookPlus className="size-3.5" />
               {importing ? "导入中…" : "导入书籍"}
             </TextureButton>
-
-            <span className="text-muted-foreground text-sm">
-              {activeShelf ? `「${activeShelf.name}」` : "全部书籍"} ·{" "}
-              {visibleBooks.length} 本
-            </span>
 
             {preview && <Badge variant="secondary">预览数据（浏览器）</Badge>}
             {!isTauri() && !preview && (
