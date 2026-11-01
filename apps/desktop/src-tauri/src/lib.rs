@@ -20,7 +20,8 @@ pub fn run() {
             greet,
             claude_acp::claude_chat,
             acpx::acpx_chat,
-            acpx::acpx_env_check
+            acpx::acpx_env_check,
+            deer_log::diag_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

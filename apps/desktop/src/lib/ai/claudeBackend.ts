@@ -41,9 +41,28 @@ export function isTauriRuntime(): boolean {
   );
 }
 
+/** core 模块缓存：流式下每个 chunk 都要发埋点，不能每次都走一遍动态 import。 */
+let coreMod: Promise<typeof import("@tauri-apps/api/core")> | null = null;
+
+/**
+ * 诊断埋点（旁路）：把前端收到流式增量的到达时间写进
+ * ~/Library/Logs/deer/claude-acp.log（与 Rust 侧同一份日志），fire-and-forget，
+ * 任何失败静默——埋点绝不能反过来影响聊天链路。
+ */
+async function diagLog(tag: string, msg: string): Promise<void> {
+  try {
+    coreMod ??= import("@tauri-apps/api/core");
+    const { invoke } = await coreMod;
+    await invoke("diag_log", { tag, msg });
+  } catch {
+    // 旁路日志，失败静默
+  }
+}
+
 /** 监听流式增量事件并按 messageId 路由到正文/思考/书卡回调，返回解绑函数。 */
 async function listenChunks(
   messageId: string,
+  engine: ChatHarness,
   opts: {
     onDelta: (delta: string) => void;
     onThoughtDelta?: (delta: string) => void;
@@ -51,8 +70,13 @@ async function listenChunks(
   },
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
+  let seq = 0;
   return await listen<ClaudeChunkPayload>(CLAUDE_CHUNK_EVENT, (event) => {
     if (event.payload.messageId !== messageId) return;
+    void diagLog(
+      "fe-chunk",
+      `engine=${engine} id=${messageId} seq=${++seq} kind=${event.payload.kind ?? "message"} len=${event.payload.delta.length}`,
+    );
     if (event.payload.kind === "thought") {
       opts.onThoughtDelta?.(event.payload.delta);
     } else if (event.payload.kind === "books") {
@@ -81,14 +105,23 @@ export async function claudeChat(opts: {
   onThoughtDelta?: (delta: string) => void;
 }): Promise<ClaudeChatResult> {
   const { invoke } = await import("@tauri-apps/api/core");
-  const unlisten = await listenChunks(opts.messageId, opts);
+  const unlisten = await listenChunks(opts.messageId, "claude", opts);
+  void diagLog(
+    "fe-start",
+    `engine=claude id=${opts.messageId} thinking=${opts.deepThinking ?? false} promptLen=${opts.prompt.length}`,
+  );
   try {
-    return await invoke<ClaudeChatResult>("claude_chat", {
+    const result = await invoke<ClaudeChatResult>("claude_chat", {
       prompt: opts.prompt,
       messageId: opts.messageId,
       resumeSessionId: opts.resumeSessionId ?? null,
       deepThinking: opts.deepThinking ?? false,
     });
+    void diagLog(
+      "fe-done",
+      `engine=claude id=${opts.messageId} textLen=${result.text.length}`,
+    );
+    return result;
   } finally {
     unlisten();
   }
@@ -109,15 +142,24 @@ export async function acpxChat(opts: {
   onBooks?: (books: ChatBookRef[]) => void;
 }): Promise<ClaudeChatResult> {
   const { invoke } = await import("@tauri-apps/api/core");
-  const unlisten = await listenChunks(opts.messageId, opts);
+  const unlisten = await listenChunks(opts.messageId, "acpx", opts);
+  void diagLog(
+    "fe-start",
+    `engine=acpx id=${opts.messageId} thinking=${opts.deepThinking ?? false} promptLen=${opts.prompt.length}`,
+  );
   try {
-    return await invoke<ClaudeChatResult>("acpx_chat", {
+    const result = await invoke<ClaudeChatResult>("acpx_chat", {
       prompt: opts.prompt,
       messageId: opts.messageId,
       threadId: opts.threadId,
       resumeSessionId: opts.resumeSessionId ?? null,
       deepThinking: opts.deepThinking ?? false,
     });
+    void diagLog(
+      "fe-done",
+      `engine=acpx id=${opts.messageId} textLen=${result.text.length}`,
+    );
+    return result;
   } finally {
     unlisten();
   }

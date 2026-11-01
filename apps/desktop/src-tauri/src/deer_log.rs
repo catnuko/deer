@@ -35,6 +35,14 @@ pub fn log_path() -> Option<PathBuf> {
 /// 错误文案里展示的日志位置（相对 HOME，方便用户照着找）。
 pub const LOG_HINT: &str = "~/Library/Logs/deer/claude-acp.log";
 
+/// 前端诊断埋点入口：前端每收到一个流式增量块，经此把到达时间写进同一份日志，
+/// 用于区分「内核逐块到达而界面看着一次性出来」的最后一步。旁路中的旁路：
+/// invoke 本身 fire-and-forget，这里再失败也只当没写。
+#[tauri::command]
+pub fn diag_log(tag: &str, msg: &str) {
+    log(tag, msg);
+}
+
 /// 追加一行日志。写失败静默忽略。
 pub fn log(tag: &str, msg: &str) {
     let Some(path) = log_path() else { return };
