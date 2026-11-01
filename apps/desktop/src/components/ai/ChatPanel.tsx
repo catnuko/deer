@@ -195,7 +195,6 @@ function ComposerPreset({ draft }: { draft: ChatPanelDraft }) {
 export function ChatPanel({
   book,
   onClose,
-  embedded = false,
   className,
   readingContext,
   draft,
@@ -203,8 +202,6 @@ export function ChatPanel({
 }: {
   book: CurrentBook;
   onClose: () => void;
-  /** 内联常驻侧栏模式（阅读页用）；默认 false = 书架/首页的 fixed 浮层。 */
-  embedded?: boolean;
   className?: string;
   /** 阅读上下文（N1）：每条消息的 prompt 前自动附带书名/章节/进度。 */
   readingContext?: ReadingContext | null;
@@ -427,10 +424,7 @@ export function ChatPanel({
     <aside
       aria-label="AI 伴读"
       className={cn(
-        "bg-background border-border flex flex-col border-l",
-        embedded
-          ? "w-96 shrink-0"
-          : "fixed inset-y-0 right-0 z-40 w-[420px] max-w-full shadow-2xl",
+        "bg-background border-border flex w-96 shrink-0 flex-col border-l",
         className,
       )}
     >

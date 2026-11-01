@@ -1095,7 +1095,6 @@ function RealReader({
       <ChatPanel
         ref={panelRef}
         book={{ id: bookId, title }}
-        embedded
         readingContext={{
           bookTitle: title,
           chapterTitle:
@@ -1350,7 +1349,6 @@ function DemoReader({
       <ChatPanel
         ref={panelRef}
         book={{ id: bookId ?? book.id, title: book.title }}
-        embedded
         // 演示书没有全书概念，scrollProgress 是本章内的进度，不冒充全书进度。
         readingContext={{
           bookTitle: book.title,

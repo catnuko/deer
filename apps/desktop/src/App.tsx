@@ -13,7 +13,13 @@ export default function App() {
   return (
     <>
       <Routes>
-        <Route element={<AppShell />}>
+        <Route
+          element={
+            <AppShell>
+              <AIPanelLauncher />
+            </AppShell>
+          }
+        >
           <Route index element={<Navigate to={`/bookshelf${search}`} replace />} />
           <Route path="/bookshelf" element={<BookshelfPage />} />
           <Route path="/reader" element={<ReaderPage />} />
@@ -22,7 +28,6 @@ export default function App() {
           <Route path="*" element={<Navigate to="/bookshelf" replace />} />
         </Route>
       </Routes>
-      <AIPanelLauncher />
     </>
   );
 }
