@@ -8,32 +8,59 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { SettingRow } from "@/components/settings/SettingRow";
 import {
+  FONT_FAMILIES,
+  FONT_FAMILY_CSS,
   FONT_SIZES,
   LINE_HEIGHTS,
-  PAPER_COLORS,
   PAGE_FLOWS,
+  PAGE_MARGINS,
+  PAGE_MARGIN_PX,
+  PAPER_COLORS,
+  isFontFamily,
   isFontSize,
   isLineHeight,
   isPageFlow,
+  isPageMargin,
   useReadingSettings,
-  type PaperColor,
+  type FontFamily,
+  type FontSize,
+  type LineHeight,
   type PageFlow,
+  type PageMargin,
+  type PaperColor,
 } from "@/store/readingSettings";
 
-const FONT_SIZE_LABELS = {
+const FONT_SIZE_LABELS: Record<FontSize, string> = {
+  12: "12px · 最小",
   14: "14px · 小",
   15: "15px · 标准",
   17: "17px · 大",
   19: "19px · 特大",
-} as const;
+  22: "22px · 超大",
+};
 
-const LINE_HEIGHT_LABELS = {
-  "1.6": "1.6 · 紧凑",
-  "1.8": "1.8 · 标准",
-  "2": "2.0 · 宽松",
-} as const;
+const LINE_HEIGHT_LABELS: Record<LineHeight, string> = {
+  1.4: "1.4 · 最紧",
+  1.6: "1.6 · 紧凑",
+  1.8: "1.8 · 标准",
+  2.0: "2.0 · 宽松",
+  2.2: "2.2 · 最松",
+};
+
+const FONT_FAMILY_LABELS: Record<FontFamily, string> = {
+  book: "跟随书籍排版",
+  serif: "衬线",
+  sans: "无衬线",
+};
+
+const PAGE_MARGIN_LABELS: Record<PageMargin, string> = {
+  narrow: "窄",
+  medium: "适中",
+  wide: "宽",
+};
 
 const PAGE_FLOW_LABELS: Record<PageFlow, string> = {
   paginated: "翻页",
@@ -45,15 +72,29 @@ export function ReadingSection() {
   const lineHeight = useReadingSettings((state) => state.lineHeight);
   const paperColor = useReadingSettings((state) => state.paperColor);
   const pageFlow = useReadingSettings((state) => state.pageFlow);
+  const fontFamily = useReadingSettings((state) => state.fontFamily);
+  const pageMargin = useReadingSettings((state) => state.pageMargin);
+  const pageTurnAnimation = useReadingSettings(
+    (state) => state.pageTurnAnimation,
+  );
+  const footnotePreview = useReadingSettings((state) => state.footnotePreview);
   const setFontSize = useReadingSettings((state) => state.setFontSize);
   const setLineHeight = useReadingSettings((state) => state.setLineHeight);
   const setPaperColor = useReadingSettings((state) => state.setPaperColor);
   const setPageFlow = useReadingSettings((state) => state.setPageFlow);
+  const setFontFamily = useReadingSettings((state) => state.setFontFamily);
+  const setPageMargin = useReadingSettings((state) => state.setPageMargin);
+  const setPageTurnAnimation = useReadingSettings(
+    (state) => state.setPageTurnAnimation,
+  );
+  const setFootnotePreview = useReadingSettings(
+    (state) => state.setFootnotePreview,
+  );
   const reset = useReadingSettings((state) => state.reset);
 
   return (
-    <div className="max-w-xl">
-      <SettingRow title="正文字号" description="影响阅读页正文与预览。">
+    <div className="max-w-2xl">
+      <SettingRow title="正文字号" description="阅读页正文与预览同步变化。">
         <Select
           items={FONT_SIZE_LABELS}
           value={String(fontSize)}
@@ -62,7 +103,7 @@ export function ReadingSection() {
             if (isFontSize(next)) setFontSize(next);
           }}
         >
-          <SelectTrigger className="w-32" aria-label="正文字号">
+          <SelectTrigger className="w-36" aria-label="正文字号">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -86,13 +127,66 @@ export function ReadingSection() {
             if (isLineHeight(next)) setLineHeight(next);
           }}
         >
-          <SelectTrigger className="w-32" aria-label="行距">
+          <SelectTrigger className="w-36" aria-label="行距">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {LINE_HEIGHTS.map((height) => (
               <SelectItem key={height} value={String(height)}>
-                {LINE_HEIGHT_LABELS[String(height) as keyof typeof LINE_HEIGHT_LABELS]}
+                {LINE_HEIGHT_LABELS[height]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </SettingRow>
+
+      <Separator />
+
+      <SettingRow
+        title="字体"
+        description="使用系统字体，不额外下载字体文件；「跟随书籍排版」保留书自带字体。"
+      >
+        <Select
+          items={FONT_FAMILY_LABELS}
+          value={fontFamily}
+          onValueChange={(value) => {
+            if (typeof value === "string" && isFontFamily(value)) {
+              setFontFamily(value);
+            }
+          }}
+        >
+          <SelectTrigger className="w-40" aria-label="字体">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FONT_FAMILIES.map((value) => (
+              <SelectItem key={value} value={value}>
+                {FONT_FAMILY_LABELS[value]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </SettingRow>
+
+      <Separator />
+
+      <SettingRow title="页边距" description="正文左右留白，翻页与滚动模式都生效。">
+        <Select
+          items={PAGE_MARGIN_LABELS}
+          value={pageMargin}
+          onValueChange={(value) => {
+            if (typeof value === "string" && isPageMargin(value)) {
+              setPageMargin(value);
+            }
+          }}
+        >
+          <SelectTrigger className="w-28" aria-label="页边距">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PAGE_MARGINS.map((value) => (
+              <SelectItem key={value} value={value}>
+                {PAGE_MARGIN_LABELS[value]}
               </SelectItem>
             ))}
           </SelectContent>
@@ -103,7 +197,7 @@ export function ReadingSection() {
 
       <SettingRow
         title="阅读背景色"
-        description="正文纸色预设，仅在浅色主题下生效；深色主题维持深色背景。"
+        description="仅浅色主题下生效；深色主题维持深色背景。"
       >
         <div
           className="flex items-center gap-2"
@@ -138,7 +232,7 @@ export function ReadingSection() {
             if (typeof value === "string" && isPageFlow(value)) setPageFlow(value);
           }}
         >
-          <SelectTrigger className="w-32" aria-label="翻页方式">
+          <SelectTrigger className="w-28" aria-label="翻页方式">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -153,13 +247,51 @@ export function ReadingSection() {
 
       <Separator />
 
+      <SettingRow
+        title="翻页动画"
+        description="仅在翻页模式下，每次翻页约 150ms 淡入；滚动模式不受影响。"
+      >
+        <Switch
+          checked={pageTurnAnimation}
+          onCheckedChange={setPageTurnAnimation}
+          aria-label="翻页动画"
+        />
+      </SettingRow>
+
+      <Separator />
+
+      <SettingRow
+        title="脚注悬浮预览"
+        description="鼠标停在脚注/尾注引用上时弹出预览卡片，仅 EPUB 生效。"
+      >
+        <Switch
+          checked={footnotePreview}
+          onCheckedChange={setFootnotePreview}
+          aria-label="脚注悬浮预览"
+        />
+      </SettingRow>
+
+      <Separator />
+
       <div className="py-4">
         <p className="text-muted-foreground mb-2 text-xs">预览</p>
         <div
-          className="border-border text-card-foreground rounded-[12px] border p-5 font-serif"
-          style={{ backgroundColor: paperColor }}
+          className="border-border text-card-foreground rounded-[12px] border"
+          style={{
+            backgroundColor: paperColor,
+            paddingLeft: PAGE_MARGIN_PX[pageMargin],
+            paddingRight: PAGE_MARGIN_PX[pageMargin],
+            paddingTop: 20,
+            paddingBottom: 20,
+          }}
         >
-          <p style={{ fontSize: `${fontSize}px`, lineHeight }}>
+          <p
+            style={{
+              fontSize: `${fontSize}px`,
+              lineHeight,
+              fontFamily: FONT_FAMILY_CSS[fontFamily],
+            }}
+          >
             河道会变，岸不会。清晨五点，山口的雾还没有散，石阶被露水浸得发暗。
           </p>
         </div>
@@ -170,7 +302,7 @@ export function ReadingSection() {
       <div className="py-3">
         <Button variant="outline" size="sm" onClick={reset}>
           <RotateCcw className="size-3.5" />
-          恢复默认（15px · 1.8）
+          恢复默认
         </Button>
       </div>
     </div>

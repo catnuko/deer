@@ -51,7 +51,17 @@ import {
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore, type StoredAnnotation } from "@/store/annotationStore";
-import { useReadingSettings, type FontSize, type PageFlow, type PaperColor } from "@/store/readingSettings";
+import {
+  FONT_FAMILY_CSS,
+  PAGE_MARGIN_PX,
+  useReadingSettings,
+  type FontFamily,
+  type FontSize,
+  type LineHeight,
+  type PageFlow,
+  type PageMargin,
+  type PaperColor,
+} from "@/store/readingSettings";
 import { DEFAULT_HIGHLIGHT_COLOR } from "@/components/reader/highlightColors";
 import { getDemoBook } from "@/routes/reader/demoBook";
 import { matchTocIndex, type TocItem } from "@/routes/reader/epubToc";
@@ -122,6 +132,9 @@ export function ReaderPage() {
   const lineHeight = useReadingSettings((state) => state.lineHeight);
   const paperColor = useReadingSettings((state) => state.paperColor);
   const pageFlow = useReadingSettings((state) => state.pageFlow);
+  const fontFamily = useReadingSettings((state) => state.fontFamily);
+  const pageMargin = useReadingSettings((state) => state.pageMargin);
+  const footnotePreview = useReadingSettings((state) => state.footnotePreview);
   const setFontSize = useReadingSettings((state) => state.setFontSize);
   const setPaperColor = useReadingSettings((state) => state.setPaperColor);
   const setPageFlow = useReadingSettings((state) => state.setPageFlow);
@@ -156,14 +169,25 @@ export function ReaderPage() {
   // 脚注/尾注悬浮预览（luxlore 移植）：卡片数据与接线句柄。句柄存 ref，
   // 供卡片侧「移进卡片取消延迟收卡」与收卡时清计时器使用。
   const [notePeek, setNotePeek] = useState<NotePeekData | null>(null);
-  const noteHoverHandlesRef = useRef<NoteHoverHandle[]>([]);
+  // 每个已加载 section 的 doc 一份接线句柄：关脚注总开关时按 doc 精确断开，
+  // 重开时再用同样的 doc 重新接线（不依赖重新翻页）。
+  const noteHoverHandlesByDocRef = useRef<Map<Document, NoteHoverHandle>>(
+    new Map(),
+  );
+  const noteRuntimeRef = useRef<{
+    loadedDocs: Array<{ doc: Document; index: number }>;
+    wireDoc(doc: Document, index: number): void;
+  } | null>(null);
   const closeNotePeek = useCallback(() => {
-    for (const handle of noteHoverHandlesRef.current) handle.close();
+    for (const handle of noteHoverHandlesByDocRef.current.values()) {
+      handle.close();
+    }
     setNotePeek(null);
   }, []);
   const cancelNoteScheduledClose = useCallback(() => {
-    for (const handle of noteHoverHandlesRef.current)
+    for (const handle of noteHoverHandlesByDocRef.current.values()) {
       handle.cancelScheduledClose();
+    }
   }, []);
   // 点击已有高亮（show-annotation）弹出的编辑菜单。
   const [annotationMenu, setAnnotationMenu] = useState<
@@ -417,6 +441,8 @@ export function ReaderPage() {
     if (!shelfBook) return;
     let cancelled = false;
     let element: FoliateView | null = null;
+    // 句柄容器对象在组件生命周期内不变（只清空内容），先取出供 cleanup 使用。
+    const noteHandles = noteHoverHandlesByDocRef.current;
     lastSavedProgressRef.current = 0;
     lastPositionRef.current = { progress: 0, cfi: null };
 
@@ -424,7 +450,13 @@ export function ReaderPage() {
       const renderer = element?.renderer as StyleableRenderer | undefined;
       const settings = useReadingSettings.getState();
       renderer?.setStyles?.(
-        readingStyles(settings.fontSize, settings.lineHeight),
+        readingStyles({
+          fontSize: settings.fontSize,
+          lineHeight: settings.lineHeight,
+          fontFamilyCss: FONT_FAMILY_CSS[settings.fontFamily],
+          pageMarginPx: PAGE_MARGIN_PX[settings.pageMargin],
+          footnotePreview: settings.footnotePreview,
+        }),
       );
     };
 
@@ -441,6 +473,17 @@ export function ReaderPage() {
       setQuickSettingsOpen(false);
       setConceptMapOpen(false);
       closeNotePeek();
+      // 翻页动画：只在翻页模式且用户开启时，对容器做 150ms 淡入，
+      // 不移动分页锚点，也不改变 foliate 自己的排版。
+      const settings = useReadingSettings.getState();
+      if (settings.pageFlow === "paginated" && settings.pageTurnAnimation) {
+        const host = viewerRef.current;
+        if (host) {
+          host.classList.remove("deer-page-turn");
+          void host.offsetWidth;
+          host.classList.add("deer-page-turn");
+        }
+      }
       currentSectionRef.current = section.current;
       const fraction = clampProgress(detail.fraction as number);
       setScrollProgress(fraction);
@@ -476,13 +519,33 @@ export function ReaderPage() {
     // 不跨书复用）；接线句柄登记进组件级 ref，供卡片交互使用。
     // 仅 EPUB 接线——MOBI/FB2 的注释结构是另一套，CBZ/PDF 无此概念。
     const noteCaches = createNoteHoverCaches();
-    noteHoverHandlesRef.current = [];
+    noteHoverHandlesByDocRef.current.clear();
     const resolveHoverNote = (index: number, href: string) => {
       const book = viewRef.current?.book;
       return book
         ? resolveNote(book, index, href, noteCaches)
         : Promise.resolve(null);
     };
+    // 脚注接线：总开关关闭时不盖章不接事件；同一 doc 重新加载先断开旧句柄。
+    const wireDoc = (doc: Document, sectionIndex: number) => {
+      if (shelfBook.format !== "epub") return;
+      if (!useReadingSettings.getState().footnotePreview) return;
+      noteHoverHandlesByDocRef.current.get(doc)?.dispose();
+      const handle = wireNoteHover(doc, sectionIndex, {
+        getContainerRect: () =>
+          viewerRef.current?.getBoundingClientRect() ?? null,
+        resolve: resolveHoverNote,
+        onPeek: setNotePeek,
+        onClose: () => setNotePeek(null),
+        isCancelled: () => cancelled,
+      });
+      noteHoverHandlesByDocRef.current.set(doc, handle);
+    };
+    const noteRuntime: NonNullable<typeof noteRuntimeRef.current> = {
+      loadedDocs: [],
+      wireDoc,
+    };
+    noteRuntimeRef.current = noteRuntime;
 
     // 高亮渲染：foliate 的 addAnnotation 只发 draw-annotation 事件，
     // 颜色取注解上的 color 字段，画半透明高亮块。
@@ -589,18 +652,10 @@ export function ReaderPage() {
       });
       // 脚注/尾注悬浮预览（仅 EPUB）：与划选菜单互不干扰——mousedown 收
       // 卡片在 foliate 链接跳转前发生，划选链路不经过悬浮状态。
-      if (shelfBook.format === "epub") {
-        noteHoverHandlesRef.current.push(
-          wireNoteHover(doc, sectionIndex, {
-            getContainerRect: () =>
-              viewerRef.current?.getBoundingClientRect() ?? null,
-            resolve: resolveHoverNote,
-            onPeek: setNotePeek,
-            onClose: () => setNotePeek(null),
-            isCancelled: () => cancelled,
-          }),
-        );
+      if (!noteRuntime.loadedDocs.some((entry) => entry.doc === doc)) {
+        noteRuntime.loadedDocs.push({ doc, index: sectionIndex });
       }
+      wireDoc(doc, sectionIndex);
     };
 
     const run = async () => {
@@ -700,8 +755,9 @@ export function ReaderPage() {
       element?.removeEventListener("draw-annotation", onDrawAnnotation);
       element?.removeEventListener("show-annotation", onShowAnnotation);
       docCleanups.forEach((fn) => fn());
-      noteHoverHandlesRef.current.forEach((handle) => handle.dispose());
-      noteHoverHandlesRef.current = [];
+      noteHandles.forEach((handle) => handle.dispose());
+      noteHandles.clear();
+      noteRuntimeRef.current = null;
       element?.close();
       element?.remove();
       viewRef.current = null;
@@ -714,13 +770,42 @@ export function ReaderPage() {
     const renderer = viewRef.current?.renderer as StyleableRenderer | undefined;
     if (!renderer || realPhase.status !== "ready") return;
     renderer.setStyles?.(
-      readingStyles(
+      readingStyles({
         fontSize,
         lineHeight,
-        isDark ? undefined : paperColor,
-      ),
+        paperColor: isDark ? undefined : paperColor,
+        fontFamilyCss: FONT_FAMILY_CSS[fontFamily],
+        pageMarginPx: PAGE_MARGIN_PX[pageMargin],
+        footnotePreview,
+      }),
     );
-  }, [fontSize, lineHeight, paperColor, isDark, realPhase.status]);
+  }, [
+    fontSize,
+    lineHeight,
+    paperColor,
+    isDark,
+    fontFamily,
+    pageMargin,
+    footnotePreview,
+    realPhase.status,
+  ]);
+
+  // 脚注总开关切换：立即断开/重接当前已加载章节，不必等重新翻页。
+  useEffect(() => {
+    // 先 close（顺带收起当前卡片）再 dispose，避免总开关关闭后卡片残留。
+    const handles = noteHoverHandlesByDocRef.current;
+    for (const handle of handles.values()) {
+      handle.close();
+      handle.dispose();
+    }
+    handles.clear();
+    if (!footnotePreview) return;
+    const runtime = noteRuntimeRef.current;
+    if (!runtime) return;
+    for (const entry of runtime.loadedDocs) {
+      runtime.wireDoc(entry.doc, entry.index);
+    }
+  }, [footnotePreview]);
 
   // 纸色（M4）：::part(filter) 用 --deer-paper 覆盖 paginator 背景，
   // 设在 foliate 容器上让变量继承进去；深色主题移除，回落应用背景。
@@ -821,6 +906,8 @@ export function ReaderPage() {
       bookId={bookId}
       fontSize={fontSize}
       lineHeight={lineHeight}
+      fontFamily={fontFamily}
+      pageMargin={pageMargin}
       chatOpen={chatOpen}
       draft={draft}
       onAskSelection={askDeer}
@@ -1196,7 +1283,9 @@ function RealReader({
 type DemoReaderProps = {
   bookId: string | null;
   fontSize: number;
-  lineHeight: number;
+  lineHeight: LineHeight;
+  fontFamily: FontFamily;
+  pageMargin: PageMargin;
   chatOpen: boolean;
   draft: ChatPanelDraft | null;
   onAskSelection: (text: string) => void;
@@ -1210,6 +1299,8 @@ function DemoReader({
   bookId,
   fontSize,
   lineHeight,
+  fontFamily,
+  pageMargin,
   chatOpen,
   draft,
   onAskSelection,
@@ -1379,7 +1470,9 @@ function DemoReader({
                 <ReaderArticle
                   chapter={chapter}
                   fontSize={fontSize}
-                  lineHeight={lineHeight as 1.6 | 1.8 | 2}
+                  lineHeight={lineHeight}
+                  fontFamily={fontFamily}
+                  pageMargin={pageMargin}
                 />
               </ScrollArea>
               {selection ? (

@@ -75,14 +75,14 @@ export function QuickSettingsPanel({
 
       <section aria-label="字号" className="mb-3">
         <p className="text-muted-foreground mb-1.5 text-xs">字号</p>
-        <div className="flex gap-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
           {FONT_SIZES.map((size) => (
             <button
               key={size}
               type="button"
               aria-pressed={size === fontSize}
               className={cn(
-                "border-border text-foreground h-8 flex-1 rounded-md border text-xs",
+                "border-border text-foreground h-8 rounded-md border text-xs",
                 size === fontSize && "bg-primary text-primary-foreground border-primary",
               )}
               onClick={() => onFontSizeChange(size)}

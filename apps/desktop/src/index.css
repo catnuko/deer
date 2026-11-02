@@ -125,3 +125,17 @@
 foliate-view::part(filter) {
   background: var(--deer-paper, var(--background)) !important;
 }
+
+/* 翻页动画：只做容器淡入，不动分页定位（设置里可选，默认关闭）。 */
+@keyframes deer-page-turn {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.deer-page-turn {
+  animation: deer-page-turn 150ms ease-out;
+}
