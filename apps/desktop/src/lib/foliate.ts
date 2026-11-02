@@ -64,6 +64,19 @@ export function bookToc(book: Book): TocItem[] {
   return flattenToc((book.toc ?? []) as unknown as RawTocNode[]);
 }
 
+export type ReadingStyleOptions = {
+  fontSize: number;
+  lineHeight: number;
+  /** 传入时压掉书自带背景（护眼纸色）；不传保持书原样。 */
+  paperColor?: string;
+  /** 系统字体栈；不传（跟随书籍排版）不注入 font-family。 */
+  fontFamilyCss?: string;
+  /** 正文左右内边距（px）；不传保持书自带边距。 */
+  pageMarginPx?: number;
+  /** 脚注悬浮提示样式；关闭时不注入（同时不接线，见 ReaderPage）。 */
+  footnotePreview?: boolean;
+};
+
 /**
  * 注入正文 iframe 的阅读设置样式。foliate 把它追加在书自带 CSS 之后，
  * 用 !important 保证字号/行高不被书内样式覆盖（这是验收 3 的落点）。
@@ -72,19 +85,30 @@ export function bookToc(book: Book): TocItem[] {
  * 不传保持书原样。paginator 的视口底色由 index.css 的 ::part(filter) 规则
  * 读取同一个 --deer-paper 变量补齐，避免书页四周露出书原背景。
  */
-export function readingStyles(
-  fontSize: number,
-  lineHeight: number,
-  paperColor?: string,
-): string {
+export function readingStyles({
+  fontSize,
+  lineHeight,
+  paperColor,
+  fontFamilyCss,
+  pageMarginPx,
+  footnotePreview = true,
+}: ReadingStyleOptions): string {
   const paper = paperColor
     ? `
 html, body { background: ${paperColor} !important; }
 `
     : "";
-  return `
-${paper}html { font-size: ${fontSize}px !important; }
-body, p, div, span { line-height: ${lineHeight} !important; }
+  const fontFamily = fontFamilyCss
+    ? `body, p, div, span { font-family: ${fontFamilyCss} !important; }
+`
+    : "";
+  const pageMargin =
+    typeof pageMarginPx === "number"
+      ? `body { padding-left: ${pageMarginPx}px !important; padding-right: ${pageMarginPx}px !important; }
+`
+      : "";
+  const footnote = footnotePreview
+    ? `
 /* 脚注/尾注引用的悬浮提示：接线时盖章 data-papr-note（裸 type= 与纯上标
    形 CSS 选不到，见 noteHover.ts），help 光标 + 悬浮点状下划线。非 EPUB
    不接线不盖章，规则自然失效。 */
@@ -94,7 +118,12 @@ a[data-papr-note]:hover {
   text-decoration-style: dotted;
   text-decoration-thickness: 1px;
 }
-`;
+`
+    : "";
+  return `
+${paper}html { font-size: ${fontSize}px !important; }
+body, p, div, span { line-height: ${lineHeight} !important; }
+${fontFamily}${pageMargin}${footnote}`;
 }
 
 export type ImportedMetadata = {

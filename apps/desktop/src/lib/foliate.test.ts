@@ -84,20 +84,63 @@ describe("imageExtensionOf", () => {
 
 describe("readingStyles", () => {
   it("字号与行高都带 !important，避免被书内 CSS 覆盖", () => {
-    const css = readingStyles(19, 2);
+    const css = readingStyles({ fontSize: 19, lineHeight: 2 });
     expect(css).toContain("html { font-size: 19px !important; }");
     expect(css).toMatch(/line-height: 2 !important;/);
   });
 
   it("数值原样带入（小数行高不被截断）", () => {
-    expect(readingStyles(15, 1.6)).toContain("line-height: 1.6 !important;");
+    expect(
+      readingStyles({ fontSize: 15, lineHeight: 1.6 }),
+    ).toContain("line-height: 1.6 !important;");
   });
 
   it("传入纸色时压掉书自带的 html/body 背景，不传保持书原样", () => {
-    const withPaper = readingStyles(15, 1.8, "#c7edcc");
+    const withPaper = readingStyles({
+      fontSize: 15,
+      lineHeight: 1.8,
+      paperColor: "#c7edcc",
+    });
     expect(withPaper).toContain(
       "html, body { background: #c7edcc !important; }",
     );
-    expect(readingStyles(15, 1.8)).not.toContain("background");
+    expect(readingStyles({ fontSize: 15, lineHeight: 1.8 })).not.toContain(
+      "background",
+    );
+  });
+
+  it("字体跟随书籍时不注入 font-family，衬线/无衬线才注入系统字体栈", () => {
+    expect(
+      readingStyles({ fontSize: 15, lineHeight: 1.8 }),
+    ).not.toContain("font-family");
+    expect(
+      readingStyles({
+        fontSize: 15,
+        lineHeight: 1.8,
+        fontFamilyCss: '"Songti SC", Georgia, serif',
+      }),
+    ).toContain('font-family: "Songti SC", Georgia, serif !important;');
+  });
+
+  it("页边距按 px 注入 body 左右 padding", () => {
+    const css = readingStyles({
+      fontSize: 15,
+      lineHeight: 1.8,
+      pageMarginPx: 40,
+    });
+    expect(css).toContain("padding-left: 40px !important;");
+    expect(css).toContain("padding-right: 40px !important;");
+    expect(readingStyles({ fontSize: 15, lineHeight: 1.8 })).not.toContain(
+      "padding-left",
+    );
+  });
+
+  it("关闭脚注预览时不注入悬浮提示样式", () => {
+    expect(
+      readingStyles({ fontSize: 15, lineHeight: 1.8 }),
+    ).toContain("a[data-papr-note]");
+    expect(
+      readingStyles({ fontSize: 15, lineHeight: 1.8, footnotePreview: false }),
+    ).not.toContain("a[data-papr-note]");
   });
 });
