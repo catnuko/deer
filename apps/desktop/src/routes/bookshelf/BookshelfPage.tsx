@@ -49,6 +49,7 @@ import { BookCard } from "./BookCard";
 import { ContinueReadingCard } from "./ContinueReadingCard";
 import { continueReadingBookOf } from "./continueReading";
 import { ShelfNameDialog } from "./ShelfNameDialog";
+import { SettingsDialog } from "@/components/settings/SettingsDialog";
 
 type ShelfForm =
   | { mode: "create" }
@@ -80,6 +81,7 @@ export function BookshelfPage() {
   const [bookToDelete, setBookToDelete] = useState<Book | null>(null);
   const [shelfToDelete, setShelfToDelete] = useState<Shelf | null>(null);
   const [shelfForm, setShelfForm] = useState<ShelfForm | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -237,7 +239,7 @@ export function BookshelfPage() {
                     variant="ghost"
                     size="icon-sm"
                     aria-label="打开设置"
-                    onClick={() => navigate("/settings")}
+                    onClick={() => setSettingsOpen(true)}
                   />
                 }
               >
@@ -522,6 +524,8 @@ export function BookshelfPage() {
           onSubmit={handleSubmitShelf}
         />
       )}
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }

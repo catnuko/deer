@@ -9,8 +9,10 @@ import {
   StickyNote,
   Type,
 } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -101,6 +103,7 @@ export function ReaderToolbar({
   onSummarizeChapter,
 }: ReaderToolbarProps) {
   const navigate = useNavigate();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // 窄窗（<md）AI 组收进「更多」，避免顶栏溢出（规范 1.6）。
   const isWide = useMediaQuery("(min-width: 768px)");
 
@@ -223,10 +226,12 @@ export function ReaderToolbar({
           <ToolbarButton
             label="设置"
             icon={<Settings className="size-4" />}
-            onClick={() => navigate("/settings")}
+            onClick={() => setSettingsOpen(true)}
           />
         </div>
       </header>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </TooltipProvider>
   );
 }
