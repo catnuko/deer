@@ -85,6 +85,15 @@ html, body { background: ${paperColor} !important; }
   return `
 ${paper}html { font-size: ${fontSize}px !important; }
 body, p, div, span { line-height: ${lineHeight} !important; }
+/* 脚注/尾注引用的悬浮提示：接线时盖章 data-papr-note（裸 type= 与纯上标
+   形 CSS 选不到，见 noteHover.ts），help 光标 + 悬浮点状下划线。非 EPUB
+   不接线不盖章，规则自然失效。 */
+a[data-papr-note] { cursor: help; }
+a[data-papr-note]:hover {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+}
 `;
 }
 

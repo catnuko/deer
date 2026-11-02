@@ -17,6 +17,7 @@ import { ConceptMapPanel } from "@/components/reader/ConceptMapPanel";
 import { QuickSettingsPanel } from "@/components/reader/QuickSettingsPanel";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
+import { NotePeekCard } from "@/components/reader/NotePeekCard";
 import { SelectionPopover } from "@/components/reader/SelectionPopover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -40,6 +41,13 @@ import {
   readingStyles,
 } from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
+import {
+  createNoteHoverCaches,
+  resolveNote,
+  wireNoteHover,
+  type NoteHoverHandle,
+  type NotePeekData,
+} from "@/lib/noteHover";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore, type StoredAnnotation } from "@/store/annotationStore";
@@ -145,6 +153,18 @@ export function ReaderPage() {
     cfi: null,
   });
   const [selection, setSelection] = useState<SelectionState | null>(null);
+  // 脚注/尾注悬浮预览（luxlore 移植）：卡片数据与接线句柄。句柄存 ref，
+  // 供卡片侧「移进卡片取消延迟收卡」与收卡时清计时器使用。
+  const [notePeek, setNotePeek] = useState<NotePeekData | null>(null);
+  const noteHoverHandlesRef = useRef<NoteHoverHandle[]>([]);
+  const closeNotePeek = useCallback(() => {
+    for (const handle of noteHoverHandlesRef.current) handle.close();
+    setNotePeek(null);
+  }, []);
+  const cancelNoteScheduledClose = useCallback(() => {
+    for (const handle of noteHoverHandlesRef.current)
+      handle.cancelScheduledClose();
+  }, []);
   // 点击已有高亮（show-annotation）弹出的编辑菜单。
   const [annotationMenu, setAnnotationMenu] = useState<
     (SelectionPlacement & { annotation: StoredAnnotation }) | null
@@ -384,6 +404,7 @@ export function ReaderPage() {
     setLastBookKey(bookKey);
     setRealPhase({ status: "loading" });
     setScrollProgress(0);
+    setNotePeek(null);
   }
 
   useEffect(() => {
@@ -419,6 +440,7 @@ export function ReaderPage() {
       setAnnotationMenu(null);
       setQuickSettingsOpen(false);
       setConceptMapOpen(false);
+      closeNotePeek();
       currentSectionRef.current = section.current;
       const fraction = clampProgress(detail.fraction as number);
       setScrollProgress(fraction);
@@ -449,6 +471,18 @@ export function ReaderPage() {
     // pointerup/keyup（paginator 自己也在同一 doc 上监听 selectionchange），
     // 再从该 doc 读 Selection，坐标经 iframe → 宿主平移折算。
     const docCleanups: Array<() => void> = [];
+
+    // 脚注悬浮预览：缓存按书隔离（effect 每书一份，key 是 spine+fragment，
+    // 不跨书复用）；接线句柄登记进组件级 ref，供卡片交互使用。
+    // 仅 EPUB 接线——MOBI/FB2 的注释结构是另一套，CBZ/PDF 无此概念。
+    const noteCaches = createNoteHoverCaches();
+    noteHoverHandlesRef.current = [];
+    const resolveHoverNote = (index: number, href: string) => {
+      const book = viewRef.current?.book;
+      return book
+        ? resolveNote(book, index, href, noteCaches)
+        : Promise.resolve(null);
+    };
 
     // 高亮渲染：foliate 的 addAnnotation 只发 draw-annotation 事件，
     // 颜色取注解上的 color 字段，画半透明高亮块。
@@ -553,6 +587,20 @@ export function ReaderPage() {
         doc.removeEventListener("pointerup", sync);
         doc.removeEventListener("keyup", sync);
       });
+      // 脚注/尾注悬浮预览（仅 EPUB）：与划选菜单互不干扰——mousedown 收
+      // 卡片在 foliate 链接跳转前发生，划选链路不经过悬浮状态。
+      if (shelfBook.format === "epub") {
+        noteHoverHandlesRef.current.push(
+          wireNoteHover(doc, sectionIndex, {
+            getContainerRect: () =>
+              viewerRef.current?.getBoundingClientRect() ?? null,
+            resolve: resolveHoverNote,
+            onPeek: setNotePeek,
+            onClose: () => setNotePeek(null),
+            isCancelled: () => cancelled,
+          }),
+        );
+      }
     };
 
     const run = async () => {
@@ -652,11 +700,13 @@ export function ReaderPage() {
       element?.removeEventListener("draw-annotation", onDrawAnnotation);
       element?.removeEventListener("show-annotation", onShowAnnotation);
       docCleanups.forEach((fn) => fn());
+      noteHoverHandlesRef.current.forEach((handle) => handle.dispose());
+      noteHoverHandlesRef.current = [];
       element?.close();
       element?.remove();
       viewRef.current = null;
     };
-  }, [bookKey, targetCfi, updateBook]);
+  }, [bookKey, targetCfi, updateBook, closeNotePeek]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
   // 纸色只在浅色主题生效：深色主题传 undefined，保持深色背景。
@@ -721,6 +771,9 @@ export function ReaderPage() {
         onSelectChapter={selectRealChapter}
         onPageTurn={turnPage}
         selection={selection}
+        notePeek={notePeek}
+        onCloseNotePeek={closeNotePeek}
+        onCancelNoteScheduledClose={cancelNoteScheduledClose}
         annotationMenu={annotationMenu}
         onChangeAnnotationColor={changeAnnotationColor}
         onEditAnnotationNote={editAnnotationNote}
@@ -789,6 +842,11 @@ type RealReaderProps = {
   onSelectChapter: (item: TocItem) => void;
   onPageTurn: (direction: "next" | "prev") => void;
   selection: SelectionState | null;
+  /** 悬浮脚注/尾注卡片的数据；null 即无卡片。 */
+  notePeek: NotePeekData | null;
+  onCloseNotePeek: () => void;
+  /** 指针移进卡片时取消延迟收卡（卡片可滚动，接受指针）。 */
+  onCancelNoteScheduledClose: () => void;
   annotationMenu:
     | (SelectionPlacement & { annotation: StoredAnnotation })
     | null;
@@ -845,6 +903,9 @@ function RealReader({
   onSelectChapter,
   onPageTurn,
   selection,
+  notePeek,
+  onCloseNotePeek,
+  onCancelNoteScheduledClose,
   annotationMenu,
   onChangeAnnotationColor,
   onEditAnnotationNote,
@@ -1015,6 +1076,17 @@ function RealReader({
                   }
                   getChapterText={getChapterText}
                   onClose={onCloseConceptMap}
+                />
+              ) : null}
+              {notePeek ? (
+                <NotePeekCard
+                  key={`${notePeek.href}:${notePeek.anchor.top}`}
+                  anchor={notePeek.anchor}
+                  text={notePeek.text}
+                  type={notePeek.type}
+                  containerRef={viewerRef}
+                  onPointerEnter={onCancelNoteScheduledClose}
+                  onPointerLeave={onCloseNotePeek}
                 />
               ) : null}
               {annotationMenu ? (
