@@ -13,12 +13,8 @@ import { ArrowUp, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
-import {
-  acpxChat,
-  acpxEnvCheck,
-  isTauriRuntime,
-  type AcpxEnvStatus,
-} from "@/lib/ai/claudeBackend";
+import { acpxChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
+import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { GradientHeading } from "@/components/ui/gradient-heading";
@@ -233,31 +229,8 @@ export function ChatPanel({
   // 运行时环境整个会话不会变，取一次即可。
   const [tauri] = useState(() => isTauriRuntime());
   // acpx 环境自检结果：进入聊天即查（acpx 是唯一链路），失败只提示不拦发送
-  // （Rust 侧 acpx_chat 自带同样的检查与指引）。
-  const [envStatus, setEnvStatus] = useState<AcpxEnvStatus | null>(null);
-
-  useEffect(() => {
-    if (!tauri) return;
-    let alive = true;
-    acpxEnvCheck()
-      .then((s) => {
-        if (alive) setEnvStatus(s);
-      })
-      .catch((err) => {
-        if (alive) {
-          setEnvStatus({
-            ok: false,
-            nodeOk: false,
-            nodeVersion: null,
-            acpxVersion: null,
-            message: `acpx 环境检查失败：${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-      });
-    return () => {
-      alive = false;
-    };
-  }, [tauri]);
+  // （Rust 侧 acpx_chat 自带同样的检查与指引）。设置页共用同一份检测逻辑。
+  const { status: envStatus } = useAcpxEnvStatus(tauri);
 
   useEffect(() => {
     if (!ready) void load();
