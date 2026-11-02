@@ -36,6 +36,8 @@ export type AnnotationStore = AnnotationState & {
   setColor(id: string, color: string): void;
   setNote(id: string, note: string): void;
   remove(id: string): void;
+  /** 清空全部书的高亮与笔记（设置页「清空笔记」）。 */
+  clearAllAnnotations(): void;
 };
 
 const STORE_FILE = "annotations.json";
@@ -155,6 +157,11 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => {
         }
         return { annotations: next };
       });
+      persist();
+    },
+
+    clearAllAnnotations() {
+      set({ annotations: {} });
       persist();
     },
   };

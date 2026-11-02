@@ -135,4 +135,26 @@ describe("划选注解持久化（按书隔离，CFI 定位）", () => {
     expect(parsed.annotations["book-a"]).toHaveLength(1);
     expect(parsed.annotations["book-a"][0].note).toBe("笔记");
   });
+
+  it("clearAllAnnotations 清空所有书并落盘为空库", async () => {
+    useAnnotationStore.getState().add({
+      bookId: "book-a",
+      cfi: "epubcfi(/6/4!/4/2)",
+      color: "#FFD60A",
+    });
+    useAnnotationStore.getState().add({
+      bookId: "book-b",
+      cfi: "epubcfi(/6/8!/4/2)",
+      color: "#6FB6FF",
+      note: "第二条",
+    });
+
+    useAnnotationStore.getState().clearAllAnnotations();
+    expect(useAnnotationStore.getState().annotations).toEqual({});
+    expect(useAnnotationStore.getState().listForBook("book-a")).toHaveLength(0);
+
+    await new Promise((r) => setTimeout(r, 0));
+    const parsed = JSON.parse(memory.get("deer.annotations.v1") as string);
+    expect(parsed.annotations).toEqual({});
+  });
 });

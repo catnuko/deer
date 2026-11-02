@@ -202,6 +202,9 @@ export function ReaderPage() {
   // 章节总结用：relocate 时记录当前 spine section（TOC 的章可能跨多个 section，
   // v1 先总结当前 section，跨 section 章只总结当前一小节）。
   const currentSectionRef = useRef(0);
+  // 已画到 foliate overlayer 上的 CFI：设置页「清空笔记」后按差集移除，
+  // 让当前打开的书也不用刷新就消失。
+  const drawnAnnotationCfisRef = useRef<Set<string>>(new Set());
   // 概念地图（R2）：入口打开时记下当时的 section 作为缓存 key，
   // 面板开着时翻章不换 key（关掉重开才跟到新章）。
   const [conceptMapOpen, setConceptMapOpen] = useState(false);
@@ -304,6 +307,22 @@ export function ReaderPage() {
   const annotationsForBook = useAnnotationStore((state) =>
     bookKey ? state.annotations[bookKey] : undefined,
   );
+
+  // 切书时旧书的 CFI 不应再参与差集（不同书可能重用同一 CFI）。
+  useEffect(() => {
+    drawnAnnotationCfisRef.current.clear();
+  }, [bookKey]);
+
+  // 注解被删除或整库清空时，把已渲染的高亮/纹理从 foliate 上摘掉。
+  useEffect(() => {
+    const view = viewRef.current;
+    const cfis = new Set((annotationsForBook ?? []).map((a) => a.cfi));
+    for (const cfi of [...drawnAnnotationCfisRef.current]) {
+      if (cfis.has(cfi)) continue;
+      drawnAnnotationCfisRef.current.delete(cfi);
+      void view?.deleteAnnotation({ value: cfi }).catch(() => undefined);
+    }
+  }, [annotationsForBook]);
 
   const deleteAnnotationById = useCallback(
     (id: string) => {
@@ -566,6 +585,9 @@ export function ReaderPage() {
       for (const a of useAnnotationStore.getState().listForBook(shelfBook.id)) {
         void view
           .addAnnotation({ value: a.cfi, color: a.color, note: a.note })
+          .then(() => {
+            drawnAnnotationCfisRef.current.add(a.cfi);
+          })
           .catch(() => undefined);
       }
     };
