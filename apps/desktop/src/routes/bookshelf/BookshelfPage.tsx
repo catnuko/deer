@@ -267,7 +267,7 @@ export function BookshelfPage() {
       />
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <section className="flex min-w-0 flex-1 flex-col">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="border-border flex flex-wrap items-center gap-3 border-b px-6 py-3">
             <DropdownMenu>
               <DropdownMenuTrigger
