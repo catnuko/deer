@@ -1,7 +1,9 @@
 import { useState } from "react";
 import {
   BookOpenText,
+  Database,
   Info,
+  Keyboard,
   Palette,
   SlidersHorizontal,
   Sparkles,
@@ -20,10 +22,19 @@ import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 import { AboutSection } from "./AboutSection";
 import { AiSection } from "./AiSection";
 import { AppearanceSection } from "./AppearanceSection";
+import { DataSection } from "./DataSection";
 import { GeneralSection } from "./GeneralSection";
 import { ReadingSection } from "./ReadingSection";
+import { ShortcutsSection } from "./ShortcutsSection";
 
-type SettingsSection = "general" | "appearance" | "reading" | "ai" | "about";
+type SettingsSection =
+  | "general"
+  | "appearance"
+  | "reading"
+  | "ai"
+  | "data"
+  | "shortcuts"
+  | "about";
 
 const SECTIONS: Array<{
   id: SettingsSection;
@@ -34,6 +45,8 @@ const SECTIONS: Array<{
   { id: "appearance", label: "外观", icon: Palette },
   { id: "reading", label: "阅读", icon: BookOpenText },
   { id: "ai", label: "AI 伴读", icon: Sparkles },
+  { id: "data", label: "数据", icon: Database },
+  { id: "shortcuts", label: "快捷键", icon: Keyboard },
   { id: "about", label: "关于", icon: Info },
 ];
 
@@ -109,6 +122,8 @@ export function SettingsDialog() {
               {section === "appearance" ? <AppearanceSection /> : null}
               {section === "reading" ? <ReadingSection /> : null}
               {section === "ai" ? <AiSection /> : null}
+              {section === "data" ? <DataSection /> : null}
+              {section === "shortcuts" ? <ShortcutsSection /> : null}
               {section === "about" ? <AboutSection /> : null}
             </div>
           </div>
