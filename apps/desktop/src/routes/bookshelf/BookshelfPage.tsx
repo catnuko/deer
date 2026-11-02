@@ -401,7 +401,7 @@ export function BookshelfPage() {
             </div>
           )}
 
-          <div className="min-h-0 flex-1 overflow-auto px-6 pt-5 pb-24">
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24">
             {isReady && continueReading ? (
               <div className="mb-5 max-w-xl">
                 <ContinueReadingCard
@@ -540,7 +540,7 @@ function EmptyState({
   onImport(): void;
 }) {
   return (
-    <div className="border-border text-muted-foreground flex h-full min-h-[320px] flex-col items-center justify-center gap-3 rounded-lg border border-dashed text-center">
+    <div className="border-border text-muted-foreground my-auto flex min-h-[320px] flex-col items-center justify-center gap-3 rounded-lg border border-dashed text-center">
       <Library className="text-muted-foreground/60 size-8" />
       {hasAnyBook ? (
         <>
