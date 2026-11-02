@@ -1,59 +1,117 @@
 import { useState } from "react";
 import {
+  BookOpenText,
+  Info,
+  Palette,
+  SlidersHorizontal,
+  Sparkles,
+  type LucideIcon,
+} from "lucide-react";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
+import { useMediaQuery } from "@/lib/useMediaQuery";
+import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 import { AboutSection } from "./AboutSection";
+import { AiSection } from "./AiSection";
 import { AppearanceSection } from "./AppearanceSection";
+import { GeneralSection } from "./GeneralSection";
 import { ReadingSection } from "./ReadingSection";
 
-type SettingsTab = "appearance" | "reading" | "about";
+type SettingsSection = "general" | "appearance" | "reading" | "ai" | "about";
 
-type SettingsDialogProps = {
-  open: boolean;
-  onOpenChange(open: boolean): void;
-};
+const SECTIONS: Array<{
+  id: SettingsSection;
+  label: string;
+  icon: LucideIcon;
+}> = [
+  { id: "general", label: "通用", icon: SlidersHorizontal },
+  { id: "appearance", label: "外观", icon: Palette },
+  { id: "reading", label: "阅读", icon: BookOpenText },
+  { id: "ai", label: "AI 伴读", icon: Sparkles },
+  { id: "about", label: "关于", icon: Info },
+];
 
-/** 设置弹窗：书架与阅读页共用，点遮罩、Esc 或右上角 × 关闭。 */
-export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
-  const [tab, setTab] = useState<SettingsTab>("appearance");
+const NARROW_MEDIA_QUERY = "(min-width: 820px)";
+/** 视口不够放 900×640 时退回 94vw×86vh，避免小窗溢出。 */
+const ROOMY_MEDIA_QUERY = "(min-width: 960px)";
+
+/**
+ * 设置弹窗：固定尺寸左右布局，当前分组只影响右栏内容。
+ * 外框、标题与尺寸在切换分组时完全不变；窄窗（<820px）退化为顶部分段 + 单栏。
+ */
+export function SettingsDialog() {
+  const open = useSettingsDialogStore((state) => state.open);
+  const setOpen = useSettingsDialogStore((state) => state.setOpen);
+  const [section, setSection] = useState<SettingsSection>("general");
+  const wide = useMediaQuery(NARROW_MEDIA_QUERY);
+  const roomy = useMediaQuery(ROOMY_MEDIA_QUERY);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] flex-col gap-4 overflow-hidden sm:max-w-2xl">
-        <DialogHeader>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent
+        className={cn(
+          "flex h-[86vh] w-[94vw] max-w-[94vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[900px]",
+          roomy && "h-[640px] w-[900px] max-w-[900px]",
+        )}
+      >
+        <DialogHeader className="border-border shrink-0 border-b px-6 py-4 pr-14">
           <DialogTitle>设置</DialogTitle>
           <DialogDescription>
             外观、阅读偏好与本地数据，全部保存在本机。
           </DialogDescription>
         </DialogHeader>
 
-        <div className="-mx-1 min-h-0 flex-1 overflow-auto px-1">
-          <Tabs
-            value={tab}
-            onValueChange={(value) => setTab(value as SettingsTab)}
-            className="flex flex-col"
+        <div className={cn("flex min-h-0 flex-1", !wide && "flex-col")}>
+          <nav
+            aria-label="设置分组"
+            className={cn(
+              "shrink-0",
+              wide
+                ? "border-border w-52 overflow-y-auto border-r p-3"
+                : "border-border flex gap-1 overflow-x-auto border-b px-3 py-2",
+            )}
           >
-            <TabsList variant="line">
-              <TabsTrigger value="appearance">外观</TabsTrigger>
-              <TabsTrigger value="reading">阅读</TabsTrigger>
-              <TabsTrigger value="about">关于</TabsTrigger>
-            </TabsList>
+            {SECTIONS.map((item) => {
+              const Icon = item.icon;
+              const active = section === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => setSection(item.id)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md text-sm transition-colors",
+                    wide
+                      ? "mb-0.5 w-full px-3 py-2 text-left"
+                      : "shrink-0 px-3 py-1.5",
+                    active
+                      ? "bg-muted text-foreground font-medium"
+                      : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-4 shrink-0" />
+                  <span className="whitespace-nowrap">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
 
-            <TabsContent value="appearance" className="pt-4">
-              <AppearanceSection />
-            </TabsContent>
-            <TabsContent value="reading" className="pt-4">
-              <ReadingSection />
-            </TabsContent>
-            <TabsContent value="about" className="pt-4">
-              <AboutSection />
-            </TabsContent>
-          </Tabs>
+          <div className="min-h-0 flex-1 overflow-y-auto p-6">
+            <div className="border-border bg-card text-card-foreground rounded-xl border p-4">
+              {section === "general" ? <GeneralSection /> : null}
+              {section === "appearance" ? <AppearanceSection /> : null}
+              {section === "reading" ? <ReadingSection /> : null}
+              {section === "ai" ? <AiSection /> : null}
+              {section === "about" ? <AboutSection /> : null}
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

@@ -1,72 +1,72 @@
-import { Separator } from "@/components/ui/separator";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { SettingRow } from "@/components/settings/SettingRow";
+import { Monitor, Moon, Sun } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useReadingSettings } from "@/store/readingSettings";
-import {
-  resolveTheme,
-  systemPrefersDark,
-  type ReadingTheme,
-} from "@/lib/theme";
+import type { ReadingTheme } from "@/lib/theme";
 
-const THEME_LABELS: Record<"light" | "dark", string> = {
-  light: "浅色",
-  dark: "深色",
-};
+const THEME_OPTIONS: Array<{
+  value: ReadingTheme;
+  label: string;
+  description: string;
+  icon: typeof Monitor;
+}> = [
+  {
+    value: "system",
+    label: "跟随系统",
+    description: "随系统浅色 / 深色自动切换",
+    icon: Monitor,
+  },
+  { value: "light", label: "浅色", description: "始终使用浅色界面", icon: Sun },
+  { value: "dark", label: "深色", description: "始终使用深色界面", icon: Moon },
+];
 
 export function AppearanceSection() {
   const theme = useReadingSettings((state) => state.theme);
   const setTheme = useReadingSettings((state) => state.setTheme);
 
-  const followSystem = theme === "system";
-  // 跟随系统时显示实际生效的明暗，关掉开关就从当前观感继续。
-  const currentTheme = resolveTheme(theme, systemPrefersDark());
-
   return (
-    <div className="max-w-xl">
-      <SettingRow
-        title="跟随系统外观"
-        description="开启后随系统浅色 / 深色设置自动切换，关闭则手动选择。"
+    <div className="space-y-4">
+      <div>
+        <p className="text-sm font-medium">主题</p>
+        <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
+          立即作用于整个应用（侧栏、书架、阅读页）。
+        </p>
+      </div>
+
+      <div
+        role="radiogroup"
+        aria-label="主题"
+        className="grid max-w-xl grid-cols-3 gap-2"
       >
-        <Switch
-          checked={followSystem}
-          onCheckedChange={(checked) =>
-            setTheme(checked ? "system" : currentTheme)
-          }
-          aria-label="跟随系统外观"
-        />
-      </SettingRow>
-
-      <Separator />
-
-      <SettingRow title="主题" description="关闭「跟随系统」后可手动指定。">
-        <Select
-          items={THEME_LABELS}
-          value={currentTheme}
-          disabled={followSystem}
-          onValueChange={(value) => setTheme(value as ReadingTheme)}
-        >
-          <SelectTrigger className="w-32" aria-label="主题">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="light">{THEME_LABELS.light}</SelectItem>
-            <SelectItem value="dark">{THEME_LABELS.dark}</SelectItem>
-          </SelectContent>
-        </Select>
-      </SettingRow>
-
-      <Separator />
-
-      <p className="text-muted-foreground py-3 text-xs leading-relaxed">
-        主题切换立即生效，并会作用于整个应用（侧栏、书架、阅读页）。
-      </p>
+        {THEME_OPTIONS.map((option) => {
+          const Icon = option.icon;
+          const active = theme === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => setTheme(option.value)}
+              className={cn(
+                "border-border bg-background flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-colors",
+                "hover:bg-muted/60",
+                active && "border-primary bg-primary/5 ring-primary/30 ring-1",
+              )}
+            >
+              <Icon
+                className={cn(
+                  "size-4",
+                  active ? "text-primary" : "text-muted-foreground",
+                )}
+              />
+              <span className="text-sm font-medium">{option.label}</span>
+              <span className="text-muted-foreground text-xs leading-relaxed">
+                {option.description}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

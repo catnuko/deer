@@ -45,15 +45,20 @@ import { isTauri } from "@/lib/platform";
 import type { Book, Shelf } from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { useAIPanelStore } from "@/store/aiPanelStore";
+import { useAppSettings } from "@/store/appSettings";
+import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 import { BookCard } from "./BookCard";
 import { ContinueReadingCard } from "./ContinueReadingCard";
 import { continueReadingBookOf } from "./continueReading";
+import { sortBooks } from "./sortBooks";
 import { ShelfNameDialog } from "./ShelfNameDialog";
-import { SettingsDialog } from "@/components/settings/SettingsDialog";
 
 type ShelfForm =
   | { mode: "create" }
   | { mode: "rename"; shelf: Shelf };
+
+/** 冷启动「继续上次阅读」每个进程只处理一次；从阅读页返回书架不再跳。 */
+let startupContinueHandled = false;
 
 export function BookshelfPage() {
   const navigate = useNavigate();
@@ -81,7 +86,6 @@ export function BookshelfPage() {
   const [bookToDelete, setBookToDelete] = useState<Book | null>(null);
   const [shelfToDelete, setShelfToDelete] = useState<Shelf | null>(null);
   const [shelfForm, setShelfForm] = useState<ShelfForm | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -99,13 +103,16 @@ export function BookshelfPage() {
       ? activeShelfId
       : null;
 
-  const visibleBooks = useMemo(
-    () =>
-      effectiveShelfId
-        ? books.filter((book) => book.shelfIds.includes(effectiveShelfId))
-        : books,
-    [books, effectiveShelfId],
-  );
+  const bookshelfSort = useAppSettings((state) => state.bookshelfSort);
+  const startupView = useAppSettings((state) => state.startupView);
+  const openSettings = useSettingsDialogStore((state) => state.openDialog);
+
+  const visibleBooks = useMemo(() => {
+    const filtered = effectiveShelfId
+      ? books.filter((book) => book.shelfIds.includes(effectiveShelfId))
+      : books;
+    return sortBooks(filtered, bookshelfSort);
+  }, [books, effectiveShelfId, bookshelfSort]);
 
   const activeShelf =
     shelves.find((shelf) => shelf.id === effectiveShelfId) ?? null;
@@ -117,6 +124,20 @@ export function BookshelfPage() {
     () => (isReady ? continueReadingBookOf(books) : null),
     [books, isReady],
   );
+
+  // 冷启动直达上次阅读：只在进程内第一次书架就绪时判定一次，
+  // 返回书架不得再跳；没有阅读位置时照常落在书架。
+  useEffect(() => {
+    if (!isReady || preview || startupContinueHandled) return;
+    startupContinueHandled = true;
+    if (startupView !== "continue") return;
+    const target = continueReadingBookOf(books);
+    if (!target?.lastLocationCfi) return;
+    navigate(
+      `/reader?book=${encodeURIComponent(target.id)}&cfi=${encodeURIComponent(target.lastLocationCfi)}`,
+      { replace: true },
+    );
+  }, [books, isReady, navigate, preview, startupView]);
 
   function requireDesktop(): boolean {
     if (preview || !isTauri()) {
@@ -239,7 +260,7 @@ export function BookshelfPage() {
                     variant="ghost"
                     size="icon-sm"
                     aria-label="打开设置"
-                    onClick={() => setSettingsOpen(true)}
+                    onClick={openSettings}
                   />
                 }
               >
@@ -524,8 +545,6 @@ export function BookshelfPage() {
           onSubmit={handleSubmitShelf}
         />
       )}
-
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }
