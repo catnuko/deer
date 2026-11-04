@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -451,17 +451,23 @@ export function BookshelfPage() {
               />
             ) : (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-4">
-                {visibleBooks.map((book) => (
-                  <BookCard
+                {visibleBooks.map((book, index) => (
+                  <div
                     key={book.id}
-                    book={book}
-                    shelves={shelves}
-                    onOpen={(target) =>
-                      navigate(`/reader?book=${encodeURIComponent(target.id)}`)
-                    }
-                    onToggleShelf={handleToggleShelf}
-                    onDelete={setBookToDelete}
-                  />
+                    className="deer-list-item min-w-0"
+                    // 前 12 项 40ms 错峰，第 13 项起延迟固定为 0（motion.md M4）。
+                    style={{ "--deer-index": Math.min(index, 12) } as CSSProperties}
+                  >
+                    <BookCard
+                      book={book}
+                      shelves={shelves}
+                      onOpen={(target) =>
+                        navigate(`/reader?book=${encodeURIComponent(target.id)}`)
+                      }
+                      onToggleShelf={handleToggleShelf}
+                      onDelete={setBookToDelete}
+                    />
+                  </div>
                 ))}
               </div>
             )}

@@ -269,6 +269,23 @@ foliate-view::part(filter) {
   animation: deer-content-fade-in var(--transition-duration-fast) var(--ease-enter);
 }
 
+/* 书架列表入场：200ms + 2px，前 12 项按 40ms 错峰。 */
+@keyframes deer-list-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.deer-list-item {
+  animation: deer-list-item-in var(--transition-duration-base) var(--ease-enter) both;
+  animation-delay: calc(var(--deer-index, 0) * var(--motion-stagger));
+}
+
 /* 主题切换：有 View Transition 时走原生伪元素，否则只过渡 body 底色与文字。 */
 ::view-transition-old(root),
 ::view-transition-new(root) {
