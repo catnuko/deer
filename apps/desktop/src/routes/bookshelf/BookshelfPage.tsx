@@ -422,9 +422,9 @@ export function BookshelfPage() {
             </div>
           )}
 
-          {/* scrollbar-gutter:stable：面板开合会改变本列宽度，预留滚动条位置，
-              避免纵向滚动条出现/消失再补一次横向位移（macOS 覆盖式滚动条下为 0）。 */}
-          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24 [scrollbar-gutter:stable]">
+          {/* AI 面板改为覆盖式抽屉后本列宽度恒定，滚动条不会随开合出现/消失，
+              之前为消重排加的 scrollbar-gutter 已无必要（会恒占 15px）。 */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24">
             {isReady && continueReading ? (
               <div className="mb-5 max-w-xl">
                 <ContinueReadingCard

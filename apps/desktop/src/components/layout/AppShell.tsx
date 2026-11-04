@@ -17,7 +17,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
   }, []);
 
   return (
-    <div className="bg-background text-foreground flex h-screen w-full overflow-hidden">
+    <div className="bg-background text-foreground relative flex h-screen w-full overflow-hidden">
       <main className="min-w-0 flex-1 overflow-auto">
         <Outlet />
       </main>

@@ -8,8 +8,16 @@ import { useAIPanelStore } from "@/store/aiPanelStore";
 
 // 面板本体另有测试；这里只验挂载/摘除时序，用轻量替身把 onExited 暴露成按钮。
 vi.mock("@/components/ai/ChatPanel", () => ({
-  ChatPanel: ({ open, onExited }: { open?: boolean; onExited?: () => void }) => (
-    <div data-testid="chat-panel" data-open={String(open)}>
+  ChatPanel: ({
+    open,
+    onExited,
+    className,
+  }: {
+    open?: boolean;
+    onExited?: () => void;
+    className?: string;
+  }) => (
+    <div data-testid="chat-panel" data-open={String(open)} className={className}>
       <button onClick={onExited}>退场结束</button>
     </div>
   ),
@@ -36,6 +44,19 @@ describe("AIPanelLauncher", () => {
 
     setPanelOpen(true);
     expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-open", "true");
+  });
+
+  it("书架页面板是覆盖式抽屉：绝对定位在右侧，不占主区布局宽度", () => {
+    render(
+      <MemoryRouter initialEntries={["/bookshelf"]}>
+        <AIPanelLauncher />
+      </MemoryRouter>,
+    );
+    setPanelOpen(true);
+    const panel = screen.getByTestId("chat-panel");
+    expect(panel.className).toContain("absolute");
+    expect(panel.className).toContain("inset-y-0");
+    expect(panel.className).toContain("right-0");
   });
 
   it("关闭后仍留在树上等退场动画，onExited 后才摘除", () => {
