@@ -289,6 +289,33 @@ foliate-view::part(filter) {
   animation: deer-pop-in-below var(--transition-duration-fast) var(--ease-enter);
 }
 
+/* 脚注预览卡：原地淡入淡出，无位移（motion.md M2，catnuko 真机反馈）。 */
+@keyframes deer-peek-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes deer-peek-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.deer-peek-in {
+  animation: deer-peek-in var(--transition-duration-fast) var(--ease-enter) both;
+}
+
+.deer-peek-out {
+  animation: deer-peek-out var(--transition-duration-fast) var(--ease-exit) both;
+}
+
 /* 布局内面板（AI 侧栏、目录 dock）：宽度瞬时到位，只有内容 120ms 淡入。 */
 @keyframes deer-content-fade-in {
   from {

@@ -17,7 +17,10 @@ import { ConceptMapPanel } from "@/components/reader/ConceptMapPanel";
 import { QuickSettingsPanel } from "@/components/reader/QuickSettingsPanel";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
-import { NotePeekCard } from "@/components/reader/NotePeekCard";
+import {
+  NotePeekCard,
+  NOTE_PEEK_EXIT_MS,
+} from "@/components/reader/NotePeekCard";
 import { SelectionPopover } from "@/components/reader/SelectionPopover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -212,17 +215,50 @@ export function ReaderPage() {
     loadedDocs: Array<{ doc: Document; index: number }>;
     wireDoc(doc: Document, index: number): void;
   } | null>(null);
+  // 卡片退出做 120ms 原地淡出（motion.md M2）：先标记 closing，播完再摘节点。
+  const [notePeekClosing, setNotePeekClosing] = useState(false);
+  const notePeekCloseTimerRef = useRef(0);
+  const notePeekClosingRef = useRef(false);
+  const cancelNotePeekClose = useCallback(() => {
+    window.clearTimeout(notePeekCloseTimerRef.current);
+    notePeekCloseTimerRef.current = 0;
+    notePeekClosingRef.current = false;
+    setNotePeekClosing(false);
+  }, []);
+  const showNotePeek = useCallback(
+    (peek: NotePeekData) => {
+      cancelNotePeekClose();
+      setNotePeek(peek);
+    },
+    [cancelNotePeekClose],
+  );
+  const fadeNotePeek = useCallback(() => {
+    if (notePeekClosingRef.current) return;
+    notePeekClosingRef.current = true;
+    setNotePeekClosing(true);
+    const ms = prefersReducedMotion() ? 0 : NOTE_PEEK_EXIT_MS;
+    notePeekCloseTimerRef.current = window.setTimeout(() => {
+      notePeekCloseTimerRef.current = 0;
+      notePeekClosingRef.current = false;
+      setNotePeek(null);
+      setNotePeekClosing(false);
+    }, ms);
+  }, []);
   const closeNotePeek = useCallback(() => {
     for (const handle of noteHoverHandlesByDocRef.current.values()) {
       handle.close();
     }
+    cancelNotePeekClose();
     setNotePeek(null);
-  }, []);
+  }, [cancelNotePeekClose]);
   const cancelNoteScheduledClose = useCallback(() => {
     for (const handle of noteHoverHandlesByDocRef.current.values()) {
       handle.cancelScheduledClose();
     }
-  }, []);
+    // 指针回到卡片或引用也算「取消退出」。
+    cancelNotePeekClose();
+  }, [cancelNotePeekClose]);
+  useEffect(() => () => window.clearTimeout(notePeekCloseTimerRef.current), []);
   // 点击已有高亮（show-annotation）弹出的编辑菜单。
   const [annotationMenu, setAnnotationMenu] = useState<
     (SelectionPlacement & { annotation: StoredAnnotation }) | null
@@ -525,7 +561,9 @@ const copyAnnotationText = useCallback((text: string) => {
     setLastBookKey(bookKey);
     setRealPhase({ status: "loading" });
     setScrollProgress(0);
+    // 渲染期不碰 ref（定时器回调再触发时本就只会写 null），只复位可见状态。
     setNotePeek(null);
+    setNotePeekClosing(false);
     setConceptMapOpen(false);
     setConceptMapChapterKey(null);
   }
@@ -703,8 +741,8 @@ const copyAnnotationText = useCallback((text: string) => {
         getContainerRect: () =>
           viewerRef.current?.getBoundingClientRect() ?? null,
         resolve: resolveHoverNote,
-        onPeek: setNotePeek,
-        onClose: () => setNotePeek(null),
+        onPeek: showNotePeek,
+        onClose: fadeNotePeek,
         isCancelled: () => cancelled,
       });
       noteHoverHandlesByDocRef.current.set(doc, handle);
@@ -937,7 +975,15 @@ const copyAnnotationText = useCallback((text: string) => {
       element?.remove();
       viewRef.current = null;
     };
-  }, [bookKey, targetCfi, updateBook, closeNotePeek, turnPage]);
+  }, [
+    bookKey,
+    targetCfi,
+    updateBook,
+    closeNotePeek,
+    showNotePeek,
+    fadeNotePeek,
+    turnPage,
+  ]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
   // 纸色只在浅色主题生效：深色主题传 undefined，保持深色背景。
@@ -1041,6 +1087,7 @@ const copyAnnotationText = useCallback((text: string) => {
         onPageTurn={turnPage}
         selection={selection}
         notePeek={notePeek}
+        notePeekClosing={notePeekClosing}
         onCloseNotePeek={closeNotePeek}
         onCancelNoteScheduledClose={cancelNoteScheduledClose}
         annotationMenu={annotationMenu}
@@ -1117,6 +1164,8 @@ type RealReaderProps = {
   selection: SelectionState | null;
   /** 悬浮脚注/尾注卡片的数据；null 即无卡片。 */
   notePeek: NotePeekData | null;
+  /** 卡片正在 120ms 淡出，播完由父级摘除。 */
+  notePeekClosing: boolean;
   onCloseNotePeek: () => void;
   /** 指针移进卡片时取消延迟收卡（卡片可滚动，接受指针）。 */
   onCancelNoteScheduledClose: () => void;
@@ -1180,6 +1229,7 @@ function RealReader({
   onPageTurn,
   selection,
   notePeek,
+  notePeekClosing,
   onCloseNotePeek,
   onCancelNoteScheduledClose,
   annotationMenu,
@@ -1382,6 +1432,7 @@ function RealReader({
                   text={notePeek.text}
                   type={notePeek.type}
                   containerRef={viewerRef}
+                  closing={notePeekClosing}
                   onPointerEnter={onCancelNoteScheduledClose}
                   onPointerLeave={onCloseNotePeek}
                 />

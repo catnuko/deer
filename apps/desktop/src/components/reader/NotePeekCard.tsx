@@ -6,6 +6,9 @@ import {
 } from "@/lib/bookNotes";
 import { cn } from "@/lib/utils";
 
+/** 淡出时长（motion.md M2）；父级据此决定何时摘除节点。 */
+export const NOTE_PEEK_EXIT_MS = 120;
+
 /** 卡片意图宽度；整体同时被容器宽度约束。 */
 const NOTE_CARD_WIDTH = 340;
 /** 未测量前的高度估计，只用于首帧定位。 */
@@ -35,6 +38,7 @@ export function NotePeekCard({
   text,
   type,
   containerRef,
+  closing = false,
   onPointerEnter,
   onPointerLeave,
 }: {
@@ -42,6 +46,8 @@ export function NotePeekCard({
   text: string;
   type: NoteType | null;
   containerRef: React.RefObject<HTMLElement | null>;
+  /** 正在淡出：父级在 120ms 后摘除节点。 */
+  closing?: boolean;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
 }) {
@@ -86,8 +92,12 @@ export function NotePeekCard({
       data-testid="note-peek-card"
       className={cn(
         "border-border bg-background absolute z-20 rounded-lg border p-3 shadow-md",
-        // 朝锚点方向 4px 进入（motion.md M2）；退出即时，不做 presence。
-        placed.above ? "deer-pop-in-above" : "deer-pop-in-below",
+        // 原地淡入淡出，无位移（motion.md M2）；退出期间不再接受指针。
+        closing
+          ? "deer-peek-out pointer-events-none"
+          : measured
+            ? "deer-peek-in"
+            : null,
       )}
       style={{
         left: placed.left,
