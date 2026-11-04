@@ -144,10 +144,10 @@ foliate-view::part(filter) {
   background: var(--deer-paper, var(--background)) !important;
 }
 
-/* 翻页动画：只做容器淡入，不动分页定位（设置里可选，默认关闭）。 */
+/* 翻页淡入档：只做容器淡入，不动分页定位（M1 三档里的「淡入」）。 */
 @keyframes deer-page-turn {
   from {
-    opacity: 0.35;
+    opacity: 0.4;
   }
   to {
     opacity: 1;
@@ -155,7 +155,7 @@ foliate-view::part(filter) {
 }
 
 .deer-page-turn {
-  animation: deer-page-turn 150ms ease-out;
+  animation: deer-page-turn var(--transition-duration-exit) var(--ease-enter);
 }
 
 /* 系统「减少动态效果」（motion.md §4）：时长归零但保留 0.01ms，

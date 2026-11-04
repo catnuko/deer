@@ -26,6 +26,11 @@ export const PAGE_FLOWS = ["paginated", "scrolled"] as const;
 export type PageFlow = (typeof PAGE_FLOWS)[number];
 export const PAGE_FLOW_DEFAULT: PageFlow = "paginated";
 
+/** 翻页动效三档（motion.md §3.1）：关 / 淡入 / 滑动，默认滑动。 */
+export const PAGE_TURN_MODES = ["off", "fade", "slide"] as const;
+export type PageTurnMode = (typeof PAGE_TURN_MODES)[number];
+export const PAGE_TURN_DEFAULT: PageTurnMode = "slide";
+
 /**
  * 正文字体：book 跟随书籍自带排版，不注入 font-family；
  * serif / sans 只用系统字体，不打包字体文件。
@@ -57,7 +62,7 @@ export type ReadingSettings = {
   pageFlow: PageFlow;
   fontFamily: FontFamily;
   pageMargin: PageMargin;
-  pageTurnAnimation: boolean;
+  pageTurn: PageTurnMode;
   footnotePreview: boolean;
 };
 
@@ -70,7 +75,7 @@ export const DEFAULT_READING_SETTINGS: ReadingSettings = {
   pageFlow: PAGE_FLOW_DEFAULT,
   fontFamily: FONT_FAMILY_DEFAULT,
   pageMargin: PAGE_MARGIN_DEFAULT,
-  pageTurnAnimation: false,
+  pageTurn: PAGE_TURN_DEFAULT,
   footnotePreview: true,
 };
 
@@ -90,6 +95,10 @@ export function isPaperColor(value: string): value is PaperColor {
 
 export function isPageFlow(value: string): value is PageFlow {
   return (PAGE_FLOWS as readonly string[]).includes(value);
+}
+
+export function isPageTurn(value: string): value is PageTurnMode {
+  return (PAGE_TURN_MODES as readonly string[]).includes(value);
 }
 
 export function isFontFamily(value: string): value is FontFamily {
@@ -112,7 +121,7 @@ type ReadingSettingsStore = ReadingSettings & {
   setPageFlow(pageFlow: PageFlow): void;
   setFontFamily(fontFamily: FontFamily): void;
   setPageMargin(pageMargin: PageMargin): void;
-  setPageTurnAnimation(pageTurnAnimation: boolean): void;
+  setPageTurn(pageTurn: PageTurnMode): void;
   setFootnotePreview(footnotePreview: boolean): void;
   reset(): void;
 };
@@ -135,13 +144,13 @@ export const useReadingSettings = create<ReadingSettingsStore>()(
       setPageFlow: (pageFlow) => set({ pageFlow }),
       setFontFamily: (fontFamily) => set({ fontFamily }),
       setPageMargin: (pageMargin) => set({ pageMargin }),
-      setPageTurnAnimation: (pageTurnAnimation) => set({ pageTurnAnimation }),
+      setPageTurn: (pageTurn) => set({ pageTurn }),
       setFootnotePreview: (footnotePreview) => set({ footnotePreview }),
       reset: () => set({ ...DEFAULT_READING_SETTINGS }),
     }),
     {
       name: "deer-reading-settings",
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() =>
         typeof window === "undefined" ? memoryStorage : window.localStorage,
       ),
@@ -153,7 +162,7 @@ export const useReadingSettings = create<ReadingSettingsStore>()(
         pageFlow,
         fontFamily,
         pageMargin,
-        pageTurnAnimation,
+        pageTurn,
         footnotePreview,
       }) => ({
         fontSize,
@@ -163,13 +172,16 @@ export const useReadingSettings = create<ReadingSettingsStore>()(
         pageFlow,
         fontFamily,
         pageMargin,
-        pageTurnAnimation,
+        pageTurn,
         footnotePreview,
       }),
-      // v1 没有纸色/翻页方式，v2 没有字体/页边距/动画/脚注开关；
+      // v1 没有纸色/翻页方式，v2 没有字体/页边距/动画/脚注开关，
+      // v4 把布尔翻页动画换成三档。
       // 任何非法或缺失值一律回落默认，合法旧值全部保留。
       migrate: (persisted) => {
-        const state = (persisted ?? {}) as Record<string, unknown>;
+        const state = { ...(persisted ?? {}) } as Record<string, unknown>;
+        // 旧布尔值 pageTurnAnimation（true/false）按拍板一律迁到「滑动」。
+        delete state.pageTurnAnimation;
         return {
           ...state,
           fontSize:
@@ -204,10 +216,10 @@ export const useReadingSettings = create<ReadingSettingsStore>()(
             isPageMargin(state.pageMargin)
               ? state.pageMargin
               : PAGE_MARGIN_DEFAULT,
-          pageTurnAnimation:
-            typeof state.pageTurnAnimation === "boolean"
-              ? state.pageTurnAnimation
-              : DEFAULT_READING_SETTINGS.pageTurnAnimation,
+          pageTurn:
+            typeof state.pageTurn === "string" && isPageTurn(state.pageTurn)
+              ? state.pageTurn
+              : PAGE_TURN_DEFAULT,
           footnotePreview:
             typeof state.footnotePreview === "boolean"
               ? state.footnotePreview

@@ -50,6 +50,10 @@ import {
   type NotePeekData,
 } from "@/lib/noteHover";
 import { useMediaQuery } from "@/lib/useMediaQuery";
+import {
+  prefersReducedMotion,
+  useReducedMotion,
+} from "@/lib/useReducedMotion";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore, type StoredAnnotation } from "@/store/annotationStore";
 import {
@@ -61,6 +65,7 @@ import {
   type LineHeight,
   type PageFlow,
   type PageMargin,
+  type PageTurnMode,
   type PaperColor,
 } from "@/store/readingSettings";
 import { DEFAULT_HIGHLIGHT_COLOR } from "@/components/reader/highlightColors";
@@ -79,6 +84,19 @@ const WIDE_MEDIA_QUERY = "(min-width: 768px)";
 type StyleableRenderer = HTMLElement & {
   setStyles?: (styles: string) => void;
 };
+
+
+/**
+ * 翻页实际档位：滚动模式与系统「减少动态效果」下一律按「关闭」走，
+ * 但不改写用户存储的偏好（motion.md §4.3）。
+ */
+function effectivePageTurnOf(
+  mode: PageTurnMode,
+  pageFlow: PageFlow,
+): PageTurnMode {
+  if (pageFlow !== "paginated" || prefersReducedMotion()) return "off";
+  return mode;
+}
 
 const VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
 
@@ -133,6 +151,10 @@ export function ReaderPage() {
   const lineHeight = useReadingSettings((state) => state.lineHeight);
   const paperColor = useReadingSettings((state) => state.paperColor);
   const pageFlow = useReadingSettings((state) => state.pageFlow);
+  const pageTurn = useReadingSettings((state) => state.pageTurn);
+  const reducedMotion = useReducedMotion();
+  const effectivePageTurn: PageTurnMode =
+    reducedMotion || pageFlow !== "paginated" ? "off" : pageTurn;
   const fontFamily = useReadingSettings((state) => state.fontFamily);
   const pageMargin = useReadingSettings((state) => state.pageMargin);
   const footnotePreview = useReadingSettings((state) => state.footnotePreview);
@@ -451,6 +473,15 @@ export function ReaderPage() {
     setNotePeek(null);
   }
 
+  // 正文区左右边缘点击、页脚按钮、键盘统一走这里翻页。
+  const turnPage = useCallback((direction: "next" | "prev") => {
+    const view = viewRef.current;
+    if (!view) return;
+    void (direction === "next" ? view.next() : view.prev()).catch(
+      () => undefined,
+    );
+  }, []);
+
   useEffect(() => {
     // 依赖 book id 而非 book 对象：进度写回会更新 books 数组，
     // 对象引用每次都变；依赖对象会让引擎频繁销毁重建（跳回封面）。
@@ -511,10 +542,11 @@ export function ReaderPage() {
       setQuickSettingsOpen(false);
       setConceptMapOpen(false);
       closeNotePeek();
-      // 翻页动画：只在翻页模式且用户开启时，对容器做 150ms 淡入，
-      // 不移动分页锚点，也不改变 foliate 自己的排版。
+      // 翻页动效：只有「淡入」档在 relocate 时对容器做 150ms 淡入，
+      // 不移动分页锚点，也不改变 foliate 自己的排版；滑动档由分页器
+      // 自己的 300ms 滚动负责，两者不叠加（滑动结束时也会触发 relocate）。
       const settings = useReadingSettings.getState();
-      if (settings.pageFlow === "paginated" && settings.pageTurnAnimation) {
+      if (effectivePageTurnOf(settings.pageTurn, settings.pageFlow) === "fade") {
         const host = viewerRef.current;
         if (host) {
           host.classList.remove("deer-page-turn");
@@ -766,14 +798,12 @@ export function ReaderPage() {
       }
     };
 
-    // 分页模式默认没有翻页交互：方向键 / PgUp / PgDn 驱动 next/prev。
+    // 分页模式默认没有翻页交互：方向键 / PgUp / PgDn 驱动翻页。
     const onKey = (event: KeyboardEvent) => {
-      const view = viewRef.current;
-      if (!view) return;
       if (event.key === "ArrowRight" || event.key === "PageDown") {
-        void view.next().catch(() => undefined);
+        turnPage("next");
       } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
-        void view.prev().catch(() => undefined);
+        turnPage("prev");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -806,7 +836,7 @@ export function ReaderPage() {
       element?.remove();
       viewRef.current = null;
     };
-  }, [bookKey, targetCfi, updateBook, closeNotePeek]);
+  }, [bookKey, targetCfi, updateBook, closeNotePeek, turnPage]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
   // 纸色只在浅色主题生效：深色主题传 undefined，保持深色背景。
@@ -875,21 +905,17 @@ export function ReaderPage() {
 
   // 翻页方式（M4）：flow 是 renderer 的 observed attribute，运行时
   // setAttribute 即切换，paginator 用 anchor 恢复位置；未就绪时跳过。
+  // 滑动档同时挂 animated（分页器只认自身属性，且它不在 observedAttributes，
+  // 运行时挂摘不会触发 render），关闭/淡入档摘掉。
   useEffect(() => {
     const renderer = viewRef.current?.renderer;
     if (!renderer || realPhase.status !== "ready") return;
     renderer.setAttribute("flow", pageFlow);
-  }, [pageFlow, realPhase.status]);
+    if (effectivePageTurn === "slide") renderer.setAttribute("animated", "");
+    else renderer.removeAttribute("animated");
+  }, [pageFlow, effectivePageTurn, realPhase.status]);
 
   // 正文区左右边缘点击翻页（中间区域留给文字选择）。
-  const turnPage = useCallback((direction: "next" | "prev") => {
-    const view = viewRef.current;
-    if (!view) return;
-    void (direction === "next" ? view.next() : view.prev()).catch(
-      () => undefined,
-    );
-  }, []);
-
   const selectRealChapter = useCallback((item: TocItem) => {
     const view = viewRef.current;
     if (!view) return;

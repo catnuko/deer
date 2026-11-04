@@ -7,6 +7,7 @@ import {
   isLineHeight,
   isPageFlow,
   isPageMargin,
+  isPageTurn,
   isPaperColor,
   useReadingSettings,
 } from "@/store/readingSettings";
@@ -37,7 +38,7 @@ describe("readingSettings store", () => {
     expect(state.pageFlow).toBe("paginated");
     expect(state.fontFamily).toBe("book");
     expect(state.pageMargin).toBe("medium");
-    expect(state.pageTurnAnimation).toBe(false);
+    expect(state.pageTurn).toBe("slide");
     expect(state.footnotePreview).toBe(true);
     expect(DEFAULT_READING_SETTINGS).toEqual({
       fontSize: 15,
@@ -47,7 +48,7 @@ describe("readingSettings store", () => {
       pageFlow: "paginated",
       fontFamily: "book",
       pageMargin: "medium",
-      pageTurnAnimation: false,
+      pageTurn: "slide",
       footnotePreview: true,
     });
   });
@@ -60,7 +61,7 @@ describe("readingSettings store", () => {
     useReadingSettings.getState().setPageFlow("scrolled");
     useReadingSettings.getState().setFontFamily("sans");
     useReadingSettings.getState().setPageMargin("wide");
-    useReadingSettings.getState().setPageTurnAnimation(true);
+    useReadingSettings.getState().setPageTurn("fade");
     useReadingSettings.getState().setFootnotePreview(false);
 
     const state = useReadingSettings.getState();
@@ -71,7 +72,7 @@ describe("readingSettings store", () => {
     expect(state.pageFlow).toBe("scrolled");
     expect(state.fontFamily).toBe("sans");
     expect(state.pageMargin).toBe("wide");
-    expect(state.pageTurnAnimation).toBe(true);
+    expect(state.pageTurn).toBe("fade");
     expect(state.footnotePreview).toBe(false);
   });
 
@@ -82,7 +83,7 @@ describe("readingSettings store", () => {
     useReadingSettings.getState().setPageFlow("scrolled");
     useReadingSettings.getState().setFontFamily("serif");
     useReadingSettings.getState().setPageMargin("narrow");
-    useReadingSettings.getState().setPageTurnAnimation(true);
+    useReadingSettings.getState().setPageTurn("fade");
     useReadingSettings.getState().setFootnotePreview(false);
     useReadingSettings.getState().reset();
 
@@ -93,7 +94,7 @@ describe("readingSettings store", () => {
     expect(state.pageFlow).toBe("paginated");
     expect(state.fontFamily).toBe("book");
     expect(state.pageMargin).toBe("medium");
-    expect(state.pageTurnAnimation).toBe(false);
+    expect(state.pageTurn).toBe("slide");
     expect(state.footnotePreview).toBe(true);
   });
 
@@ -118,7 +119,7 @@ describe("readingSettings store", () => {
       pageFlow: "scrolled",
       fontFamily: "book",
       pageMargin: "medium",
-      pageTurnAnimation: false,
+      pageTurn: "slide",
       footnotePreview: true,
     });
   });
@@ -149,15 +150,40 @@ describe("readingSettings store", () => {
       fontSize: 15,
       lineHeight: 1.8,
       theme: "system",
-      pageTurnAnimation: false,
+      pageTurn: "slide",
     });
   });
 
-  it("isPaperColor / isPageFlow 只认预设档位", () => {
+  it("v3→v4：旧布尔翻页动画一律迁到滑动，已存的三档原样保留", () => {
+    const migrate = useReadingSettings.persist.getOptions().migrate;
+    for (const legacy of [true, false]) {
+      const next = migrate?.({ pageTurnAnimation: legacy }, 3) as {
+        pageTurn: string;
+        pageTurnAnimation?: unknown;
+      };
+      expect(next.pageTurn).toBe("slide");
+      expect("pageTurnAnimation" in next).toBe(false);
+    }
+    expect(
+      (migrate?.({ pageTurn: "off" }, 4) as { pageTurn: string }).pageTurn,
+    ).toBe("off");
+    expect(
+      (migrate?.({ pageTurn: "fade" }, 4) as { pageTurn: string }).pageTurn,
+    ).toBe("fade");
+    expect(
+      (migrate?.({ pageTurn: "bogus" }, 4) as { pageTurn: string }).pageTurn,
+    ).toBe("slide");
+  });
+
+  it("isPaperColor / isPageFlow / isPageTurn 只认预设档位", () => {
     expect(isPaperColor("#f5eede")).toBe(true);
     expect(isPaperColor("#123456")).toBe(false);
     expect(isPageFlow("scrolled")).toBe(true);
     expect(isPageFlow("diagonal")).toBe(false);
+    expect(isPageTurn("slide")).toBe(true);
+    expect(isPageTurn("fade")).toBe(true);
+    expect(isPageTurn("off")).toBe(true);
+    expect(isPageTurn("fancy")).toBe(false);
   });
 });
 
