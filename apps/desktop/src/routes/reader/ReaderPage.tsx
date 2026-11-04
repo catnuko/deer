@@ -1430,7 +1430,7 @@ function RealReader({
                 aria-label="全书阅读进度"
               >
                 <div
-                  className="bg-primary h-full rounded-full transition-[width] duration-150 ease-out"
+                  className="bg-primary h-full rounded-full transition-[width] duration-base ease-enter"
                   style={{ width: `${percent}%` }}
                 />
               </div>
@@ -1715,7 +1715,7 @@ function DemoReader({
                 aria-label="本章阅读进度"
               >
                 <div
-                  className="bg-primary h-full rounded-full transition-[width] duration-150 ease-out"
+                  className="bg-primary h-full rounded-full transition-[width] duration-base ease-enter"
                   style={{ width: `${percent}%` }}
                 />
               </div>
