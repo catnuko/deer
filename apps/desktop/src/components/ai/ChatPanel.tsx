@@ -191,6 +191,7 @@ function ComposerPreset({ draft }: { draft: ChatPanelDraft }) {
 export function ChatPanel({
   book,
   onClose,
+  open = true,
   className,
   readingContext,
   draft,
@@ -198,6 +199,8 @@ export function ChatPanel({
 }: {
   book: CurrentBook;
   onClose: () => void;
+  /** 侧栏开合：布局瞬时（宽度不参与过渡），内容 120ms 淡入（motion.md M2）。 */
+  open?: boolean;
   className?: string;
   /** 阅读上下文（N1）：每条消息的 prompt 前自动附带书名/章节/进度。 */
   readingContext?: ReadingContext | null;
@@ -396,10 +399,17 @@ export function ChatPanel({
     <aside
       aria-label="AI 伴读"
       className={cn(
-        "bg-background border-border flex w-96 shrink-0 flex-col border-l",
+        "bg-background border-border w-96 shrink-0 flex-col border-l",
+        open ? "flex" : "hidden",
         className,
       )}
     >
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col",
+          open && "deer-content-fade",
+        )}
+      >
       <header className="border-border flex items-start gap-2 border-b px-4 py-3">
         <div className="min-w-0 flex-1">
           <GradientHeading size="xxs" weight="semi" className="pb-0">
@@ -468,6 +478,7 @@ export function ChatPanel({
           <Composer />
         </ThreadPrimitive.Root>
       </AssistantRuntimeProvider>
+      </div>
     </aside>
   );
 }

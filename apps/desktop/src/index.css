@@ -158,6 +158,115 @@ foliate-view::part(filter) {
   animation: deer-page-turn var(--transition-duration-exit) var(--ease-enter);
 }
 
+/* ---------- 浮层与列表动效（motion.md §2–§5） ---------- */
+
+/* L1 面板：自上缘落入 4px，200ms；退出反向 150ms（仅快捷设置与概念地图）。 */
+@keyframes deer-overlay-drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes deer-overlay-drop-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* 概念地图无锚点，用 0.98→1 缩放代替位移。 */
+@keyframes deer-overlay-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes deer-overlay-scale-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+.deer-overlay-in-drop {
+  animation: deer-overlay-drop-in var(--transition-duration-base) var(--ease-enter);
+}
+
+.deer-overlay-out-drop {
+  animation: deer-overlay-drop-out var(--transition-duration-exit) var(--ease-exit);
+}
+
+.deer-overlay-in-scale {
+  animation: deer-overlay-scale-in var(--transition-duration-base) var(--ease-enter);
+}
+
+.deer-overlay-out-scale {
+  animation: deer-overlay-scale-out var(--transition-duration-exit) var(--ease-exit);
+}
+
+/* 小浮层（划选菜单、脚注卡）：朝锚点方向 4px 进入，120ms。 */
+@keyframes deer-pop-in-above {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes deer-pop-in-below {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.deer-pop-in-above {
+  animation: deer-pop-in-above var(--transition-duration-fast) var(--ease-enter);
+}
+
+.deer-pop-in-below {
+  animation: deer-pop-in-below var(--transition-duration-fast) var(--ease-enter);
+}
+
+/* 布局内面板（AI 侧栏、目录 dock）：宽度瞬时到位，只有内容 120ms 淡入。 */
+@keyframes deer-content-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.deer-content-fade {
+  animation: deer-content-fade-in var(--transition-duration-fast) var(--ease-enter);
+}
+
 /* 系统「减少动态效果」（motion.md §4）：时长归零但保留 0.01ms，
    避免靠 animationend 收尾的组件事件不触发。 */
 @media (prefers-reduced-motion: reduce) {

@@ -102,7 +102,8 @@ export function ReaderToc({
     <aside
       className={cn(
         "border-border bg-sidebar flex shrink-0",
-        dock ? "border-r" : "h-full w-full",
+        // dock 开合布局瞬时（宽度直接赋值），只有目录内容淡入（motion.md M11）。
+        dock ? "border-r deer-content-fade" : "h-full w-full",
         className,
       )}
       style={dock ? { width: tocWidth } : undefined}
@@ -167,9 +168,10 @@ export function ReaderToc({
           className={cn(
             // 独立的一条窄带，不压住 ScrollArea 的滚动条
             "relative w-2 shrink-0 cursor-col-resize touch-none outline-none",
-            "after:absolute after:inset-y-0 after:right-0 after:w-0.5 after:transition-colors",
+            "after:absolute after:inset-y-0 after:right-0 after:w-0.5 after:transition-colors after:duration-fast after:ease-enter",
+            // 拖拽期间颜色也必须立即跟手，不给过渡（motion.md M11）。
             resizing
-              ? "after:bg-primary/70"
+              ? "after:bg-primary/70 after:transition-none"
               : "after:bg-transparent hover:after:bg-primary/40 focus-visible:after:bg-primary/70",
           )}
         />

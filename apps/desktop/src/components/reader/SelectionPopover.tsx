@@ -47,7 +47,13 @@ export function SelectionPopover({
   const [note, setNote] = useState(existing?.note ?? "");
 
   return (
-    <div className="absolute z-20" style={{ left: x, top: y }}>
+    <div
+      className={cn(
+        "absolute z-20",
+        placement === "above" ? "deer-pop-in-above" : "deer-pop-in-below",
+      )}
+      style={{ left: x, top: y }}
+    >
       <div
         className={cn(
           "border-border bg-background -translate-x-1/2 rounded-lg border shadow-md",
@@ -116,7 +122,7 @@ export function SelectionPopover({
                 key={color.key}
                 type="button"
                 aria-label={`高亮：${color.label}`}
-                className="size-6 rounded-full border border-black/10 transition-transform hover:scale-110"
+                className="size-6 rounded-full border border-black/10 transition-shadow duration-exit ease-exit"
                 style={{ backgroundColor: color.value }}
                 onClick={() => onHighlight(color.value)}
               />
@@ -164,7 +170,7 @@ function MenuButton({
   return (
     <button
       type="button"
-      className="hover:bg-muted text-foreground flex flex-col items-center gap-1 rounded-md px-3 py-2 text-xs"
+      className="hover:bg-muted text-foreground flex flex-col items-center gap-1 rounded-md px-3 py-2 text-xs transition-colors duration-fast ease-enter"
       onClick={onClick}
     >
       <Icon className="size-4" aria-hidden="true" />

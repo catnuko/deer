@@ -302,36 +302,70 @@ export function ReaderPage() {
     return () => mediaQueryList.removeEventListener("change", onChange);
   }, []);
 
+  // 浮层关闭来源（motion.md §M2）：user 走 150ms 退场，navigation（翻页/
+  // 跳章）立即摘除，避免残影盖在翻页动画上。ref 在 setState 前更新，
+  // 同一帧渲染时壳读到的就是最新理由。
+  const quickSettingsCloseReasonRef = useRef<"user" | "navigation">("user");
+  const conceptMapCloseReasonRef = useRef<"user" | "navigation">("user");
+
   // 浮层互斥（规范 1.3）：显示设置与概念地图同时只开一个。
   const toggleQuickSettings = () => {
     if (quickSettingsOpen) {
+      quickSettingsCloseReasonRef.current = "user";
       setQuickSettingsOpen(false);
       focusToolbarButton("reader-toolbar-display");
       return;
     }
+    quickSettingsCloseReasonRef.current = "user";
     setConceptMapOpen(false);
     setQuickSettingsOpen(true);
   };
   const closeQuickSettings = useCallback(() => {
+    quickSettingsCloseReasonRef.current = "user";
     setQuickSettingsOpen(false);
     focusToolbarButton("reader-toolbar-display");
   }, []);
   const toggleConceptMap = () => {
     if (conceptMapOpen) {
+      conceptMapCloseReasonRef.current = "user";
       setConceptMapOpen(false);
       focusToolbarButton("reader-toolbar-concept-map");
       return;
     }
+    conceptMapCloseReasonRef.current = "user";
     setQuickSettingsOpen(false);
     setConceptMapChapterKey(`sec:${currentSectionRef.current}`);
     setConceptMapOpen(true);
   };
   const closeConceptMap = useCallback(() => {
+    conceptMapCloseReasonRef.current = "user";
     setConceptMapOpen(false);
     focusToolbarButton("reader-toolbar-concept-map");
   }, []);
-  // 编辑已有高亮的「复制」（规范 1.5）：复制摘录，收口菜单。
-  const copyAnnotationText = useCallback((text: string) => {
+  // L2（目录 / 笔记窄窗）打开时强制关闭所有 L1（motion.md §2）；目录开合会
+// 让正文重排，划选工具条与脚注卡的锚点也随之失效。
+const closeLevel1Overlays = () => {
+  quickSettingsCloseReasonRef.current = "user";
+  conceptMapCloseReasonRef.current = "user";
+  setQuickSettingsOpen(false);
+  setConceptMapOpen(false);
+  setSelection(null);
+  setAnnotationMenu(null);
+  closeNotePeek();
+};
+const toggleTocOverlays = () => {
+  const next = !tocOpen;
+  setTocOpen(next);
+  if (next) closeLevel1Overlays();
+};
+const toggleNotesOverlays = () => {
+  const next = !notesOpen;
+  setNotesOpen(next);
+  if (next) closeLevel1Overlays();
+};
+
+// 编辑已有高亮的「复制」（规范 1.5）：复制摘录，收口菜单。
+const copyAnnotationText = useCallback((text: string) => {
     if (!text) return;
     void navigator.clipboard.writeText(text).catch(() => undefined);
     setAnnotationMenu(null);
@@ -480,6 +514,8 @@ export function ReaderPage() {
     setRealPhase({ status: "loading" });
     setScrollProgress(0);
     setNotePeek(null);
+    setConceptMapOpen(false);
+    setConceptMapChapterKey(null);
   }
 
   // 翻页请求收口（M1b）：滑动档约 300ms 串行锁、关闭档 100ms 保护间隔，
@@ -583,6 +619,9 @@ export function ReaderPage() {
       // 翻页/跳章后选区与浮层都作废（布局重排 1.3：两个设置类浮层一并关闭）。
       setSelection(null);
       setAnnotationMenu(null);
+      // navigation 关闭：不播 150ms 退场（会盖在翻页动画上）。
+      quickSettingsCloseReasonRef.current = "navigation";
+      conceptMapCloseReasonRef.current = "navigation";
       setQuickSettingsOpen(false);
       setConceptMapOpen(false);
       closeNotePeek();
@@ -998,18 +1037,21 @@ export function ReaderPage() {
         onDeleteAnnotation={deleteAnnotationMenu}
         notesOpen={notesOpen}
         annotations={annotationsForBook}
-        onToggleNotes={() => setNotesOpen((open) => !open)}
+        onToggleNotes={toggleNotesOverlays}
         onCloseNotes={() => setNotesOpen(false)}
         onSelectAnnotation={jumpToAnnotation}
         onDeleteAnnotationById={deleteAnnotationById}
         quickSettingsOpen={quickSettingsOpen}
+        quickSettingsImmediate={
+          quickSettingsCloseReasonRef.current === "navigation"
+        }
         paperColor={paperColor}
         pageFlow={pageFlow}
         isDark={isDark}
         wideViewport={isWide}
         tocOpen={tocOpen}
         tocEmpty={realPhase.status === "ready" && realPhase.toc.length === 0}
-        onToggleToc={() => setTocOpen((open) => !open)}
+        onToggleToc={toggleTocOverlays}
         onToggleQuickSettings={toggleQuickSettings}
         onCloseQuickSettings={closeQuickSettings}
         onFontSizeChange={setFontSize}
@@ -1024,7 +1066,10 @@ export function ReaderPage() {
         onHighlightSelection={highlightSelection}
         onNoteSelection={noteSelection}
         onSummarizeChapter={() => void summarizeCurrentSection()}
-        conceptMapOpen={conceptMapOpen && conceptMapChapterKey !== null}
+        conceptMapOpen={conceptMapOpen}
+        conceptMapImmediate={
+          conceptMapCloseReasonRef.current === "navigation"
+        }
         conceptMapChapterKey={conceptMapChapterKey}
         onToggleConceptMap={toggleConceptMap}
         onCloseConceptMap={closeConceptMap}
@@ -1080,6 +1125,8 @@ type RealReaderProps = {
   onSelectAnnotation: (cfi: string) => void;
   onDeleteAnnotationById: (id: string) => void;
   quickSettingsOpen: boolean;
+  /** 关闭来源为 navigation：浮层立即摘除，不播退场。 */
+  quickSettingsImmediate: boolean;
   paperColor: PaperColor;
   pageFlow: PageFlow;
   isDark: boolean;
@@ -1105,6 +1152,7 @@ type RealReaderProps = {
   onNoteSelection: (note: string, cfi: string | null, text: string) => void;
   onSummarizeChapter: () => void;
   conceptMapOpen: boolean;
+  conceptMapImmediate: boolean;
   conceptMapChapterKey: string | null;
   onToggleConceptMap: () => void;
   onCloseConceptMap: () => void;
@@ -1137,6 +1185,7 @@ function RealReader({
   onSelectAnnotation,
   onDeleteAnnotationById,
   quickSettingsOpen,
+  quickSettingsImmediate,
   paperColor,
   pageFlow,
   isDark,
@@ -1159,6 +1208,7 @@ function RealReader({
   onNoteSelection,
   onSummarizeChapter,
   conceptMapOpen,
+  conceptMapImmediate,
   conceptMapChapterKey,
   onToggleConceptMap,
   onCloseConceptMap,
@@ -1262,18 +1312,18 @@ function RealReader({
                   所以边缘翻页靠这两个透明捕获层接住。 */}
               <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
               <div className="absolute inset-y-0 right-0 w-[15%]" aria-hidden="true" />
-              {quickSettingsOpen ? (
-                <QuickSettingsPanel
-                  fontSize={fontSize}
-                  paperColor={paperColor}
-                  pageFlow={pageFlow}
-                  paperColorDisabled={isDark}
-                  onFontSizeChange={onFontSizeChange}
-                  onPaperColorChange={onPaperColorChange}
-                  onPageFlowChange={onPageFlowChange}
-                  onClose={onCloseQuickSettings}
-                />
-              ) : null}
+              <QuickSettingsPanel
+                open={quickSettingsOpen}
+                immediate={quickSettingsImmediate}
+                fontSize={fontSize}
+                paperColor={paperColor}
+                pageFlow={pageFlow}
+                paperColorDisabled={isDark}
+                onFontSizeChange={onFontSizeChange}
+                onPaperColorChange={onPaperColorChange}
+                onPageFlowChange={onPageFlowChange}
+                onClose={onCloseQuickSettings}
+              />
               {phase.status === "loading" ? (
                 <div className="text-muted-foreground absolute inset-0 flex items-center justify-center text-sm">
                   正在加载书籍…
@@ -1284,8 +1334,10 @@ function RealReader({
                   打开本书失败：{phase.message}
                 </div>
               ) : null}
-              {conceptMapOpen && conceptMapChapterKey ? (
+              {conceptMapChapterKey ? (
                 <ConceptMapPanel
+                  open={conceptMapOpen}
+                  immediate={conceptMapImmediate}
                   bookId={bookId}
                   bookTitle={title}
                   chapterKey={conceptMapChapterKey}
@@ -1311,6 +1363,9 @@ function RealReader({
               ) : null}
               {annotationMenu ? (
                 <SelectionPopover
+                  // 与划选菜单同处一个三元分支：key 分开，切换时不复用旧
+                  // 组件的 mode/note 内态（motion.md §M2）。
+                  key="annotation"
                   x={annotationMenu.x}
                   y={annotationMenu.y}
                   placement={annotationMenu.placement}
@@ -1330,6 +1385,7 @@ function RealReader({
                 />
               ) : selection ? (
                 <SelectionPopover
+                  key="selection"
                   x={selection.x}
                   y={selection.y}
                   placement={selection.placement}
@@ -1407,7 +1463,7 @@ function RealReader({
         }}
         draft={draft}
         onClose={onClosePanel}
-        className={chatOpen ? "flex" : "hidden"}
+        open={chatOpen}
       />
     </div>
   );
@@ -1671,7 +1727,7 @@ function DemoReader({
         }}
         draft={draft}
         onClose={onClosePanel}
-        className={chatOpen ? "flex" : "hidden"}
+        open={chatOpen}
       />
     </div>
   );

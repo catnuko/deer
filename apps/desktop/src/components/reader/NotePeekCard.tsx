@@ -86,6 +86,8 @@ export function NotePeekCard({
       data-testid="note-peek-card"
       className={cn(
         "border-border bg-background absolute z-20 rounded-lg border p-3 shadow-md",
+        // 朝锚点方向 4px 进入（motion.md M2）；退出即时，不做 presence。
+        placed.above ? "deer-pop-in-above" : "deer-pop-in-below",
       )}
       style={{
         left: placed.left,
