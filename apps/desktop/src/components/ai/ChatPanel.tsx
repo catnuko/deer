@@ -192,6 +192,7 @@ export function ChatPanel({
   book,
   onClose,
   open = true,
+  onExited,
   className,
   readingContext,
   draft,
@@ -199,8 +200,10 @@ export function ChatPanel({
 }: {
   book: CurrentBook;
   onClose: () => void;
-  /** 侧栏开合：布局瞬时（宽度不参与过渡），内容 120ms 淡入（motion.md M2）。 */
+  /** 侧栏开合：布局瞬时（宽度不参与过渡），内容带方向进出（200ms 入 / 150ms 出）。 */
   open?: boolean;
+  /** 关闭动画播完（约 150ms）后通知外部摘除；只关不摘的宿主可忽略。 */
+  onExited?: () => void;
   className?: string;
   /** 阅读上下文（N1）：每条消息的 prompt 前自动附带书名/章节/进度。 */
   readingContext?: ReadingContext | null;
@@ -218,6 +221,24 @@ export function ChatPanel({
   const appendMessage = useChatStore((s) => s.appendMessage);
   const setFeedback = useChatStore((s) => s.setFeedback);
   const clearThread = useChatStore((s) => s.clearThread);
+
+  // presence：open 变 false 后先留在树上播完退场动画，再让宿主摘除。
+  // 用渲染期派生而不是 effect，避免关闭瞬间先被 display:none 掉、退场看不见。
+  const [wasOpen, setWasOpen] = useState(open);
+  const [exiting, setExiting] = useState(false);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    setExiting(!open);
+  }
+  const visible = open || exiting;
+
+  const handleContentAnimationEnd = (
+    event: React.AnimationEvent<HTMLDivElement>,
+  ) => {
+    if (event.target !== event.currentTarget || !exiting) return;
+    setExiting(false);
+    onExited?.();
+  };
 
   const [replying, setReplying] = useState(false);
   // replying 的 ref 镜像：命令式发送入口（章节总结等）不经 React 状态判并发。
@@ -398,17 +419,21 @@ export function ChatPanel({
   return (
     <aside
       aria-label="AI 伴读"
+      aria-hidden={open ? undefined : true}
       className={cn(
         "bg-background border-border w-96 shrink-0 flex-col border-l",
-        open ? "flex" : "hidden",
+        // 退场动画期间保持布局占位，播完才折叠；宽度始终不参与过渡。
+        visible ? "flex" : "hidden",
+        exiting && "pointer-events-none",
         className,
       )}
     >
       <div
         className={cn(
           "flex h-full min-h-0 flex-col",
-          open && "deer-content-fade",
+          open ? "deer-panel-in" : exiting && "deer-panel-out",
         )}
+        onAnimationEnd={handleContentAnimationEnd}
       >
       <header className="border-border flex items-start gap-2 border-b px-4 py-3">
         <div className="min-w-0 flex-1">

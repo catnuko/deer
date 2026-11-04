@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -76,6 +76,52 @@ afterEach(() => {
 });
 
 describe("ChatPanel", () => {
+  it("打开时内容带方向入场（不碰宽度）", () => {
+    const { container } = render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    const aside = container.querySelector("aside")!;
+    expect(aside.className).not.toContain("hidden");
+    expect(aside.firstElementChild!.className).toContain("deer-panel-in");
+  });
+
+  it("关闭时先播退场、动画结束才折叠并通知宿主摘除", () => {
+    const onExited = vi.fn();
+    const { container, rerender } = render(
+      <ChatPanel book={BOOK} onClose={() => {}} open onExited={onExited} />,
+    );
+    rerender(
+      <ChatPanel
+        book={BOOK}
+        onClose={() => {}}
+        open={false}
+        onExited={onExited}
+      />,
+    );
+
+    const aside = container.querySelector("aside")!;
+    // 退场期间仍占位，否则动画看不见。
+    expect(aside.className).not.toContain("hidden");
+    expect(aside).toHaveAttribute("aria-hidden", "true");
+
+    const content = aside.firstElementChild as HTMLElement;
+    expect(content.className).toContain("deer-panel-out");
+
+    fireEvent.animationEnd(content);
+
+    expect(onExited).toHaveBeenCalledTimes(1);
+    expect(aside.className).toContain("hidden");
+  });
+
+  it("初始 open=false 时直接折叠，不播入场", () => {
+    const { container } = render(
+      <ChatPanel book={BOOK} onClose={() => {}} open={false} />,
+    );
+
+    const aside = container.querySelector("aside")!;
+    expect(aside.className).toContain("hidden");
+    expect(aside.firstElementChild!.className).not.toContain("deer-panel-in");
+  });
+
   it("头部显示书名、模式徽标，空会话显示引导文案", () => {
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
 

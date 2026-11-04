@@ -271,6 +271,38 @@ foliate-view::part(filter) {
   animation: deer-content-fade-in var(--transition-duration-fast) var(--ease-enter);
 }
 
+/* AI 侧栏：宽度仍瞬时到位（motion.md 禁止宽度过渡），内容带方向进出——
+   从右侧 12px 滑入 200ms；关闭 150ms 侧滑淡出，播完由组件摘除（presence）。 */
+@keyframes deer-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes deer-panel-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+
+.deer-panel-in {
+  animation: deer-panel-in var(--transition-duration-base) var(--ease-enter);
+}
+
+.deer-panel-out {
+  animation: deer-panel-out var(--transition-duration-exit) var(--ease-exit);
+}
+
 /* 书架列表入场：200ms + 2px，前 12 项按 40ms 错峰。 */
 @keyframes deer-list-item-in {
   from {
@@ -387,5 +419,11 @@ foliate-view::part(filter) {
   .deer-lift:hover,
   .deer-lift:active {
     translate: none !important;
+  }
+
+  /* AI 侧栏进出在降级下只淡入淡出：位移不参与，时长已由 token 归零。 */
+  .deer-panel-in,
+  .deer-panel-out {
+    transform: none !important;
   }
 }

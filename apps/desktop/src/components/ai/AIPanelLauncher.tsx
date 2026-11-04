@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { ChatPanel } from "@/components/ai/ChatPanel";
 import { useCurrentBook } from "@/lib/ai/currentBook";
@@ -12,6 +12,18 @@ export function AIPanelLauncher() {
   const book = useCurrentBook();
   const open = useAIPanelStore((s) => s.open);
   const setOpen = useAIPanelStore((s) => s.setOpen);
+  const onEntryRoute = ENTRY_ROUTES.includes(location.pathname);
+  // 打开即挂载；关闭后留在树上播完 150ms 退场，由 onExited 摘除。
+  // 状态派生放在渲染期（与 ChatPanel 的 presence 同一手法），
+  // 避免关闭/切路由时先被 effect 延迟一帧。
+  const [mounted, setMounted] = useState(open);
+  const [routeAtMount, setRouteAtMount] = useState(location.pathname);
+  if (routeAtMount !== location.pathname) {
+    setRouteAtMount(location.pathname);
+    // 离开入口路由立即摘除，不播退场；回到入口时按当前开关重建。
+    setMounted(open && onEntryRoute);
+  }
+  if (open && !mounted) setMounted(true);
 
   // ?ai=1 直接展开面板，便于浏览器截图验证。
   useEffect(() => {
@@ -27,9 +39,14 @@ export function AIPanelLauncher() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, setOpen]);
 
-  if (!ENTRY_ROUTES.includes(location.pathname)) return null;
+  if (!onEntryRoute || !mounted) return null;
 
-  if (!open) return null;
-
-  return <ChatPanel book={book} onClose={() => setOpen(false)} />;
+  return (
+    <ChatPanel
+      book={book}
+      open={open}
+      onExited={() => setMounted(false)}
+      onClose={() => setOpen(false)}
+    />
+  );
 }
