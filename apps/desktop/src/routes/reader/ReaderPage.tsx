@@ -49,6 +49,15 @@ import {
   type NoteHoverHandle,
   type NotePeekData,
 } from "@/lib/noteHover";
+import {
+  createTurnQueue,
+  drainTurnQueue,
+  jumpPages,
+  requestTurn,
+  resetTurnQueue,
+  type PageTurnViewLike,
+  type TurnQueue,
+} from "@/lib/pageTurnQueue";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import {
   prefersReducedMotion,
@@ -473,14 +482,48 @@ export function ReaderPage() {
     setNotePeek(null);
   }
 
-  // 正文区左右边缘点击、页脚按钮、键盘统一走这里翻页。
-  const turnPage = useCallback((direction: "next" | "prev") => {
+  // 翻页请求收口（M1b）：滑动档约 300ms 串行锁、关闭档 100ms 保护间隔，
+  // 锁窗口内到达的请求会丢。这里按页数累加，窗口结束后一次性跳到位。
+  const turnQueueRef = useRef<TurnQueue>(createTurnQueue());
+  // 合并跳转期间不叠淡入（「淡入」档的 relocate 钩子会再挂一次淡入类）。
+  const mergedJumpRef = useRef(false);
+
+  const runPageTurn = useCallback(async (delta: number) => {
     const view = viewRef.current;
     if (!view) return;
-    void (direction === "next" ? view.next() : view.prev()).catch(
-      () => undefined,
-    );
+    if (Math.abs(delta) === 1) {
+      if (delta > 0) await view.next();
+      else await view.prev();
+      return;
+    }
+    mergedJumpRef.current = true;
+    try {
+      // foliate 的 ambient 类型没声明分页器的 pages/page 与 fraction 锚点，
+      // 只能在这里按实际运行时形态收窄。
+      await jumpPages(view as unknown as PageTurnViewLike, delta);
+    } finally {
+      mergedJumpRef.current = false;
+    }
   }, []);
+
+  const turnPage = useCallback(
+    (direction: "next" | "prev") => {
+      const view = viewRef.current;
+      if (!view) return;
+      // 滚动模式不排队：连续滚动本身就是跟手的，排队反而拖慢。
+      if (useReadingSettings.getState().pageFlow !== "paginated") {
+        void (direction === "next" ? view.next() : view.prev()).catch(
+          () => undefined,
+        );
+        return;
+      }
+      const queue = turnQueueRef.current;
+      requestTurn(queue, direction === "next" ? 1 : -1, (delta) =>
+        drainTurnQueue(queue, delta, runPageTurn),
+      );
+    },
+    [runPageTurn],
+  );
 
   useEffect(() => {
     // 依赖 book id 而非 book 对象：进度写回会更新 books 数组，
@@ -494,6 +537,7 @@ export function ReaderPage() {
     let element: FoliateView | null = null;
     // 句柄容器对象在组件生命周期内不变（只清空内容），先取出供 cleanup 使用。
     const noteHandles = noteHoverHandlesByDocRef.current;
+    const turnQueue = turnQueueRef.current;
     lastSavedProgressRef.current = 0;
     lastPositionRef.current = { progress: 0, cfi: null };
 
@@ -546,7 +590,10 @@ export function ReaderPage() {
       // 不移动分页锚点，也不改变 foliate 自己的排版；滑动档由分页器
       // 自己的 300ms 滚动负责，两者不叠加（滑动结束时也会触发 relocate）。
       const settings = useReadingSettings.getState();
-      if (effectivePageTurnOf(settings.pageTurn, settings.pageFlow) === "fade") {
+      if (
+        !mergedJumpRef.current &&
+        effectivePageTurnOf(settings.pageTurn, settings.pageFlow) === "fade"
+      ) {
         const host = viewerRef.current;
         if (host) {
           host.classList.remove("deer-page-turn");
@@ -799,6 +846,7 @@ export function ReaderPage() {
     };
 
     // 分页模式默认没有翻页交互：方向键 / PgUp / PgDn 驱动翻页。
+    // 与边缘点击、页脚按钮走同一个收口（M1b 的连翻累加）。
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "ArrowRight" || event.key === "PageDown") {
         turnPage("next");
@@ -821,6 +869,8 @@ export function ReaderPage() {
 
     return () => {
       cancelled = true;
+      // 换书时清掉未消化的翻页请求，避免排到下一本书上。
+      resetTurnQueue(turnQueue);
       window.removeEventListener("beforeunload", flushPosition);
       window.removeEventListener("keydown", onKey);
       flushPosition();
