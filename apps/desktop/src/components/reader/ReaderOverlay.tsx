@@ -12,7 +12,7 @@ type ReaderOverlayProps = {
   onClose: () => void;
   /**
    * 关闭来源为 navigation（翻页、跳章）时立即摘除：150ms 残影会盖在
-   * 翻页动画上（motion.md §M2）。父级在 setState 前把理由写进 ref 再传进来。
+   * 翻页动画上（motion.md §M2）。父级与 open=false 同一次更新里置位。
    */
   immediate?: boolean;
   exit?: OverlayExit;
@@ -50,28 +50,31 @@ export function ReaderOverlay({
   children,
 }: ReaderOverlayProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
-  const [mounted, setMounted] = useState(open);
-  const [closing, setClosing] = useState(false);
+  const [presence, setPresence] = useState(() => ({
+    shown: open,
+    closing: false,
+  }));
+
+  // 渲染期跟着 open 校正挂载态（React 的「随 props 调整 state」写法），
+  // 不在 effect 里同步 setState，避免级联渲染。
+  if (open && (!presence.shown || presence.closing)) {
+    setPresence({ shown: true, closing: false });
+  } else if (!open && presence.shown) {
+    if (immediate || exit === "none" || prefersReducedMotion()) {
+      setPresence({ shown: false, closing: false });
+    } else if (!presence.closing) {
+      setPresence({ shown: true, closing: true });
+    }
+  }
 
   useEffect(() => {
-    if (open) {
-      setMounted(true);
-      setClosing(false);
-      return;
-    }
-    if (!mounted) return;
-    if (immediate || exit === "none" || prefersReducedMotion()) {
-      setMounted(false);
-      setClosing(false);
-      return;
-    }
-    setClosing(true);
-    const timer = window.setTimeout(() => {
-      setMounted(false);
-      setClosing(false);
-    }, EXIT_MS);
+    if (!presence.closing) return;
+    const timer = window.setTimeout(
+      () => setPresence({ shown: false, closing: false }),
+      EXIT_MS,
+    );
     return () => window.clearTimeout(timer);
-  }, [open, immediate, exit, mounted]);
+  }, [presence.closing]);
 
   useEffect(() => {
     if (!open || !closeOnEscape) return;
@@ -97,7 +100,7 @@ export function ReaderOverlay({
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open, closeOnOutside, onClose]);
 
-  if (!mounted) return null;
+  if (!presence.shown) return null;
 
   return (
     <div
@@ -106,7 +109,7 @@ export function ReaderOverlay({
       aria-label={ariaLabel}
       className={cn(
         "absolute z-20",
-        closing
+        presence.closing
           ? variant === "scale"
             ? "deer-overlay-out-scale"
             : "deer-overlay-out-drop"

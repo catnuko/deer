@@ -304,62 +304,60 @@ export function ReaderPage() {
   }, []);
 
   // 浮层关闭来源（motion.md §M2）：user 走 150ms 退场，navigation（翻页/
-  // 跳章）立即摘除，避免残影盖在翻页动画上。ref 在 setState 前更新，
-  // 同一帧渲染时壳读到的就是最新理由。
-  const quickSettingsCloseReasonRef = useRef<"user" | "navigation">("user");
-  const conceptMapCloseReasonRef = useRef<"user" | "navigation">("user");
+  // 跳章）立即摘除，避免残影盖在翻页动画上。用 state 而不是 ref，关闭理由
+  // 与 open 在同一次更新里落地，壳渲染时读到的就是这次关闭的理由。
+  const [quickSettingsImmediate, setQuickSettingsImmediate] = useState(false);
+  const [conceptMapImmediate, setConceptMapImmediate] = useState(false);
 
   // 浮层互斥（规范 1.3）：显示设置与概念地图同时只开一个。
   const toggleQuickSettings = () => {
+    setQuickSettingsImmediate(false);
     if (quickSettingsOpen) {
-      quickSettingsCloseReasonRef.current = "user";
       setQuickSettingsOpen(false);
       focusToolbarButton("reader-toolbar-display");
       return;
     }
-    quickSettingsCloseReasonRef.current = "user";
     setConceptMapOpen(false);
     setQuickSettingsOpen(true);
   };
   const closeQuickSettings = useCallback(() => {
-    quickSettingsCloseReasonRef.current = "user";
+    setQuickSettingsImmediate(false);
     setQuickSettingsOpen(false);
     focusToolbarButton("reader-toolbar-display");
   }, []);
   const toggleConceptMap = () => {
+    setConceptMapImmediate(false);
     if (conceptMapOpen) {
-      conceptMapCloseReasonRef.current = "user";
       setConceptMapOpen(false);
       focusToolbarButton("reader-toolbar-concept-map");
       return;
     }
-    conceptMapCloseReasonRef.current = "user";
     setQuickSettingsOpen(false);
     setConceptMapChapterKey(`sec:${currentSectionRef.current}`);
     setConceptMapOpen(true);
   };
   const closeConceptMap = useCallback(() => {
-    conceptMapCloseReasonRef.current = "user";
+    setConceptMapImmediate(false);
     setConceptMapOpen(false);
     focusToolbarButton("reader-toolbar-concept-map");
   }, []);
   // L2（目录 / 笔记窄窗）打开时强制关闭所有 L1（motion.md §2）；目录开合会
-// 让正文重排，划选工具条与脚注卡的锚点也随之失效。
-const closeLevel1Overlays = () => {
-  quickSettingsCloseReasonRef.current = "user";
-  conceptMapCloseReasonRef.current = "user";
-  setQuickSettingsOpen(false);
-  setConceptMapOpen(false);
-  setSelection(null);
-  setAnnotationMenu(null);
-  closeNotePeek();
-};
-const toggleTocOverlays = () => {
-  const next = !tocOpen;
-  setTocOpen(next);
-  if (next) closeLevel1Overlays();
-};
-const toggleNotesOverlays = () => {
+  // 让正文重排，划选工具条与脚注卡的锚点也随之失效。
+  const closeLevel1Overlays = () => {
+    setQuickSettingsImmediate(false);
+    setConceptMapImmediate(false);
+    setQuickSettingsOpen(false);
+    setConceptMapOpen(false);
+    setSelection(null);
+    setAnnotationMenu(null);
+    closeNotePeek();
+  };
+  const toggleTocOverlays = () => {
+    const next = !tocOpen;
+    setTocOpen(next);
+    if (next) closeLevel1Overlays();
+  };
+  const toggleNotesOverlays = () => {
   const next = !notesOpen;
   setNotesOpen(next);
   if (next) closeLevel1Overlays();
@@ -621,8 +619,8 @@ const copyAnnotationText = useCallback((text: string) => {
       setSelection(null);
       setAnnotationMenu(null);
       // navigation 关闭：不播 150ms 退场（会盖在翻页动画上）。
-      quickSettingsCloseReasonRef.current = "navigation";
-      conceptMapCloseReasonRef.current = "navigation";
+      setQuickSettingsImmediate(true);
+      setConceptMapImmediate(true);
       setQuickSettingsOpen(false);
       setConceptMapOpen(false);
       closeNotePeek();
@@ -1043,9 +1041,7 @@ const copyAnnotationText = useCallback((text: string) => {
         onSelectAnnotation={jumpToAnnotation}
         onDeleteAnnotationById={deleteAnnotationById}
         quickSettingsOpen={quickSettingsOpen}
-        quickSettingsImmediate={
-          quickSettingsCloseReasonRef.current === "navigation"
-        }
+        quickSettingsImmediate={quickSettingsImmediate}
         paperColor={paperColor}
         pageFlow={pageFlow}
         isDark={isDark}
@@ -1068,9 +1064,7 @@ const copyAnnotationText = useCallback((text: string) => {
         onNoteSelection={noteSelection}
         onSummarizeChapter={() => void summarizeCurrentSection()}
         conceptMapOpen={conceptMapOpen}
-        conceptMapImmediate={
-          conceptMapCloseReasonRef.current === "navigation"
-        }
+        conceptMapImmediate={conceptMapImmediate}
         conceptMapChapterKey={conceptMapChapterKey}
         onToggleConceptMap={toggleConceptMap}
         onCloseConceptMap={closeConceptMap}
