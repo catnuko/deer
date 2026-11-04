@@ -40,6 +40,7 @@ import {
   makeBookFile,
   readingStyles,
 } from "@/lib/foliate";
+import { applyPaginatorLayout, paginatorLayoutFor } from "@/lib/pageLayout";
 import { isTauri } from "@/lib/platform";
 import {
   createNoteHoverCaches,
@@ -465,6 +466,20 @@ export function ReaderPage() {
     lastSavedProgressRef.current = 0;
     lastPositionRef.current = { progress: 0, cfi: null };
 
+    // 分页器默认的 7% / 48px / 720px 在宽窗下会把正文压成中间一条。
+    // 页边距设置直接换算成 paginator 的 gap（见 lib/pageLayout），
+    // 分页态不再额外注入 body 内边距，避免两处叠加。
+    const applyPaginationLayout = (renderer: HTMLElement | undefined) => {
+      const settings = useReadingSettings.getState();
+      applyPaginatorLayout(
+        renderer,
+        paginatorLayoutFor({
+          viewerWidth: renderer?.getBoundingClientRect().width ?? 0,
+          pageMarginPx: PAGE_MARGIN_PX[settings.pageMargin],
+        }),
+      );
+    };
+
     const applyReadingStyles = () => {
       const renderer = element?.renderer as StyleableRenderer | undefined;
       const settings = useReadingSettings.getState();
@@ -473,7 +488,11 @@ export function ReaderPage() {
           fontSize: settings.fontSize,
           lineHeight: settings.lineHeight,
           fontFamilyCss: FONT_FAMILY_CSS[settings.fontFamily],
-          pageMarginPx: PAGE_MARGIN_PX[settings.pageMargin],
+          // 滚动模式没有分页器的 gap，页边距仍走 body 内边距。
+          pageMarginPx:
+            settings.pageFlow === "scrolled"
+              ? PAGE_MARGIN_PX[settings.pageMargin]
+              : undefined,
           footnotePreview: settings.footnotePreview,
         }),
       );
@@ -727,6 +746,9 @@ export function ReaderPage() {
           await view.init({ showTextStart: true }).catch(() => undefined);
         }
         if (cancelled) return;
+        // init 之后下发属性：max-inline-size 会触发 render()，此时 anchor
+        // 已就绪，位置不会跳。
+        applyPaginationLayout(view.renderer);
         applyReadingStyles();
         void updateBook(shelfBook.id, { lastOpenedAt: Date.now() }).catch(
           () => undefined,
@@ -791,13 +813,25 @@ export function ReaderPage() {
   useEffect(() => {
     const renderer = viewRef.current?.renderer as StyleableRenderer | undefined;
     if (!renderer || realPhase.status !== "ready") return;
+    // 页边距改动同步到分页器 gap（分页态的外侧留白就来自这里）。
+    if (pageFlow === "paginated") {
+      applyPaginatorLayout(
+        renderer,
+        paginatorLayoutFor({
+          viewerWidth: renderer.getBoundingClientRect().width,
+          pageMarginPx: PAGE_MARGIN_PX[pageMargin],
+        }),
+      );
+    }
     renderer.setStyles?.(
       readingStyles({
         fontSize,
         lineHeight,
         paperColor: isDark ? undefined : paperColor,
         fontFamilyCss: FONT_FAMILY_CSS[fontFamily],
-        pageMarginPx: PAGE_MARGIN_PX[pageMargin],
+        // 滚动模式没有分页器的 gap，页边距仍走 body 内边距。
+        pageMarginPx:
+          pageFlow === "scrolled" ? PAGE_MARGIN_PX[pageMargin] : undefined,
         footnotePreview,
       }),
     );
@@ -808,6 +842,7 @@ export function ReaderPage() {
     isDark,
     fontFamily,
     pageMargin,
+    pageFlow,
     footnotePreview,
     realPhase.status,
   ]);

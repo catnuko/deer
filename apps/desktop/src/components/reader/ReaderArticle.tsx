@@ -25,10 +25,10 @@ export function ReaderArticle({
 }: ReaderArticleProps) {
   return (
     <article
-      className="mx-auto w-full max-w-2xl py-10 font-serif"
+      className="mx-auto w-full max-w-3xl py-6 font-serif"
       style={{
-        paddingLeft: 32 + PAGE_MARGIN_PX[pageMargin],
-        paddingRight: 32 + PAGE_MARGIN_PX[pageMargin],
+        paddingLeft: 24 + PAGE_MARGIN_PX[pageMargin],
+        paddingRight: 24 + PAGE_MARGIN_PX[pageMargin],
       }}
     >
       <h2 className="mb-8 text-xl font-semibold tracking-tight">
