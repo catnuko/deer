@@ -243,7 +243,8 @@ export function initThemeSync(): void {
   applyTheme(useReadingSettings.getState().theme);
 
   useReadingSettings.subscribe((state, previous) => {
-    if (state.theme !== previous.theme) applyTheme(state.theme);
+    if (state.theme !== previous.theme)
+      applyTheme(state.theme, { animate: true });
   });
 
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -253,6 +254,7 @@ export function initThemeSync(): void {
   window
     .matchMedia("(prefers-color-scheme: dark)")
     .addEventListener("change", () => {
-      if (useReadingSettings.getState().theme === "system") applyTheme("system");
+      if (useReadingSettings.getState().theme === "system")
+        applyTheme("system", { animate: true });
     });
 }
