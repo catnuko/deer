@@ -20,6 +20,7 @@ import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { NotePeekCard } from "@/components/reader/NotePeekCard";
 import { SelectionPopover } from "@/components/reader/SelectionPopover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -1325,8 +1326,25 @@ function RealReader({
                 onClose={onCloseQuickSettings}
               />
               {phase.status === "loading" ? (
-                <div className="text-muted-foreground absolute inset-0 flex items-center justify-center text-sm">
-                  正在加载书籍…
+                <div
+                  className="absolute inset-0 flex items-center justify-center px-12"
+                  role="status"
+                >
+                  {/* 开书骨架（M6）：版心位置一条标题 + 六条正文，与正文同样
+                      只有透明度脉冲，不做扫光位移。 */}
+                  <div className="w-full max-w-xl space-y-5">
+                    <Skeleton className="h-4 w-1/2" />
+                    <div className="space-y-3">
+                      {Array.from({ length: 6 }).map((_, index) => (
+                        <Skeleton
+                          key={index}
+                          className="h-3.5"
+                          style={{ width: index === 5 ? "62%" : "100%" }}
+                        />
+                      ))}
+                    </div>
+                    <span className="sr-only">正在加载书籍…</span>
+                  </div>
                 </div>
               ) : null}
               {phase.status === "error" ? (
