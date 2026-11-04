@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   BookOpenText,
   Database,
@@ -68,9 +68,12 @@ export function SettingsDialog() {
   const roomy = useMediaQuery(ROOMY_MEDIA_QUERY);
 
   // 弹窗每次重新打开时回到首屏状态：只播弹窗自入场，右栏内容不重复播（motion.md M8）。
-  useEffect(() => {
+  // 关闭时在渲染期校正，避免在 effect 里同步 setState 触发级联渲染。
+  const [seenOpen, setSeenOpen] = useState(open);
+  if (open !== seenOpen) {
+    setSeenOpen(open);
     if (!open) setAnimateSection(false);
-  }, [open]);
+  }
 
   const selectSection = (next: SettingsSection) => {
     if (next === section) return;
