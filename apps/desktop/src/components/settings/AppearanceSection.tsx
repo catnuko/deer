@@ -48,7 +48,7 @@ export function AppearanceSection() {
               aria-checked={active}
               onClick={() => setTheme(option.value)}
               className={cn(
-                "border-border bg-background flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-colors",
+                "border-border bg-background flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-colors duration-fast ease-enter",
                 "hover:bg-muted/60",
                 active && "border-primary bg-primary/5 ring-primary/30 ring-1",
               )}

@@ -100,7 +100,7 @@ export function SettingsDialog() {
                   aria-current={active ? "page" : undefined}
                   onClick={() => setSection(item.id)}
                   className={cn(
-                    "flex items-center gap-2 rounded-md text-sm transition-colors",
+                    "flex items-center gap-2 rounded-md text-sm transition-colors duration-fast ease-enter",
                     wide
                       ? "mb-0.5 w-full px-3 py-2 text-left"
                       : "shrink-0 px-3 py-1.5",
