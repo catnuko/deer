@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { ReaderOverlay } from "@/components/reader/ReaderOverlay";
 import { RefreshCw, Sparkles, X } from "lucide-react";
 import {
@@ -270,7 +271,7 @@ export function ConceptMapPanel({
               const x2 = edge.to.x - (dx / len) * NODE_RADIUS;
               const y2 = edge.to.y - (dy / len) * NODE_RADIUS;
               return (
-                <g key={i}>
+                <g key={i} className="deer-edge-in">
                   <line
                     x1={x1}
                     y1={y1}
@@ -292,14 +293,19 @@ export function ConceptMapPanel({
                 </g>
               );
             })}
-            {phase.data.nodes.map((node) => {
+            {phase.data.nodes.map((node, index) => {
               const pos = layout.positions[node.id];
               if (!pos) return null;
               const selectedNode = node.id === selectedId;
               return (
                 <g
                   key={node.id}
-                  className="cursor-pointer"
+                  className="deer-node-in cursor-pointer"
+                  style={
+                    {
+                      "--deer-index": index < 12 ? index : 0,
+                    } as CSSProperties
+                  }
                   onClick={() => setSelectedId(selectedNode ? null : node.id)}
                 >
                   <circle
@@ -307,7 +313,7 @@ export function ConceptMapPanel({
                     cy={pos.y}
                     r={NODE_RADIUS}
                     className={cn(
-                      "fill-card stroke-border transition-[stroke]",
+                      "fill-card stroke-border transition-[stroke] duration-fast ease-enter",
                       selectedNode && "stroke-primary",
                     )}
                     strokeWidth={selectedNode ? 2.5 : 1.5}
@@ -317,7 +323,7 @@ export function ConceptMapPanel({
                     y={pos.y + NODE_RADIUS + 14}
                     textAnchor="middle"
                     className={cn(
-                      "fill-foreground text-[11px]",
+                      "fill-foreground text-[11px] transition-colors duration-fast ease-enter",
                       selectedNode && "fill-primary font-medium",
                     )}
                   >
