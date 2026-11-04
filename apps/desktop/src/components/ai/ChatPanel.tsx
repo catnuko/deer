@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -188,6 +188,8 @@ function ComposerPreset({ draft }: { draft: ChatPanelDraft }) {
   return null;
 }
 
+type PanelPhase = "entering" | "open" | "closing" | "closed";
+
 export function ChatPanel({
   book,
   onClose,
@@ -222,23 +224,94 @@ export function ChatPanel({
   const setFeedback = useChatStore((s) => s.setFeedback);
   const clearThread = useChatStore((s) => s.clearThread);
 
-  // presence：open 变 false 后先留在树上播完退场动画，再让宿主摘除。
+  // presence 状态机：entering → open → closing → closed（closed 才允许宿主摘除）。
   // 用渲染期派生而不是 effect，避免关闭瞬间先被 display:none 掉、退场看不见。
   const [wasOpen, setWasOpen] = useState(open);
-  const [exiting, setExiting] = useState(false);
+  const [phase, setPhase] = useState<PanelPhase>(
+    open ? "entering" : "closed",
+  );
+  // 打断入场/退场时先「按住」旧动画类，layout effect 里读到当前画面、
+  // 把起点写进 CSS 变量后再换类——渲染期不碰 DOM，也永远不出自然态帧。
+  const [heldClass, setHeldClass] = useState<string | null>(null);
+  // 打断时接续当前画面的起点；关键帧默认值只用于从零开始的那一次。
+  const [startStyle, setStartStyle] = useState<React.CSSProperties>({});
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const exitRafRef = useRef<number | null>(null);
+
   if (wasOpen !== open) {
     setWasOpen(open);
-    setExiting(!open);
+    if (!open) {
+      // 入场未播完就关闭：从当前不透明度接着淡出，不跳到 from 的 opacity:1。
+      if (phase === "entering") setHeldClass("deer-panel-in");
+      setPhase("closing");
+    } else if (phase === "closing") {
+      // 退场途中又被打开：取消摘除，从当前状态平滑转回，不从 12px 重起。
+      setHeldClass("deer-panel-out");
+      setPhase("entering");
+    } else {
+      setStartStyle({});
+      setPhase("entering");
+    }
   }
+
+  const exiting = phase === "closing";
   const visible = open || exiting;
+  // 可见时永远挂着一条动画类：空 class 等于元素落回自然态（opacity 1 / 原位）。
+  const contentAnimation =
+    heldClass ??
+    (phase === "closing"
+      ? "deer-panel-out"
+      : phase === "entering"
+        ? "deer-panel-in"
+        : "deer-panel-open");
+
+  // 换类前读当前画面：此刻 DOM 仍挂着旧动画类，读到的是真实进度值。
+  useLayoutEffect(() => {
+    if (!heldClass) return;
+    // 退场被打断时摘除用的 rAF 可能还挂着，先取消再接管画面。
+    if (exitRafRef.current !== null) {
+      cancelAnimationFrame(exitRafRef.current);
+      exitRafRef.current = null;
+    }
+    const el = contentRef.current;
+    if (el && typeof getComputedStyle === "function") {
+      const cs = getComputedStyle(el);
+      setStartStyle({
+        "--panel-start-opacity": cs.opacity || "1",
+        "--panel-start-transform": cs.transform || "none",
+      } as React.CSSProperties);
+    }
+    setHeldClass(null);
+  }, [heldClass]);
 
   const handleContentAnimationEnd = (
     event: React.AnimationEvent<HTMLDivElement>,
   ) => {
-    if (event.target !== event.currentTarget || !exiting) return;
-    setExiting(false);
-    onExited?.();
+    if (event.target !== event.currentTarget) return;
+    if (phase === "entering") {
+      setStartStyle({});
+      setPhase("open");
+      return;
+    }
+    if (phase !== "closing") return;
+    // 退场最后一帧由 fill-mode 粘住；下一帧才落定为 closed，
+    // 保证摘除/折叠与「无动画类」落在同一次提交里。
+    exitRafRef.current = requestAnimationFrame(() => {
+      exitRafRef.current = null;
+      setPhase("closed");
+      onExited?.();
+    });
   };
+
+  useEffect(
+    () => () => {
+      if (exitRafRef.current !== null) {
+        cancelAnimationFrame(exitRafRef.current);
+        exitRafRef.current = null;
+      }
+    },
+    [],
+  );
 
   const [replying, setReplying] = useState(false);
   // replying 的 ref 镜像：命令式发送入口（章节总结等）不经 React 状态判并发。
@@ -431,10 +504,9 @@ export function ChatPanel({
       )}
     >
       <div
-        className={cn(
-          "flex h-full min-h-0 flex-col",
-          open ? "deer-panel-in" : exiting && "deer-panel-out",
-        )}
+        ref={contentRef}
+        className={cn("flex h-full min-h-0 flex-col", contentAnimation)}
+        style={startStyle}
         onAnimationEnd={handleContentAnimationEnd}
       >
       <header className="border-border flex items-start gap-2 border-b px-4 py-3">

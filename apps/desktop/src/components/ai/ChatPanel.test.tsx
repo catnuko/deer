@@ -86,7 +86,7 @@ describe("ChatPanel", () => {
     expect(aside.firstElementChild!.className).toContain("deer-panel-in");
   });
 
-  it("关闭时先播退场、动画结束才折叠并通知宿主摘除", () => {
+  it("关闭时先播退场、动画结束才折叠并通知宿主摘除", async () => {
     const onExited = vi.fn();
     const { container, rerender } = render(
       <ChatPanel book={BOOK} onClose={() => {}} open onExited={onExited} />,
@@ -110,8 +110,55 @@ describe("ChatPanel", () => {
 
     fireEvent.animationEnd(content);
 
-    expect(onExited).toHaveBeenCalledTimes(1);
+    // 摘除排在 animationend 的下一帧；这之前退场类必须还在，不能落回无动画类。
+    expect(content.className).toContain("deer-panel-out");
+    expect(aside.classList.contains("hidden")).toBe(false);
+    expect(onExited).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(onExited).toHaveBeenCalledTimes(1));
     expect(aside.classList.contains("hidden")).toBe(true);
+  });
+
+  it("可见态永远挂着动画类，不存在空 class 的自然态帧", () => {
+    const { container, rerender } = render(
+      <ChatPanel book={BOOK} onClose={() => {}} open />,
+    );
+    const content = container.querySelector("aside")!
+      .firstElementChild as HTMLElement;
+
+    expect(content.className).toMatch(/deer-panel-(in|out|open)/);
+
+    rerender(<ChatPanel book={BOOK} onClose={() => {}} open={false} />);
+    expect(content.className).toContain("deer-panel-out");
+    expect(content.className).not.toBe("");
+  });
+
+  it("退场途中重新打开：从当前状态接回，不从 12px 重起", () => {
+    const { container, rerender } = render(
+      <ChatPanel book={BOOK} onClose={() => {}} open />,
+    );
+    const aside = container.querySelector("aside")!;
+    const content = aside.firstElementChild as HTMLElement;
+
+    rerender(<ChatPanel book={BOOK} onClose={() => {}} open={false} />);
+    expect(content.className).toContain("deer-panel-out");
+
+    rerender(<ChatPanel book={BOOK} onClose={() => {}} open />);
+    // 换成入场类，且起点来自当前画面（--panel-start-* 已写入），不会归零重播。
+    expect(content.className).toContain("deer-panel-in");
+    expect(content.style.getPropertyValue("--panel-start-opacity")).not.toBe("");
+    expect(aside.classList.contains("hidden")).toBe(false);
+  });
+
+  it("入场动画播完后落到无动画的常态类", () => {
+    const { container } = render(<ChatPanel book={BOOK} onClose={() => {}} />);
+    const content = container.querySelector("aside")!
+      .firstElementChild as HTMLElement;
+
+    fireEvent.animationEnd(content);
+
+    expect(content.className).toContain("deer-panel-open");
+    expect(content.className).not.toContain("deer-panel-in");
   });
 
   it("初始 open=false 时直接折叠，不播入场", () => {

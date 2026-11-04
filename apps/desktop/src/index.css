@@ -333,10 +333,12 @@ foliate-view::part(filter) {
 /* AI 侧栏：宽度仍瞬时到位（motion.md 禁止宽度过渡），内容带方向进出——
    从右侧 12px 滑入 240ms；关闭 160ms 侧滑淡出，播完由组件摘除（presence）。
    缓动用面板专用的 --ease-panel（起步有速度），不复用全局 ease-enter/exit。 */
+/* 起点默认值用于从零开始的那一次；被打断时组件用 --panel-start-* 传入当前
+   不透明度/transform，接着当前画面走，不跳到关键帧的固定端点。 */
 @keyframes deer-panel-in {
   from {
-    opacity: 0;
-    transform: translateX(12px);
+    opacity: var(--panel-start-opacity, 0);
+    transform: var(--panel-start-transform, translateX(12px));
   }
   to {
     opacity: 1;
@@ -346,8 +348,8 @@ foliate-view::part(filter) {
 
 @keyframes deer-panel-out {
   from {
-    opacity: 1;
-    transform: translateX(0);
+    opacity: var(--panel-start-opacity, 1);
+    transform: var(--panel-start-transform, translateX(0));
   }
   to {
     opacity: 0;
@@ -359,8 +361,16 @@ foliate-view::part(filter) {
   animation: deer-panel-in var(--transition-duration-panel-in) var(--ease-panel);
 }
 
+/* 退场停在最后一帧：animationend 到节点摘除之间不允许弹回自然态（opacity 1 / 原位）。 */
 .deer-panel-out {
   animation: deer-panel-out var(--transition-duration-panel-out) var(--ease-panel);
+  animation-fill-mode: forwards;
+}
+
+/* 常态：不含动画，用于入场结束/退场回退后的落位，换类时不重播。 */
+.deer-panel-open {
+  opacity: 1;
+  transform: none;
 }
 
 /* 书架列表入场：200ms + 2px，前 12 项按 40ms 错峰。 */
