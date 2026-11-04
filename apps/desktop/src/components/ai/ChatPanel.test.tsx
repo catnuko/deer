@@ -80,7 +80,9 @@ describe("ChatPanel", () => {
     const { container } = render(<ChatPanel book={BOOK} onClose={() => {}} />);
 
     const aside = container.querySelector("aside")!;
-    expect(aside.className).not.toContain("hidden");
+    // 盒子裁掉方向位移：否则阅读页 main 会因多出的 12px 闪出横向滚动条。
+    expect(aside.classList.contains("overflow-hidden")).toBe(true);
+    expect(aside.classList.contains("hidden")).toBe(false);
     expect(aside.firstElementChild!.className).toContain("deer-panel-in");
   });
 
@@ -100,7 +102,7 @@ describe("ChatPanel", () => {
 
     const aside = container.querySelector("aside")!;
     // 退场期间仍占位，否则动画看不见。
-    expect(aside.className).not.toContain("hidden");
+    expect(aside.classList.contains("hidden")).toBe(false);
     expect(aside).toHaveAttribute("aria-hidden", "true");
 
     const content = aside.firstElementChild as HTMLElement;
@@ -109,7 +111,7 @@ describe("ChatPanel", () => {
     fireEvent.animationEnd(content);
 
     expect(onExited).toHaveBeenCalledTimes(1);
-    expect(aside.className).toContain("hidden");
+    expect(aside.classList.contains("hidden")).toBe(true);
   });
 
   it("初始 open=false 时直接折叠，不播入场", () => {
@@ -118,7 +120,7 @@ describe("ChatPanel", () => {
     );
 
     const aside = container.querySelector("aside")!;
-    expect(aside.className).toContain("hidden");
+    expect(aside.classList.contains("hidden")).toBe(true);
     expect(aside.firstElementChild!.className).not.toContain("deer-panel-in");
   });
 

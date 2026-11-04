@@ -421,8 +421,10 @@ export function ChatPanel({
       aria-label="AI 伴读"
       aria-hidden={open ? undefined : true}
       className={cn(
-        "bg-background border-border w-96 shrink-0 flex-col border-l",
+        "bg-background border-border w-96 shrink-0 flex-col overflow-hidden border-l",
         // 退场动画期间保持布局占位，播完才折叠；宽度始终不参与过渡。
+        // overflow-hidden：入场/退场的内容侧移只在本盒内裁掉，不越出到滚动祖先，
+        // 否则阅读页的 main 会因为它多出的 12px 闪出横向滚动条。
         visible ? "flex" : "hidden",
         exiting && "pointer-events-none",
         className,

@@ -57,6 +57,11 @@
   /* slow 目前没有被任何 utility/var() 引用，放进 @theme 会被 Tailwind 当作
      未使用主题变量裁掉，运行时拿不到值；显式落在 :root 才能被媒体查询覆盖。 */
   --transition-duration-slow: 300ms;
+  /* AI 侧栏专用：起步即有速度、收尾柔和的缓动。全局 ease-enter 的 y1=0
+     起步速度为 0，面板窄幅移动时读起来像「先慢后快」，故单列不共用。 */
+  --transition-duration-panel-in: 240ms;
+  --transition-duration-panel-out: 160ms;
+  --ease-panel: cubic-bezier(0.33, 0.7, 0.2, 1);
   /* 位移与错峰没有 Tailwind 命名空间，按 motion.md §1.3 落在这里。 */
   --motion-shift-panel: 6px;
   --motion-shift-list: 2px;
@@ -272,7 +277,8 @@ foliate-view::part(filter) {
 }
 
 /* AI 侧栏：宽度仍瞬时到位（motion.md 禁止宽度过渡），内容带方向进出——
-   从右侧 12px 滑入 200ms；关闭 150ms 侧滑淡出，播完由组件摘除（presence）。 */
+   从右侧 12px 滑入 240ms；关闭 160ms 侧滑淡出，播完由组件摘除（presence）。
+   缓动用面板专用的 --ease-panel（起步有速度），不复用全局 ease-enter/exit。 */
 @keyframes deer-panel-in {
   from {
     opacity: 0;
@@ -296,11 +302,11 @@ foliate-view::part(filter) {
 }
 
 .deer-panel-in {
-  animation: deer-panel-in var(--transition-duration-base) var(--ease-enter);
+  animation: deer-panel-in var(--transition-duration-panel-in) var(--ease-panel);
 }
 
 .deer-panel-out {
-  animation: deer-panel-out var(--transition-duration-exit) var(--ease-exit);
+  animation: deer-panel-out var(--transition-duration-panel-out) var(--ease-panel);
 }
 
 /* 书架列表入场：200ms + 2px，前 12 项按 40ms 错峰。 */
@@ -390,6 +396,8 @@ foliate-view::part(filter) {
     --transition-duration-base: 0ms;
     --transition-duration-exit: 0ms;
     --transition-duration-slow: 0ms;
+    --transition-duration-panel-in: 0ms;
+    --transition-duration-panel-out: 0ms;
     --motion-shift-panel: 0px;
     --motion-shift-list: 0px;
     --motion-shift-hover: 0px;

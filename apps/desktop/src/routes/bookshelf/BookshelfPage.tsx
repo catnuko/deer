@@ -422,7 +422,9 @@ export function BookshelfPage() {
             </div>
           )}
 
-          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24">
+          {/* scrollbar-gutter:stable：面板开合会改变本列宽度，预留滚动条位置，
+              避免纵向滚动条出现/消失再补一次横向位移（macOS 覆盖式滚动条下为 0）。 */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24 [scrollbar-gutter:stable]">
             {isReady && continueReading ? (
               <div className="mb-5 max-w-xl">
                 <ContinueReadingCard
