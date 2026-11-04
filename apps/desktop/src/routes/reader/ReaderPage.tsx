@@ -1688,19 +1688,18 @@ function DemoReader({
                   onAsk={() => askDeer(selection.text)}
                 />
               ) : null}
-              {conceptMapOpen ? (
-                <ConceptMapPanel
-                  bookId={bookId ?? book.id}
-                  bookTitle={book.title}
-                  chapterKey={`chapter:${chapterIndex}`}
-                  chapterTitle={chapter.title}
-                  getChapterText={async () => chapter.paragraphs.join("\n\n")}
-                  onClose={() => {
-                    setConceptMapOpen(false);
-                    focusToolbarButton("reader-toolbar-concept-map");
-                  }}
-                />
-              ) : null}
+              <ConceptMapPanel
+                open={conceptMapOpen}
+                bookId={bookId ?? book.id}
+                bookTitle={book.title}
+                chapterKey={`chapter:${chapterIndex}`}
+                chapterTitle={chapter.title}
+                getChapterText={async () => chapter.paragraphs.join("\n\n")}
+                onClose={() => {
+                  setConceptMapOpen(false);
+                  focusToolbarButton("reader-toolbar-concept-map");
+                }}
+              />
             </div>
 
             <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
