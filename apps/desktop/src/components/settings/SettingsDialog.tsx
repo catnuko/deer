@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BookOpenText,
   Database,
@@ -62,8 +62,23 @@ export function SettingsDialog() {
   const open = useSettingsDialogStore((state) => state.open);
   const setOpen = useSettingsDialogStore((state) => state.setOpen);
   const [section, setSection] = useState<SettingsSection>("general");
+  const [animateSection, setAnimateSection] = useState(false);
+  const sectionScrollRef = useRef<HTMLDivElement>(null);
   const wide = useMediaQuery(NARROW_MEDIA_QUERY);
   const roomy = useMediaQuery(ROOMY_MEDIA_QUERY);
+
+  // 弹窗每次重新打开时回到首屏状态：只播弹窗自入场，右栏内容不重复播（motion.md M8）。
+  useEffect(() => {
+    if (!open) setAnimateSection(false);
+  }, [open]);
+
+  const selectSection = (next: SettingsSection) => {
+    if (next === section) return;
+    // 切组滚动位置立即归零，不做平滑滚动。
+    sectionScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    setAnimateSection(true);
+    setSection(next);
+  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -98,7 +113,7 @@ export function SettingsDialog() {
                   key={item.id}
                   type="button"
                   aria-current={active ? "page" : undefined}
-                  onClick={() => setSection(item.id)}
+                  onClick={() => selectSection(item.id)}
                   className={cn(
                     "flex items-center gap-2 rounded-md text-sm transition-colors duration-fast ease-enter",
                     wide
@@ -116,8 +131,17 @@ export function SettingsDialog() {
             })}
           </nav>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-6">
-            <div className="border-border bg-card text-card-foreground rounded-xl border p-4">
+          <div
+            ref={sectionScrollRef}
+            className="min-h-0 flex-1 overflow-y-auto p-6"
+          >
+            <div
+              key={section}
+              className={cn(
+                "border-border bg-card text-card-foreground rounded-xl border p-4",
+                animateSection && "deer-section-in",
+              )}
+            >
               {section === "general" ? <GeneralSection /> : null}
               {section === "appearance" ? <AppearanceSection /> : null}
               {section === "reading" ? <ReadingSection /> : null}

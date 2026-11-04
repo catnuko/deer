@@ -288,6 +288,22 @@ foliate-view::part(filter) {
   animation-delay: calc(var(--deer-index, 0) * var(--motion-stagger));
 }
 
+/* 设置右栏切组：内容淡入上移 4px，120ms；旧内容由 keyed 重挂即时换掉（M8）。 */
+@keyframes deer-section-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.deer-section-in {
+  animation: deer-section-in var(--transition-duration-fast) var(--ease-enter);
+}
+
 /* 主题切换：有 View Transition 时走原生伪元素，否则只过渡 body 底色与文字。 */
 ::view-transition-old(root),
 ::view-transition-new(root) {
