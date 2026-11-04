@@ -456,7 +456,7 @@ export function BookshelfPage() {
                     key={book.id}
                     className="deer-list-item min-w-0"
                     // 前 12 项 40ms 错峰，第 13 项起延迟固定为 0（motion.md M4）。
-                    style={{ "--deer-index": Math.min(index, 12) } as CSSProperties}
+                    style={{ "--deer-index": index < 12 ? index : 0 } as CSSProperties}
                   >
                     <BookCard
                       book={book}
