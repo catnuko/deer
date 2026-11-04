@@ -42,6 +42,7 @@ import {
   readingStyles,
 } from "@/lib/foliate";
 import { applyPaginatorLayout, paginatorLayoutFor } from "@/lib/pageLayout";
+import { toggleOverlayPair, type OverlayPair } from "./overlayPair";
 import { isTauri } from "@/lib/platform";
 import {
   createNoteHoverCaches,
@@ -309,16 +310,29 @@ export function ReaderPage() {
   const [quickSettingsImmediate, setQuickSettingsImmediate] = useState(false);
   const [conceptMapImmediate, setConceptMapImmediate] = useState(false);
 
-  // 浮层互斥（规范 1.3）：显示设置与概念地图同时只开一个。
+  // 浮层互斥（规范 1.3）：显示设置与概念地图同时只开一个。打开一方时另一方
+  // 立即摘除，不播 150ms 退场——否则两层并存，旧面板还在拦点击（G8）。
+  const applyOverlayPair = (
+    slot: "quickSettings" | "conceptMap",
+  ): OverlayPair => {
+    const next = toggleOverlayPair(
+      {
+        quickSettings: { open: quickSettingsOpen, immediate: quickSettingsImmediate },
+        conceptMap: { open: conceptMapOpen, immediate: conceptMapImmediate },
+      },
+      slot,
+    );
+    setQuickSettingsOpen(next.quickSettings.open);
+    setQuickSettingsImmediate(next.quickSettings.immediate);
+    setConceptMapOpen(next.conceptMap.open);
+    setConceptMapImmediate(next.conceptMap.immediate);
+    return next;
+  };
   const toggleQuickSettings = () => {
-    setQuickSettingsImmediate(false);
-    if (quickSettingsOpen) {
-      setQuickSettingsOpen(false);
+    const next = applyOverlayPair("quickSettings");
+    if (!next.quickSettings.open) {
       focusToolbarButton("reader-toolbar-display");
-      return;
     }
-    setConceptMapOpen(false);
-    setQuickSettingsOpen(true);
   };
   const closeQuickSettings = useCallback(() => {
     setQuickSettingsImmediate(false);
@@ -326,15 +340,14 @@ export function ReaderPage() {
     focusToolbarButton("reader-toolbar-display");
   }, []);
   const toggleConceptMap = () => {
-    setConceptMapImmediate(false);
-    if (conceptMapOpen) {
-      setConceptMapOpen(false);
-      focusToolbarButton("reader-toolbar-concept-map");
-      return;
+    const willOpen = !conceptMapOpen;
+    if (willOpen) {
+      setConceptMapChapterKey(`sec:${currentSectionRef.current}`);
     }
-    setQuickSettingsOpen(false);
-    setConceptMapChapterKey(`sec:${currentSectionRef.current}`);
-    setConceptMapOpen(true);
+    applyOverlayPair("conceptMap");
+    if (!willOpen) {
+      focusToolbarButton("reader-toolbar-concept-map");
+    }
   };
   const closeConceptMap = useCallback(() => {
     setConceptMapImmediate(false);
