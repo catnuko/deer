@@ -172,8 +172,11 @@ export function ConceptMapPanel({
       immediate={immediate}
       exit="panel"
       variant="scale"
+      modal
+      role="dialog"
       ariaLabel="章节概念地图"
-      className="border-border bg-background inset-4 flex flex-col rounded-lg border shadow-md"
+      // 与设置弹窗同规格：900×640，视口放不下时退回 94vw×86vh。
+      className="border-border bg-background flex h-[640px] max-h-[86vh] w-[900px] max-w-[94vw] flex-col overflow-hidden rounded-lg border shadow-md"
       closeOnOutside
       onClose={onClose}
     >

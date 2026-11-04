@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { prefersReducedMotion } from "@/lib/useReducedMotion";
 
@@ -24,6 +25,11 @@ type ReaderOverlayProps = {
   /** 点浮层外关闭；工具栏按钮除外（否则与按钮自身的 toggle 打架）。 */
   closeOnOutside?: boolean;
   closeOnEscape?: boolean;
+  /**
+   * 视口居中模态（概念地图）：挂到 body、铺遮罩、用网格居中。
+   * 不要用 translate(-50%,-50%) 居中——那会和缩放入场的 transform 打架。
+   */
+  modal?: boolean;
   children: ReactNode;
 };
 
@@ -47,6 +53,7 @@ export function ReaderOverlay({
   className,
   closeOnOutside = false,
   closeOnEscape = true,
+  modal = false,
   children,
 }: ReaderOverlayProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -96,19 +103,22 @@ export function ReaderOverlay({
       if (target.closest('[id^="reader-toolbar-"]')) return;
       onClose();
     };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+    // 捕获阶段：模态层在包装元素上 stopPropagation 挡正文，冒泡阶段会先被掐断。
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () =>
+      document.removeEventListener("pointerdown", onPointerDown, true);
   }, [open, closeOnOutside, onClose]);
 
   if (!presence.shown) return null;
 
-  return (
+  const surface = (
     <div
       ref={surfaceRef}
       role={role}
       aria-label={ariaLabel}
+      aria-modal={modal ? true : undefined}
       className={cn(
-        "absolute z-20",
+        modal ? "relative" : "absolute z-20",
         presence.closing
           ? variant === "scale"
             ? "deer-overlay-out-scale"
@@ -125,5 +135,25 @@ export function ReaderOverlay({
     >
       {children}
     </div>
+  );
+
+  if (!modal) return surface;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 grid place-items-center"
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div
+        aria-hidden="true"
+        className={cn(
+          "absolute inset-0 bg-black/10",
+          presence.closing ? "deer-backdrop-out" : "deer-backdrop-in",
+        )}
+      />
+      {surface}
+    </div>,
+    document.body,
   );
 }

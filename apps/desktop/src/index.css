@@ -223,6 +223,33 @@ foliate-view::part(filter) {
   animation: deer-overlay-drop-out var(--transition-duration-exit) var(--ease-exit);
 }
 
+/* 视口居中模态的遮罩：与面板同一条进出节奏（200ms 入 / 150ms 出）。 */
+@keyframes deer-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes deer-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.deer-backdrop-in {
+  animation: deer-backdrop-in var(--transition-duration-base) var(--ease-enter) both;
+}
+
+.deer-backdrop-out {
+  animation: deer-backdrop-out var(--transition-duration-exit) var(--ease-exit) both;
+}
+
 .deer-overlay-in-scale {
   animation: deer-overlay-scale-in var(--transition-duration-base) var(--ease-enter);
 }
