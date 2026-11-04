@@ -47,7 +47,7 @@ export function BookCard({
   const progressPercent = Math.round(Math.min(Math.max(book.progress, 0), 1) * 100);
 
   return (
-    <MinimalCard className="group/card flex flex-col gap-3 p-3 hover:-translate-y-0.5">
+    <MinimalCard className="deer-lift group/card flex flex-col gap-3 p-3 hover:-translate-y-0.5">
       <button
         type="button"
         onClick={() => onOpen(book)}

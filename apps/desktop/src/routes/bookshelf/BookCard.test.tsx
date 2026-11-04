@@ -49,6 +49,22 @@ describe("BookCard", () => {
     ).toBeInTheDocument();
   });
 
+  it("卡片带 deer-lift 钩子，减少动态效果下抬升由它取消（D-05）", () => {
+    render(
+      <BookCard
+        book={makeBook()}
+        shelves={SHELVES}
+        onOpen={() => {}}
+        onToggleShelf={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    const card = screen.getByRole("heading", { name: "三体" }).closest(".deer-lift");
+    expect(card).toBeTruthy();
+    expect(card?.className).toContain("hover:-translate-y-0.5");
+  });
+
   it("没有封面时用书名首字做占位封面", () => {
     render(
       <BookCard

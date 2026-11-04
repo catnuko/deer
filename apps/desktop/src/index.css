@@ -381,4 +381,11 @@ foliate-view::part(filter) {
     animation: none !important;
     opacity: 0.6;
   }
+
+  /* M5 的 hover/active 抬升在降级下取消（motion.md §4.2）：只清 translate，
+     不动 transform —— 弹窗居中与提示箭头还要靠它。 */
+  .deer-lift:hover,
+  .deer-lift:active {
+    translate: none !important;
+  }
 }
