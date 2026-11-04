@@ -220,7 +220,7 @@ foliate-view::part(filter) {
 }
 
 .deer-overlay-out-drop {
-  animation: deer-overlay-drop-out var(--transition-duration-exit) var(--ease-exit);
+  animation: deer-overlay-drop-out var(--transition-duration-exit) var(--ease-exit) both;
 }
 
 /* 视口居中模态的遮罩：与面板同一条进出节奏（200ms 入 / 150ms 出）。 */
@@ -255,7 +255,7 @@ foliate-view::part(filter) {
 }
 
 .deer-overlay-out-scale {
-  animation: deer-overlay-scale-out var(--transition-duration-exit) var(--ease-exit);
+  animation: deer-overlay-scale-out var(--transition-duration-exit) var(--ease-exit) both;
 }
 
 /* 小浮层（划选菜单、脚注卡）：朝锚点方向 4px 进入，120ms。 */
