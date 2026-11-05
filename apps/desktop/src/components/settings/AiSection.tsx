@@ -1,5 +1,6 @@
 import { Brain } from "lucide-react";
 import { AcpxStatusCard } from "@/components/ai/AcpxStatusCard";
+import { AiEngineList } from "@/components/ai/AiEngineList";
 import { Separator } from "@/components/ui/separator";
 
 export function AiSection() {
@@ -8,11 +9,13 @@ export function AiSection() {
       <div>
         <p className="text-sm font-medium">AI 伴读引擎</p>
         <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
-          使用本机的 acpx 连接 Claude Code CLI，书籍与对话都留在本机。
+          经本机 acpx 连接各编码引擎 CLI，选中哪个用哪个，书籍与对话都留在本机。
         </p>
       </div>
 
       <AcpxStatusCard />
+
+      <AiEngineList />
 
       <Separator />
 
@@ -21,8 +24,8 @@ export function AiSection() {
         <div>
           <p className="text-sm font-medium">深度思考</p>
           <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
-            始终开启：每轮对话都会注入 10000 token 的思考预算，让模型先推理再回答。
-            这是一个固定行为，不提供关闭开关。
+            始终开启：Claude Code 每轮注入 10000 token 的思考预算，先推理再回答；
+            其他引擎按各自 CLI 的深度思考能力决定。不提供关闭开关。
           </p>
         </div>
       </div>

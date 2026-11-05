@@ -20,6 +20,8 @@ pub fn run() {
             greet,
             acpx::acpx_chat,
             acpx::acpx_env_check,
+            acpx::ai_engine_status,
+            acpx::ai_engine_install,
             deer_log::diag_log
         ])
         .run(tauri::generate_context!())
