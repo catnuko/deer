@@ -1194,6 +1194,7 @@ const copyAnnotationText = useCallback((text: string) => {
         onCopyAnnotation={copyAnnotationText}
         onHighlightSelection={highlightSelection}
         onNoteSelection={noteSelection}
+        onOpenPanel={() => setChatOpen(true)}
         onSummarizeChapter={() => void summarizeCurrentSection()}
         conceptMapOpen={conceptMapOpen}
         conceptMapImmediate={conceptMapImmediate}
@@ -1287,6 +1288,8 @@ type RealReaderProps = {
   ) => void;
   onNoteSelection: (note: string, cfi: string | null, text: string) => void;
   onSummarizeChapter: () => void;
+  /** 只打开 AI 面板，不发送任何消息（顶栏「AI 伴读」按钮）。 */
+  onOpenPanel: () => void;
   conceptMapOpen: boolean;
   conceptMapImmediate: boolean;
   conceptMapChapterKey: string | null;
@@ -1346,6 +1349,7 @@ function RealReader({
   onHighlightSelection,
   onNoteSelection,
   onSummarizeChapter,
+  onOpenPanel,
   conceptMapOpen,
   conceptMapImmediate,
   conceptMapChapterKey,
@@ -1389,7 +1393,8 @@ function RealReader({
           onToggleQuickSettings={onToggleQuickSettings}
           conceptMapOpen={conceptMapOpen}
           onToggleConceptMap={onToggleConceptMap}
-          onSummarizeChapter={onSummarizeChapter}
+          onOpenPanel={onOpenPanel}
+          panelOpen={chatOpen}
         />
 
         <div className="flex min-h-0 flex-1">
@@ -1636,6 +1641,7 @@ function RealReader({
         draft={draft}
         onClose={onClosePanel}
         open={chatOpen}
+        onSummarizeChapter={onSummarizeChapter}
       />
     </div>
   );
@@ -1790,7 +1796,8 @@ function DemoReader({
           onToggleToc={() => setTocOpen((open) => !open)}
           conceptMapOpen={conceptMapOpen}
           onToggleConceptMap={() => setConceptMapOpen((open) => !open)}
-          onSummarizeChapter={summarizeChapter}
+          onOpenPanel={onOpenPanel}
+          panelOpen={chatOpen}
         />
 
         <div className="flex min-h-0 flex-1">
@@ -1910,6 +1917,7 @@ function DemoReader({
         draft={draft}
         onClose={onClosePanel}
         open={chatOpen}
+        onSummarizeChapter={summarizeChapter}
       />
     </div>
   );

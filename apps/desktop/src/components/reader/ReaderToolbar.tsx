@@ -41,8 +41,9 @@ type ReaderToolbarProps = {
   onToggleQuickSettings?: () => void;
   conceptMapOpen?: boolean;
   onToggleConceptMap?: () => void;
-  /** 提供时显示「总结本章」入口（章节总结 N3）。 */
-  onSummarizeChapter?: () => void;
+  /** 提供时显示「AI 伴读」入口：只打开面板，不发送任何消息。 */
+  onOpenPanel?: () => void;
+  panelOpen?: boolean;
 };
 
 const activeCls = "bg-accent text-accent-foreground";
@@ -99,27 +100,17 @@ export function ReaderToolbar({
   onToggleQuickSettings,
   conceptMapOpen,
   onToggleConceptMap,
-  onSummarizeChapter,
+  onOpenPanel,
+  panelOpen,
 }: ReaderToolbarProps) {
   const navigate = useNavigate();
   const openSettings = useSettingsDialogStore((state) => state.openDialog);
-  // 窄窗（<md）AI 组收进「更多」，避免顶栏溢出（规范 1.6）。
+  // 窄窗（<md）概念地图收进「更多」，AI 伴读保持直按（规范 1.6）。
   const isWide = useMediaQuery("(min-width: 768px)");
 
-  const aiEntries = [
-    ...(onSummarizeChapter
-      ? [{ label: "总结本章", icon: <Sparkles />, onClick: onSummarizeChapter }]
-      : []),
-    ...(onToggleConceptMap
-      ? [
-          {
-            label: "概念地图",
-            icon: <Map />,
-            onClick: onToggleConceptMap,
-          },
-        ]
-      : []),
-  ];
+  const moreEntries = onToggleConceptMap
+    ? [{ label: "概念地图", icon: <Map />, onClick: onToggleConceptMap }]
+    : [];
 
   return (
     <TooltipProvider>
@@ -171,12 +162,24 @@ export function ReaderToolbar({
             />
           ) : null}
 
-          {aiEntries.length > 0 ? (
+          {onOpenPanel ? (
+            <>
+              <div className="bg-border mx-1 h-5 w-px" />
+              <ToolbarButton
+                label="AI 伴读"
+                icon={<Sparkles className="size-4" />}
+                pressed={panelOpen}
+                onClick={onOpenPanel}
+              />
+            </>
+          ) : null}
+
+          {moreEntries.length > 0 ? (
             <>
               <div className="bg-border mx-1 h-5 w-px" />
               {isWide ? (
                 <div className="flex items-center gap-1">
-                  {aiEntries.map((entry) => (
+                  {moreEntries.map((entry) => (
                     <ToolbarButton
                       key={entry.label}
                       id={
@@ -207,7 +210,7 @@ export function ReaderToolbar({
                     <Ellipsis className="size-4" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    {aiEntries.map((entry) => (
+                    {moreEntries.map((entry) => (
                       <DropdownMenuItem
                         key={entry.label}
                         onClick={entry.onClick}

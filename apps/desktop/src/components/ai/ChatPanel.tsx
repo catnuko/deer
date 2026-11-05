@@ -9,7 +9,7 @@ import {
   useAui,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { ArrowUp, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
+import { ArrowUp, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
@@ -198,6 +198,7 @@ export function ChatPanel({
   className,
   readingContext,
   draft,
+  onSummarizeChapter,
   ref,
 }: {
   book: CurrentBook;
@@ -211,6 +212,8 @@ export function ChatPanel({
   readingContext?: ReadingContext | null;
   /** 外部入口预填输入框（划选问 Deer 等）；id 变化即重填。 */
   draft?: ChatPanelDraft | null;
+  /** 「总结本章」显式动作（面板内快捷入口）；不提供则不显示。打开面板本身不发消息。 */
+  onSummarizeChapter?: () => void;
   ref?: React.Ref<ChatPanelHandle>;
 }) {
   const ready = useChatStore((s) => s.ready);
@@ -521,6 +524,17 @@ export function ChatPanel({
         <Badge variant="secondary" className="mt-1 shrink-0 text-[11px]">
           {tauri ? "acpx · Claude" : "未接后端（浏览器预览）"}
         </Badge>
+        {onSummarizeChapter ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0 text-xs"
+            onClick={onSummarizeChapter}
+          >
+            <Sparkles className="size-3.5" />
+            总结本章
+          </Button>
+        ) : null}
         <Button
           variant="ghost"
           size="icon"
