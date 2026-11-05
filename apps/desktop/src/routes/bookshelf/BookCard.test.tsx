@@ -30,7 +30,7 @@ function makeBook(overrides: Partial<Book> = {}): Book {
 afterEach(cleanup);
 
 describe("BookCard", () => {
-  it("显示书名、作者和大小/日期元信息", () => {
+  it("只显示书名（单行截断）和作者，不再有大小/日期行", () => {
     const book = makeBook();
     render(
       <BookCard
@@ -42,14 +42,16 @@ describe("BookCard", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "三体" })).toBeInTheDocument();
+    const title = screen.getByRole("heading", { name: "三体" });
+    expect(title).toBeInTheDocument();
+    expect(title.className).toContain("truncate");
     expect(screen.getByText("刘慈欣")).toBeInTheDocument();
     expect(
-      screen.getByText(`${formatBytes(book.sizeBytes)} · ${formatDate(book.addedAt)}`),
-    ).toBeInTheDocument();
+      screen.queryByText(`${formatBytes(book.sizeBytes)} · ${formatDate(book.addedAt)}`),
+    ).not.toBeInTheDocument();
   });
 
-  it("卡片带 deer-lift 钩子，减少动态效果下抬升由它取消（D-05）", () => {
+  it("卡片带 deer-lift 钩子与悬浮加深阴影，减少动态效果下抬升由它取消（D-05）", () => {
     render(
       <BookCard
         book={makeBook()}
@@ -63,6 +65,7 @@ describe("BookCard", () => {
     const card = screen.getByRole("heading", { name: "三体" }).closest(".deer-lift");
     expect(card).toBeTruthy();
     expect(card?.className).toContain("hover:-translate-y-0.5");
+    expect(card?.className).toContain("hover:shadow-lg");
   });
 
   it("没有封面时用书名首字做占位封面", () => {
