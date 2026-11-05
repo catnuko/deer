@@ -46,6 +46,9 @@ export type SelectionPlacement = {
   x: number;
   y: number;
   placement: "above" | "below";
+  /** 选区上下缘（宿主坐标系）：浮层自量尺寸后翻转与夹边用。 */
+  selTop: number;
+  selBottom: number;
 };
 
 /**
@@ -68,6 +71,53 @@ export function popoverPlacement(
       Math.max(hostRect.width - edgePadding, edgePadding),
     ),
     y: placement === "above" ? selTop - 8 : selBottom + 8,
+    placement,
+    selTop,
+    selBottom,
+  };
+}
+
+export type PopoverFit = {
+  left: number;
+  top: number;
+  placement: "above" | "below";
+};
+
+/**
+ * 浮层量出真实尺寸后的最终落位（全部宿主坐标系）：优先选区上方，
+ * 放不下翻下方，两边都放不下取空间更大的一侧；四边夹在宿主内留
+ * 8px 边距，任何情况下不越出宿主（宿主 overflow-hidden，越出即被裁）。
+ * 纯几何计算，宿主高宽由调用方实测传入。
+ */
+export function fitPopover(
+  sel: { top: number; bottom: number; centerX: number },
+  host: { width: number; height: number },
+  popup: { width: number; height: number },
+  margin = 8,
+  gap = 8,
+): PopoverFit {
+  const spaceAbove = sel.top - margin;
+  const spaceBelow = host.height - margin - sel.bottom;
+  const need = popup.height + gap;
+  const placement =
+    spaceAbove >= need
+      ? "above"
+      : spaceBelow >= need
+        ? "below"
+        : spaceAbove >= spaceBelow
+          ? "above"
+          : "below";
+  const top =
+    placement === "above" ? sel.top - gap - popup.height : sel.bottom + gap;
+  return {
+    left: Math.min(
+      Math.max(sel.centerX - popup.width / 2, margin),
+      Math.max(host.width - popup.width - margin, margin),
+    ),
+    top: Math.min(
+      Math.max(top, margin),
+      Math.max(host.height - popup.height - margin, margin),
+    ),
     placement,
   };
 }

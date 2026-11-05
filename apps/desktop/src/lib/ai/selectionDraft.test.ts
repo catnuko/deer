@@ -3,6 +3,7 @@ import {
   SELECTION_MAX_CHARS,
   formatSelectionDraft,
   popoverPlacement,
+  fitPopover,
   selectionTextOf,
 } from "./selectionDraft";
 
@@ -86,13 +87,25 @@ describe("popoverPlacement", () => {
   it("浮层水平居中于选区，选区够靠下时放上方、留 8px 间距", () => {
     expect(
       popoverPlacement({ top: 300, left: 300, width: 200, height: 60 }, host),
-    ).toEqual({ x: 400, y: 292, placement: "above" });
+    ).toEqual({
+      x: 400,
+      y: 292,
+      placement: "above",
+      selTop: 300,
+      selBottom: 360,
+    });
   });
 
   it("选区贴近顶部时改放下方", () => {
     expect(
       popoverPlacement({ top: 20, left: 300, width: 200, height: 60 }, host),
-    ).toEqual({ x: 400, y: 88, placement: "below" });
+    ).toEqual({
+      x: 400,
+      y: 88,
+      placement: "below",
+      selTop: 20,
+      selBottom: 80,
+    });
   });
 
   it("居中点落在容器边缘留白内时被夹回（窄选区贴边）", () => {
@@ -111,6 +124,45 @@ describe("popoverPlacement", () => {
         { top: 540, left: 1100, width: 100, height: 40 },
         { top: 480, left: 1000, width: 400 },
       ),
-    ).toEqual({ x: 150, y: 52, placement: "above" });
+    ).toEqual({
+      x: 150,
+      y: 52,
+      placement: "above",
+      selTop: 60,
+      selBottom: 100,
+    });
+  });
+});
+
+describe("fitPopover", () => {
+  const host = { width: 800, height: 600 };
+  const popup = { width: 280, height: 96 };
+
+  it("选区上方放得下就优先上方，水平居中", () => {
+    expect(
+      fitPopover({ top: 300, bottom: 360, centerX: 400 }, host, popup),
+    ).toEqual({ left: 260, top: 196, placement: "above" });
+  });
+
+  it("上方放不下翻下方", () => {
+    expect(
+      fitPopover({ top: 60, bottom: 100, centerX: 400 }, host, popup),
+    ).toEqual({ left: 260, top: 108, placement: "below" });
+  });
+
+  it("两边都放不下取空间更大的一侧，并夹在宿主内", () => {
+    // 紧贴顶部：上方空间 8-8=0 < 需求，下方放得下 → 下方（此处上方更小仍走下方）。
+    const tight = fitPopover({ top: 12, bottom: 40, centerX: 400 }, host, popup);
+    expect(tight.placement).toBe("below");
+    // 选区贴近底部：下方放不下 → 翻上方。
+    const bottom = fitPopover({ top: 520, bottom: 580, centerX: 400 }, host, popup);
+    expect(bottom.placement).toBe("above");
+  });
+
+  it("水平居中点越出宿主边缘时夹回 8px 边距", () => {
+    const fitted = fitPopover({ top: 300, bottom: 360, centerX: 20 }, host, popup);
+    expect(fitted.left).toBe(8);
+    const right = fitPopover({ top: 300, bottom: 360, centerX: 790 }, host, popup);
+    expect(right.left).toBe(800 - 280 - 8);
   });
 });

@@ -6,8 +6,8 @@ import {
 } from "./highlightColors";
 
 describe("HIGHLIGHT_COLORS", () => {
-  it("至少四个颜色，key 与 value 互不重复", () => {
-    expect(HIGHLIGHT_COLORS.length).toBeGreaterThanOrEqual(4);
+  it("五枚颜色，key 与 value 互不重复", () => {
+    expect(HIGHLIGHT_COLORS).toHaveLength(5);
     const keys = HIGHLIGHT_COLORS.map((color) => color.key);
     const values = HIGHLIGHT_COLORS.map((color) => color.value);
     expect(new Set(keys).size).toBe(keys.length);
@@ -17,7 +17,7 @@ describe("HIGHLIGHT_COLORS", () => {
 
 describe("highlightColorOf", () => {
   it("已知颜色原样返回该色", () => {
-    expect(highlightColorOf("#6FB6FF").key).toBe("blue");
+    expect(highlightColorOf("#82B2F9").key).toBe("blue");
   });
 
   it("未知、空或缺失的值都退回默认色", () => {

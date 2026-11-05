@@ -82,7 +82,12 @@ import {
   type PageTurnMode,
   type PaperColor,
 } from "@/store/readingSettings";
-import { DEFAULT_HIGHLIGHT_COLOR } from "@/components/reader/highlightColors";
+import {
+  DEFAULT_ANNOTATION_STYLE,
+  DEFAULT_HIGHLIGHT_COLOR,
+  annotationStyleOf,
+  type AnnotationStyle,
+} from "@/components/reader/highlightColors";
 import { getDemoBook } from "@/routes/reader/demoBook";
 import { matchTocIndex, type TocItem } from "@/routes/reader/epubToc";
 import {
@@ -463,17 +468,27 @@ const copyAnnotationText = useCallback((text: string) => {
   }, []);
 
   // 高亮/笔记：foliate 画临时层，annotationStore 落盘，回显与编辑菜单都以此为源。
+  // 微信读书式：点「划线」立即用传入配置落线，菜单不关，就地切进编辑态。
   const highlightSelection = useCallback(
-    (color: string, cfi: string | null, text: string) => {
-      if (cfi && bookKey) {
+    (sel: SelectionState, style: AnnotationStyle, color: string) => {
+      if (sel.cfi && bookKey) {
         void viewRef.current
-          ?.addAnnotation({ value: cfi, color })
+          ?.addAnnotation({ value: sel.cfi, color, style })
           .catch(() => undefined);
-        useAnnotationStore.getState().add({
+        const annotation = useAnnotationStore.getState().add({
           bookId: bookKey,
-          cfi,
+          cfi: sel.cfi,
           color,
-          ...(text ? { excerpt: text } : {}),
+          style,
+          ...(sel.text ? { excerpt: sel.text } : {}),
+        });
+        setAnnotationMenu({
+          x: sel.x,
+          y: sel.y,
+          placement: sel.placement,
+          selTop: sel.selTop,
+          selBottom: sel.selBottom,
+          annotation,
         });
       }
       setSelection(null);
@@ -489,6 +504,7 @@ const copyAnnotationText = useCallback((text: string) => {
           ?.addAnnotation({
             value: cfi,
             color: DEFAULT_HIGHLIGHT_COLOR,
+            style: DEFAULT_ANNOTATION_STYLE,
             note,
           })
           .catch(() => undefined);
@@ -496,6 +512,7 @@ const copyAnnotationText = useCallback((text: string) => {
           bookId: bookKey,
           cfi,
           color: DEFAULT_HIGHLIGHT_COLOR,
+          style: DEFAULT_ANNOTATION_STYLE,
           note,
           ...(text ? { excerpt: text } : {}),
         });
@@ -506,17 +523,22 @@ const copyAnnotationText = useCallback((text: string) => {
     [bookKey],
   );
 
-  // 点击已有高亮的三个动作：改色重画（foliate 同 key 先移除再画）、
-  // 笔记只落盘、删除双删（store + overlayer）。
-  const changeAnnotationColor = useCallback(
-    (color: string) => {
+  // 点击已有高亮的三个动作：样式/颜色即时重画（foliate 同 key 先移除再画，
+  // 菜单不关）、笔记只落盘、删除双删（store + overlayer）。
+  const updateAnnotationMenu = useCallback(
+    (style: AnnotationStyle, color: string) => {
       const annotation = annotationMenu?.annotation;
       if (!annotation || !bookKey) return;
       useAnnotationStore.getState().setColor(annotation.id, color);
+      useAnnotationStore.getState().setStyle(annotation.id, style);
       void viewRef.current
-        ?.addAnnotation({ value: annotation.cfi, color, note: annotation.note })
+        ?.addAnnotation({
+          value: annotation.cfi,
+          color,
+          style,
+          note: annotation.note,
+        })
         .catch(() => undefined);
-      setAnnotationMenu(null);
     },
     [annotationMenu, bookKey],
   );
@@ -754,12 +776,23 @@ const copyAnnotationText = useCallback((text: string) => {
     noteRuntimeRef.current = noteRuntime;
 
     // 高亮渲染：foliate 的 addAnnotation 只发 draw-annotation 事件，
-    // 颜色取注解上的 color 字段，画半透明高亮块。
+    // 颜色取注解上的 color 字段，样式按 style 选绘制策略（旧数据无 style → 马克笔）。
     const onDrawAnnotation = (event: Event) => {
       const detail = (event as CustomEvent<DrawAnnotationDetail>).detail;
       if (!detail) return;
       const color = detail.annotation.color;
-      detail.draw(Overlayer.highlight, {
+      const style = annotationStyleOf(
+        typeof detail.annotation.style === "string"
+          ? detail.annotation.style
+          : undefined,
+      );
+      const draw =
+        style === "line"
+          ? Overlayer.underline
+          : style === "dash"
+            ? Overlayer.squiggly
+            : Overlayer.highlight;
+      detail.draw(draw, {
         color: typeof color === "string" ? color : undefined,
       });
     };
@@ -771,7 +804,12 @@ const copyAnnotationText = useCallback((text: string) => {
       if (!view) return;
       for (const a of useAnnotationStore.getState().listForBook(shelfBook.id)) {
         void view
-          .addAnnotation({ value: a.cfi, color: a.color, note: a.note })
+          .addAnnotation({
+            value: a.cfi,
+            color: a.color,
+            style: a.style,
+            note: a.note,
+          })
           .then(() => {
             drawnAnnotationCfisRef.current.add(a.cfi);
           })
@@ -1091,7 +1129,7 @@ const copyAnnotationText = useCallback((text: string) => {
         onCloseNotePeek={closeNotePeek}
         onCancelNoteScheduledClose={cancelNoteScheduledClose}
         annotationMenu={annotationMenu}
-        onChangeAnnotationColor={changeAnnotationColor}
+        onChangeAnnotationStyle={updateAnnotationMenu}
         onEditAnnotationNote={editAnnotationNote}
         onDeleteAnnotation={deleteAnnotationMenu}
         notesOpen={notesOpen}
@@ -1172,7 +1210,7 @@ type RealReaderProps = {
   annotationMenu:
     | (SelectionPlacement & { annotation: StoredAnnotation })
     | null;
-  onChangeAnnotationColor: (color: string) => void;
+  onChangeAnnotationStyle: (style: AnnotationStyle, color: string) => void;
   onEditAnnotationNote: (note: string) => void;
   onDeleteAnnotation: () => void;
   notesOpen: boolean;
@@ -1205,7 +1243,11 @@ type RealReaderProps = {
   onCopySelection: (text: string) => void;
   /** 编辑已有高亮菜单里的「复制」：复制摘录并收口菜单。 */
   onCopyAnnotation: (text: string) => void;
-  onHighlightSelection: (color: string, cfi: string | null, text: string) => void;
+  onHighlightSelection: (
+    sel: SelectionState,
+    style: AnnotationStyle,
+    color: string,
+  ) => void;
   onNoteSelection: (note: string, cfi: string | null, text: string) => void;
   onSummarizeChapter: () => void;
   conceptMapOpen: boolean;
@@ -1233,7 +1275,7 @@ function RealReader({
   onCloseNotePeek,
   onCancelNoteScheduledClose,
   annotationMenu,
-  onChangeAnnotationColor,
+  onChangeAnnotationStyle,
   onEditAnnotationNote,
   onDeleteAnnotation,
   notesOpen,
@@ -1445,9 +1487,12 @@ function RealReader({
                   x={annotationMenu.x}
                   y={annotationMenu.y}
                   placement={annotationMenu.placement}
+                  selTop={annotationMenu.selTop}
+                  selBottom={annotationMenu.selBottom}
                   text={annotationMenu.annotation.excerpt ?? ""}
                   existing={{
                     color: annotationMenu.annotation.color,
+                    style: annotationMenu.annotation.style ?? "marker",
                     note: annotationMenu.annotation.note,
                   }}
                   onCopy={
@@ -1455,7 +1500,7 @@ function RealReader({
                       ? onCopyAnnotation
                       : undefined
                   }
-                  onHighlight={onChangeAnnotationColor}
+                  onHighlight={onChangeAnnotationStyle}
                   onNote={onEditAnnotationNote}
                   onDelete={onDeleteAnnotation}
                 />
@@ -1465,10 +1510,12 @@ function RealReader({
                   x={selection.x}
                   y={selection.y}
                   placement={selection.placement}
+                  selTop={selection.selTop}
+                  selBottom={selection.selBottom}
                   text={selection.text}
                   onCopy={onCopySelection}
-                  onHighlight={(color) =>
-                    onHighlightSelection(color, selection.cfi, selection.text)
+                  onHighlight={(style, color) =>
+                    onHighlightSelection(selection, style, color)
                   }
                   onNote={(note) =>
                     onNoteSelection(note, selection.cfi, selection.text)
@@ -1745,6 +1792,8 @@ function DemoReader({
                   x={selection.x}
                   y={selection.y}
                   placement={selection.placement}
+                  selTop={selection.selTop}
+                  selBottom={selection.selBottom}
                   text={selection.text}
                   onCopy={onCopySelection}
                   onHighlight={() => closeSelection()}

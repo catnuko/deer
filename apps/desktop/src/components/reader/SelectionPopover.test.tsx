@@ -2,7 +2,11 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HIGHLIGHT_COLORS } from "./highlightColors";
+import {
+  DEFAULT_ANNOTATION_STYLE,
+  DEFAULT_HIGHLIGHT_COLOR,
+  HIGHLIGHT_COLORS,
+} from "./highlightColors";
 import { SelectionPopover } from "./SelectionPopover";
 
 afterEach(cleanup);
@@ -11,6 +15,8 @@ const baseProps = {
   x: 120,
   y: 64,
   placement: "above" as const,
+  selTop: 72,
+  selBottom: 96,
   text: "被划选的句子",
 };
 
@@ -36,9 +42,19 @@ describe("SelectionPopover", () => {
     expect(wrapper.style.top).toBe("64px");
     expect(wrapper.className).toContain("absolute");
     expect(wrapper.className).toContain("z-20");
-    for (const name of ["复制", "高亮", "笔记", "问 Deer"]) {
+    for (const name of ["复制", "划线", "写想法", "问 Deer"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+  });
+
+  it("新选区没有行 2（样式/颜色行），落线后才展开", () => {
+    renderPopover();
+    expect(
+      screen.queryByRole("button", { name: "样式：马克笔" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "颜色：浅蓝" }),
+    ).not.toBeInTheDocument();
   });
 
   it("点击复制把选中文本交给 onCopy，且不冒泡到正文容器", async () => {
@@ -62,34 +78,22 @@ describe("SelectionPopover", () => {
     expect(onHostClick).not.toHaveBeenCalled();
   });
 
-  it("点击高亮展开色条，四个颜色按钮各带无障碍名", async () => {
-    renderPopover();
-    const user = userEvent.setup();
-
-    await user.click(screen.getByRole("button", { name: "高亮" }));
-    for (const color of HIGHLIGHT_COLORS) {
-      expect(
-        screen.getByRole("button", { name: `高亮：${color.label}` }),
-      ).toBeInTheDocument();
-    }
-  });
-
-  it("在色条里选色，把颜色值交给 onHighlight", async () => {
+  it("点「划线」立即用默认配置（马克笔 + 第一色）落线", async () => {
     const props = renderPopover();
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "高亮" }));
-    await user.click(
-      screen.getByRole("button", { name: `高亮：${HIGHLIGHT_COLORS[1]!.label}` }),
+    await user.click(screen.getByRole("button", { name: "划线" }));
+    expect(props.onHighlight).toHaveBeenCalledWith(
+      DEFAULT_ANNOTATION_STYLE,
+      DEFAULT_HIGHLIGHT_COLOR,
     );
-    expect(props.onHighlight).toHaveBeenCalledWith(HIGHLIGHT_COLORS[1]!.value);
   });
 
-  it("点击笔记展开输入框，保存按钮在内容为空时禁用", async () => {
+  it("点击写想法展开输入框，保存按钮在内容为空时禁用", async () => {
     renderPopover();
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "笔记" }));
+    await user.click(screen.getByRole("button", { name: "写想法" }));
     const save = screen.getByRole("button", { name: "保存" });
     expect(save).toBeDisabled();
 
@@ -101,7 +105,7 @@ describe("SelectionPopover", () => {
     const props = renderPopover();
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "笔记" }));
+    await user.click(screen.getByRole("button", { name: "写想法" }));
     await user.type(screen.getByLabelText("笔记内容"), "  有感  ");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(props.onNote).toHaveBeenCalledWith("有感");
@@ -116,8 +120,12 @@ describe("SelectionPopover", () => {
   });
 });
 
-describe("SelectionPopover 编辑已有高亮", () => {
-  const existing = { color: HIGHLIGHT_COLORS[0]!.value, note: "旧笔记" };
+describe("SelectionPopover 编辑已有划线", () => {
+  const existing = {
+    color: HIGHLIGHT_COLORS[0]!.value,
+    style: DEFAULT_ANNOTATION_STYLE,
+    note: "旧笔记",
+  };
 
   function renderEditPopover(
     overrides: Partial<Parameters<typeof SelectionPopover>[0]> = {},
@@ -125,74 +133,75 @@ describe("SelectionPopover 编辑已有高亮", () => {
     return renderPopover({ existing, ...overrides });
   }
 
-  it("编辑模式出复制/改色/笔记/删除四个动作，不出高亮和问 Deer", () => {
+  it("编辑模式行 1 是复制/删除划线/写想法/问 Deer，不出「划线」", () => {
     renderEditPopover();
 
-    for (const name of ["复制", "改色", "笔记", "删除"]) {
+    for (const name of ["复制", "删除划线", "写想法", "问 Deer"]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
-    expect(
-      screen.queryByRole("button", { name: "高亮" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "问 Deer" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "划线" })).not.toBeInTheDocument();
   });
 
-  it("编辑模式点复制，把摘录交给 onCopy（布局重排 1.5）", async () => {
-    const props = renderEditPopover();
-    const user = userEvent.setup();
-
-    await user.click(screen.getByRole("button", { name: "复制" }));
-    expect(props.onCopy).toHaveBeenCalledWith("被划选的句子");
-  });
-
-  it("没提供 onCopy 时编辑模式不显示复制", () => {
-    renderEditPopover({ onCopy: undefined });
-    expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
-  });
-
-  it("色板态有返回按钮，点回主菜单（布局重排 1.5）", async () => {
+  it("编辑模式行 2 常驻：三枚样式钮 + 五枚色点，当前项呈选中态", () => {
     renderEditPopover();
-    const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "改色" }));
+    for (const style of ["马克笔", "直线", "波浪线"]) {
+      expect(
+        screen.getByRole("button", { name: `样式：${style}` }),
+      ).toBeInTheDocument();
+    }
+    for (const color of HIGHLIGHT_COLORS) {
+      expect(
+        screen.getByRole("button", { name: `颜色：${color.label}` }),
+      ).toBeInTheDocument();
+    }
     expect(
-      screen.queryByRole("button", { name: "改色" }),
-    ).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "返回菜单" }));
-    expect(screen.getByRole("button", { name: "改色" })).toBeInTheDocument();
+      screen.getByRole("button", { name: "样式：马克笔" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: "颜色：浅蓝" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("点改色展开色条，选色把颜色值交给 onHighlight", async () => {
+  it("行 2 点样式把新样式连同当前颜色交给 onHighlight，菜单不关", async () => {
     const props = renderEditPopover();
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "改色" }));
+    await user.click(screen.getByRole("button", { name: "样式：波浪线" }));
+    expect(props.onHighlight).toHaveBeenCalledWith("dash", existing.color);
+    expect(screen.getByRole("button", { name: "删除划线" })).toBeInTheDocument();
+  });
+
+  it("行 2 点颜色把新颜色连同当前样式交给 onHighlight", async () => {
+    const props = renderEditPopover();
+    const user = userEvent.setup();
+
     await user.click(
-      screen.getByRole("button", { name: `高亮：${HIGHLIGHT_COLORS[2]!.label}` }),
+      screen.getByRole("button", { name: `颜色：${HIGHLIGHT_COLORS[2]!.label}` }),
     );
-    expect(props.onHighlight).toHaveBeenCalledWith(HIGHLIGHT_COLORS[2]!.value);
+    expect(props.onHighlight).toHaveBeenCalledWith(
+      existing.style,
+      HIGHLIGHT_COLORS[2]!.value,
+    );
+  });
+
+  it("点删除划线调用 onDelete", async () => {
+    const props = renderEditPopover({ onDelete: vi.fn() });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "删除划线" }));
+    expect(props.onDelete).toHaveBeenCalledTimes(1);
   });
 
   it("笔记预填旧笔记，保存把新内容交给 onNote", async () => {
     const props = renderEditPopover();
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "笔记" }));
+    await user.click(screen.getByRole("button", { name: "写想法" }));
     expect(screen.getByLabelText("笔记内容")).toHaveValue("旧笔记");
 
     await user.type(screen.getByLabelText("笔记内容"), "，再补一句");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(props.onNote).toHaveBeenCalledWith("旧笔记，再补一句");
-  });
-
-  it("点击删除调用 onDelete", async () => {
-    const props = renderEditPopover({ onDelete: vi.fn() });
-    const user = userEvent.setup();
-
-    await user.click(screen.getByRole("button", { name: "删除" }));
-    expect(props.onDelete).toHaveBeenCalledTimes(1);
   });
 });

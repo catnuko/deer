@@ -77,6 +77,29 @@ describe("划选注解持久化（按书隔离，CFI 定位）", () => {
     expect(list.find((x) => x.id === b.id)?.color).toBe("#5AD45A");
   });
 
+  it("add 带 style、setStyle 只改指定注解的样式，旧数据无 style 字段", () => {
+    const store = useAnnotationStore.getState();
+    const a = store.add({
+      bookId: "book-a",
+      cfi: "epubcfi(/6/4!/4/2)",
+      color: "#82B2F9",
+    });
+    expect(a.style).toBeUndefined();
+
+    const b = store.add({
+      bookId: "book-a",
+      cfi: "epubcfi(/6/4!/4/6)",
+      color: "#82B2F9",
+      style: "line",
+    });
+
+    store.setStyle(a.id, "dash");
+
+    const list = useAnnotationStore.getState().listForBook("book-a");
+    expect(list.find((x) => x.id === a.id)?.style).toBe("dash");
+    expect(list.find((x) => x.id === b.id)?.style).toBe("line");
+  });
+
   it("setNote 编辑与清空笔记，其他字段不动", () => {
     const store = useAnnotationStore.getState();
     const a = store.add({
