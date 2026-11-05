@@ -124,6 +124,36 @@ function focusToolbarButton(id: string) {
   requestAnimationFrame(() => document.getElementById(id)?.focus());
 }
 
+/**
+ * 宽窗目录浮层的点外 / Esc 关闭（窄窗 Sheet 自带这两条路径，不挂）。
+ * 触发按钮自己管理开合，点它不在此收口，避免和 onClick 打架。
+ */
+function useTocPopupDismiss(
+  enabled: boolean,
+  popupRef: React.RefObject<HTMLElement | null>,
+  onClose: () => void,
+) {
+  useEffect(() => {
+    if (!enabled) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (popupRef.current?.contains(target)) return;
+      if (document.getElementById("reader-toolbar-toc")?.contains(target)) return;
+      onClose();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [enabled, popupRef, onClose]);
+}
+
 type RealBookPhase =
   | { status: "loading" }
   | { status: "ready"; toc: TocItem[]; currentIndex: number }
@@ -323,13 +353,15 @@ export function ReaderPage() {
   const [notesOpen, setNotesOpen] = useState(false);
   // 阅读页快捷显示设置面板（M4）。
   const [quickSettingsOpen, setQuickSettingsOpen] = useState(false);
-  // 目录开关（布局重排 v1）：宽窗默认展开 dock；窄窗走 Sheet 浮层，默认收起。
+  // 目录开关：默认收起（所有宽度），宽窗浮层 / 窄窗 Sheet 共用一套开合。
   const isWide = useMediaQuery(WIDE_MEDIA_QUERY);
-  const [tocOpen, setTocOpen] = useState(
-    () =>
-      typeof window.matchMedia === "function" &&
-      window.matchMedia(WIDE_MEDIA_QUERY).matches,
-  );
+  const [tocOpen, setTocOpen] = useState(false);
+  const tocPopupRef = useRef<HTMLDivElement>(null);
+  const closeTocPopup = useCallback(() => {
+    setTocOpen(false);
+    focusToolbarButton("reader-toolbar-toc");
+  }, []);
+  useTocPopupDismiss(tocOpen && isWide, tocPopupRef, closeTocPopup);
   // 跨越到窄窗时把 dock 形态的面板收起，避免 Sheet 突然盖到正文上。
   // 窄窗下挂载时初值本就是收起，只需监听断点跨越事件（不在 effect 里同步 setState）。
   useEffect(() => {
@@ -1147,6 +1179,8 @@ const copyAnnotationText = useCallback((text: string) => {
         tocOpen={tocOpen}
         tocEmpty={realPhase.status === "ready" && realPhase.toc.length === 0}
         onToggleToc={toggleTocOverlays}
+        tocPopupRef={tocPopupRef}
+        onCloseToc={closeTocPopup}
         onToggleQuickSettings={toggleQuickSettings}
         onCloseQuickSettings={closeQuickSettings}
         onFontSizeChange={setFontSize}
@@ -1231,6 +1265,9 @@ type RealReaderProps = {
   /** 无目录的书（图片书等）：目录面板显示空态、按钮置灰。 */
   tocEmpty: boolean;
   onToggleToc: () => void;
+  /** 宽窗目录浮层的宿主 ref（点外/Esc 收口用）与「选中章节后关目录」。 */
+  tocPopupRef: React.RefObject<HTMLDivElement | null>;
+  onCloseToc: () => void;
   onToggleQuickSettings: () => void;
   onCloseQuickSettings: () => void;
   onFontSizeChange: (fontSize: FontSize) => void;
@@ -1293,6 +1330,8 @@ function RealReader({
   tocOpen,
   tocEmpty,
   onToggleToc,
+  tocPopupRef,
+  onCloseToc,
   onToggleQuickSettings,
   onCloseQuickSettings,
   onFontSizeChange,
@@ -1320,9 +1359,8 @@ function RealReader({
   const currentIndex = phase.status === "ready" ? phase.currentIndex : 0;
   const percent = Math.round(scrollProgress * 100);
 
-  const renderToc = (variant: "dock" | "sheet") => (
+  const renderToc = () => (
     <ReaderToc
-      variant={variant}
       chapters={tocEntries}
       currentIndex={currentIndex}
       onSelect={(index) => {
@@ -1330,6 +1368,8 @@ function RealReader({
           const item = phase.toc[index];
           if (item) onSelectChapter(item);
         }
+        // 选中即关（目录改弹层后单入口，不再常驻）。
+        onCloseToc();
       }}
     />
   );
@@ -1353,9 +1393,7 @@ function RealReader({
         />
 
         <div className="flex min-h-0 flex-1">
-          {wideViewport ? (
-            tocOpen && !tocEmpty ? renderToc("dock") : null
-          ) : (
+          {wideViewport ? null : (
             <Sheet
               open={tocOpen && !tocEmpty}
               onOpenChange={(open) => {
@@ -1363,7 +1401,7 @@ function RealReader({
               }}
             >
               <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
-                {renderToc("sheet")}
+                {renderToc()}
               </SheetContent>
             </Sheet>
           )}
@@ -1408,6 +1446,17 @@ function RealReader({
               }}
             >
               <div ref={viewerRef} className="h-full w-full" />
+              {/* 宽窗目录浮层：盖在正文上，不占左栏；点外/Esc 由 useTocPopupDismiss 收口。 */}
+              {wideViewport && tocOpen && !tocEmpty ? (
+                <div
+                  ref={tocPopupRef}
+                  // 别让点击冒泡进边缘翻页捕获层。
+                  onClick={(event) => event.stopPropagation()}
+                  className="border-border bg-popover absolute inset-y-2 left-2 z-20 w-72 overflow-hidden rounded-lg border shadow-md"
+                >
+                  {renderToc()}
+                </div>
+              ) : null}
               {/* 正文渲染在 foliate 的 iframe 里，点击不会冒泡到父文档，
                   所以边缘翻页靠这两个透明捕获层接住。 */}
               <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
@@ -1627,13 +1676,12 @@ function DemoReader({
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const scrollHostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<ChatPanelHandle | null>(null);
-  // 目录开关（布局重排 v1），与 RealReader 同一套宽窄窗行为。
+  // 目录开关：默认收起（所有宽度），宽窗浮层 / 窄窗 Sheet 共用一套开合。
   const isWide = useMediaQuery(WIDE_MEDIA_QUERY);
-  const [tocOpen, setTocOpen] = useState(
-    () =>
-      typeof window.matchMedia === "function" &&
-      window.matchMedia(WIDE_MEDIA_QUERY).matches,
-  );
+  const [tocOpen, setTocOpen] = useState(false);
+  const tocPopupRef = useRef<HTMLDivElement>(null);
+  const closeTocPopup = useCallback(() => setTocOpen(false), []);
+  useTocPopupDismiss(tocOpen && isWide, tocPopupRef, closeTocPopup);
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
     const mediaQueryList = window.matchMedia(WIDE_MEDIA_QUERY);
@@ -1746,15 +1794,7 @@ function DemoReader({
         />
 
         <div className="flex min-h-0 flex-1">
-          {isWide ? (
-            tocOpen ? (
-              <ReaderToc
-                chapters={book.chapters}
-                currentIndex={chapterIndex}
-                onSelect={selectChapter}
-              />
-            ) : null
-          ) : (
+          {isWide ? null : (
             <Sheet
               open={tocOpen}
               onOpenChange={(open) => {
@@ -1763,10 +1803,12 @@ function DemoReader({
             >
               <SheetContent side="left" showCloseButton={false} className="w-72 gap-0 p-0">
                 <ReaderToc
-                  variant="sheet"
                   chapters={book.chapters}
                   currentIndex={chapterIndex}
-                  onSelect={selectChapter}
+                  onSelect={(index) => {
+                    selectChapter(index);
+                    setTocOpen(false);
+                  }}
                 />
               </SheetContent>
             </Sheet>
@@ -1787,6 +1829,22 @@ function DemoReader({
                   pageMargin={pageMargin}
                 />
               </ScrollArea>
+              {/* 宽窗目录浮层：与 RealReader 同一套点外/Esc 收口。 */}
+              {isWide && tocOpen ? (
+                <div
+                  ref={tocPopupRef}
+                  className="border-border bg-popover absolute inset-y-2 left-2 z-20 w-72 overflow-hidden rounded-lg border shadow-md"
+                >
+                  <ReaderToc
+                    chapters={book.chapters}
+                    currentIndex={chapterIndex}
+                    onSelect={(index) => {
+                      selectChapter(index);
+                      setTocOpen(false);
+                    }}
+                  />
+                </div>
+              ) : null}
               {selection ? (
                 <SelectionPopover
                   x={selection.x}

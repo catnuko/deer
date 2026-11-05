@@ -130,6 +130,20 @@ export function ReaderToolbar({
             icon={<ArrowLeft className="size-4" />}
             onClick={() => navigate("/bookshelf")}
           />
+        </div>
+
+        <div className="bg-border h-5 w-px" />
+
+        {/* 书名独占可收缩弹性区：长书名末尾省略号，右侧按钮永不被挤走。 */}
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <BookOpen className="text-muted-foreground size-4 shrink-0" />
+          <span className="min-w-0 truncate text-sm font-medium">{bookTitle}</span>
+          <span className="text-muted-foreground hidden min-w-0 truncate text-xs sm:inline">
+            {author}
+          </span>
+        </div>
+
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <ToolbarButton
             id="reader-toolbar-toc"
             label="目录"
@@ -138,19 +152,6 @@ export function ReaderToolbar({
             disabled={tocDisabled}
             onClick={onToggleToc}
           />
-        </div>
-
-        <div className="bg-border h-5 w-px" />
-
-        <div className="flex min-w-0 items-center gap-2">
-          <BookOpen className="text-muted-foreground size-4 shrink-0" />
-          <span className="truncate text-sm font-medium">{bookTitle}</span>
-          <span className="text-muted-foreground hidden truncate text-xs sm:inline">
-            {author}
-          </span>
-        </div>
-
-        <div className="ml-auto flex items-center gap-1">
           {onToggleNotes ? (
             <ToolbarButton
               id="reader-toolbar-notes"
