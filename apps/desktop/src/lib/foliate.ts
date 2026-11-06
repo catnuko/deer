@@ -69,6 +69,8 @@ export type ReadingStyleOptions = {
   lineHeight: number;
   /** 传入时压掉书自带背景（护眼纸色）；不传保持书原样。 */
   paperColor?: string;
+  /** 深色主题：书文档注入深底浅字（书自带白底不压会露出白页）。 */
+  dark?: boolean;
   /** 系统字体栈；不传（跟随书籍排版）不注入 font-family。 */
   fontFamilyCss?: string;
   /** 正文左右内边距（px）；不传保持书自带边距。 */
@@ -84,11 +86,13 @@ export type ReadingStyleOptions = {
  * paperColor 传入时同时压掉书自带的 html/body 背景（护眼纸色）；
  * 不传保持书原样。paginator 的视口底色由 index.css 的 ::part(filter) 规则
  * 读取同一个 --deer-paper 变量补齐，避免书页四周露出书原背景。
+ * dark 时注入深底浅字（阅读区跟随应用深色主题），与 paperColor 互斥使用。
  */
 export function readingStyles({
   fontSize,
   lineHeight,
   paperColor,
+  dark,
   fontFamilyCss,
   pageMarginPx,
   footnotePreview = true,
@@ -96,6 +100,14 @@ export function readingStyles({
   const paper = paperColor
     ? `
 html, body { background: ${paperColor} !important; }
+`
+    : "";
+  // 色值对应应用深色 token：--background oklch(0.145 0 0)、--foreground oklch(0.985 0 0)。
+  // 正文文本容器强制继承，压掉书自带的深色字（如 #333），否则深底配深字不可读。
+  const darkPaper = dark
+    ? `
+html, body { background: #0a0a0a !important; color: #fafafa !important; }
+h1, h2, h3, h4, h5, h6, p, li, blockquote, figcaption, dt, dd, td, th { color: inherit !important; }
 `
     : "";
   const fontFamily = fontFamilyCss
@@ -121,7 +133,7 @@ a[data-papr-note]:hover {
 `
     : "";
   return `
-${paper}html { font-size: ${fontSize}px !important; }
+${paper}${darkPaper}html { font-size: ${fontSize}px !important; }
 body, p, div, span { line-height: ${lineHeight} !important; }
 ${fontFamily}${pageMargin}${footnote}`;
 }

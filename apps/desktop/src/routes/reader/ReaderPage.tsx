@@ -1069,7 +1069,7 @@ const copyAnnotationText = useCallback((text: string) => {
   ]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
-  // 纸色只在浅色主题生效：深色主题传 undefined，保持深色背景。
+  // 纸色只在浅色主题生效；深色主题注入深底浅字，阅读区跟随应用主题变深。
   useEffect(() => {
     const renderer = viewRef.current?.renderer as StyleableRenderer | undefined;
     if (!renderer || realPhase.status !== "ready") return;
@@ -1088,6 +1088,7 @@ const copyAnnotationText = useCallback((text: string) => {
         fontSize,
         lineHeight,
         paperColor: isDark ? undefined : paperColor,
+        dark: isDark,
         fontFamilyCss: FONT_FAMILY_CSS[fontFamily],
         // 滚动模式没有分页器的 gap，页边距仍走 body 内边距。
         pageMarginPx:
