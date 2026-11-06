@@ -54,6 +54,21 @@ afterEach(() => {
 });
 
 describe("ConceptMapPanel", () => {
+  it("以视口居中模态渲染：挂到 body、900×640、带遮罩", () => {
+    render(<ConceptMapPanel {...PROPS} />);
+    const panel = screen.getByRole("dialog", { name: "章节概念地图" });
+    expect(panel).toHaveAttribute("aria-modal", "true");
+    // 尺寸与设置弹窗同规格（窄窗由 max-w/max-h 退到 94vw×86vh）。
+    expect(panel.className).toContain("w-[900px]");
+    expect(panel.className).toContain("h-[640px]");
+    expect(panel.className).toContain("max-w-[94vw]");
+    expect(panel.className).toContain("max-h-[86vh]");
+    // 居中靠网格，不用 translate(-50%,-50%)（会和缩放入场抢 transform）。
+    expect(panel.parentElement?.className).toContain("place-items-center");
+    expect(panel.className).not.toContain("-translate-x-1/2");
+    expect(panel.parentElement?.closest("body")).toBe(document.body);
+  });
+
   it("没有缓存时显示引导文案和生成按钮", async () => {
     render(<ConceptMapPanel {...PROPS} />);
     expect(screen.getByText(/还没有这一章的概念地图/)).toBeInTheDocument();

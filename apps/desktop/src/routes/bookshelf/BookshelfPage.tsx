@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -45,14 +45,20 @@ import { isTauri } from "@/lib/platform";
 import type { Book, Shelf } from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { useAIPanelStore } from "@/store/aiPanelStore";
+import { useAppSettings } from "@/store/appSettings";
+import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 import { BookCard } from "./BookCard";
 import { ContinueReadingCard } from "./ContinueReadingCard";
 import { continueReadingBookOf } from "./continueReading";
+import { sortBooks } from "./sortBooks";
 import { ShelfNameDialog } from "./ShelfNameDialog";
 
 type ShelfForm =
   | { mode: "create" }
   | { mode: "rename"; shelf: Shelf };
+
+/** 冷启动「继续上次阅读」每个进程只处理一次；从阅读页返回书架不再跳。 */
+let startupContinueHandled = false;
 
 export function BookshelfPage() {
   const navigate = useNavigate();
@@ -97,13 +103,16 @@ export function BookshelfPage() {
       ? activeShelfId
       : null;
 
-  const visibleBooks = useMemo(
-    () =>
-      effectiveShelfId
-        ? books.filter((book) => book.shelfIds.includes(effectiveShelfId))
-        : books,
-    [books, effectiveShelfId],
-  );
+  const bookshelfSort = useAppSettings((state) => state.bookshelfSort);
+  const startupView = useAppSettings((state) => state.startupView);
+  const openSettings = useSettingsDialogStore((state) => state.openDialog);
+
+  const visibleBooks = useMemo(() => {
+    const filtered = effectiveShelfId
+      ? books.filter((book) => book.shelfIds.includes(effectiveShelfId))
+      : books;
+    return sortBooks(filtered, bookshelfSort);
+  }, [books, effectiveShelfId, bookshelfSort]);
 
   const activeShelf =
     shelves.find((shelf) => shelf.id === effectiveShelfId) ?? null;
@@ -115,6 +124,20 @@ export function BookshelfPage() {
     () => (isReady ? continueReadingBookOf(books) : null),
     [books, isReady],
   );
+
+  // 冷启动直达上次阅读：只在进程内第一次书架就绪时判定一次，
+  // 返回书架不得再跳；没有阅读位置时照常落在书架。
+  useEffect(() => {
+    if (!isReady || preview || startupContinueHandled) return;
+    startupContinueHandled = true;
+    if (startupView !== "continue") return;
+    const target = continueReadingBookOf(books);
+    if (!target?.lastLocationCfi) return;
+    navigate(
+      `/reader?book=${encodeURIComponent(target.id)}&cfi=${encodeURIComponent(target.lastLocationCfi)}`,
+      { replace: true },
+    );
+  }, [books, isReady, navigate, preview, startupView]);
 
   function requireDesktop(): boolean {
     if (preview || !isTauri()) {
@@ -237,7 +260,7 @@ export function BookshelfPage() {
                     variant="ghost"
                     size="icon-sm"
                     aria-label="打开设置"
-                    onClick={() => navigate("/settings")}
+                    onClick={openSettings}
                   />
                 }
               >
@@ -267,7 +290,7 @@ export function BookshelfPage() {
       />
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <section className="flex min-w-0 flex-1 flex-col">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="border-border flex flex-wrap items-center gap-3 border-b px-6 py-3">
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -399,7 +422,9 @@ export function BookshelfPage() {
             </div>
           )}
 
-          <div className="min-h-0 flex-1 overflow-auto px-6 pt-5 pb-24">
+          {/* AI 面板改为覆盖式抽屉后本列宽度恒定，滚动条不会随开合出现/消失，
+              之前为消重排加的 scrollbar-gutter 已无必要（会恒占 15px）。 */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24">
             {isReady && continueReading ? (
               <div className="mb-5 max-w-xl">
                 <ContinueReadingCard
@@ -428,17 +453,23 @@ export function BookshelfPage() {
               />
             ) : (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-4">
-                {visibleBooks.map((book) => (
-                  <BookCard
+                {visibleBooks.map((book, index) => (
+                  <div
                     key={book.id}
-                    book={book}
-                    shelves={shelves}
-                    onOpen={(target) =>
-                      navigate(`/reader?book=${encodeURIComponent(target.id)}`)
-                    }
-                    onToggleShelf={handleToggleShelf}
-                    onDelete={setBookToDelete}
-                  />
+                    className="deer-list-item min-w-0"
+                    // 前 12 项 40ms 错峰，第 13 项起延迟固定为 0（motion.md M4）。
+                    style={{ "--deer-index": index < 12 ? index : 0 } as CSSProperties}
+                  >
+                    <BookCard
+                      book={book}
+                      shelves={shelves}
+                      onOpen={(target) =>
+                        navigate(`/reader?book=${encodeURIComponent(target.id)}`)
+                      }
+                      onToggleShelf={handleToggleShelf}
+                      onDelete={setBookToDelete}
+                    />
+                  </div>
                 ))}
               </div>
             )}
@@ -536,7 +567,7 @@ function EmptyState({
   onImport(): void;
 }) {
   return (
-    <div className="border-border text-muted-foreground flex h-full min-h-[320px] flex-col items-center justify-center gap-3 rounded-lg border border-dashed text-center">
+    <div className="border-border text-muted-foreground my-auto flex min-h-[320px] flex-col items-center justify-center gap-3 rounded-lg border border-dashed text-center">
       <Library className="text-muted-foreground/60 size-8" />
       {hasAnyBook ? (
         <>

@@ -41,7 +41,7 @@ use crate::deer_log::{log, LOG_HINT};
 const ACPX_VERSION_PREFIX: &str = "0.21.";
 /// acpx 官方要求的最低 Node 版本（22.13）。
 const MIN_NODE: (u64, u64) = (22, 13);
-/// Deer 的 acpx 命名会话前缀，后接前端线程 id（映射规则：deer-<threadId>）。
+/// Deer 的 acpx 命名会话前缀，后接引擎 id 与线程 id（映射规则：deer-<engine>-<threadId>）。
 const RECORD_PREFIX: &str = "deer-";
 const STDERR_TAIL_LINES: usize = 20;
 /// 聊天请求的排队等待上限：在途时后来的请求最多等这么久拿门闩，超时拒绝。
@@ -66,13 +66,51 @@ pub struct AcpxEnvStatus {
     pub message: String,
 }
 
+/// 引擎 id 白名单（acpx@0.21.1 内置 27 个 agent）与各自的厂商 CLI 可执行名
+/// （探测「已安装」用；npx 现取的引擎也按厂商 CLI 探测，装了显示已安装）。
+const AI_ENGINE_SPECS: &[(&str, &str)] = &[
+    ("claude", "claude"),
+    ("codex", "codex"),
+    ("kimi", "kimi"),
+    ("qwen", "qwen"),
+    ("gemini", "gemini"),
+    ("cursor", "cursor-agent"),
+    ("copilot", "copilot"),
+    ("antigravity", "antigravity"),
+    ("devin", "devin"),
+    ("droid", "droid"),
+    ("fast-agent", "fast-agent"),
+    ("fx", "fx"),
+    ("grok-build", "grok"),
+    ("iflow", "iflow"),
+    ("junie", "junie"),
+    ("kilocode", "kilocode"),
+    ("kiro", "kiro-cli-chat"),
+    ("mcode", "mcode"),
+    ("mux", "mux"),
+    ("octomind", "octomind"),
+    ("opencode", "opencode"),
+    ("pi", "pi"),
+    ("pool", "pool"),
+    ("qoder", "qodercli"),
+    ("trae", "traecli"),
+    ("zeroclaw", "zeroclaw"),
+    ("openclaw", "openclaw"),
+];
+
+/// 前端传来的引擎 id 是否在白名单内。
+pub(crate) fn is_known_engine(engine: &str) -> bool {
+    AI_ENGINE_SPECS.iter().any(|(id, _)| *id == engine)
+}
+
 /* ------------------------------------------------------------------ */
 /* 纯函数（供单测覆盖）                                                 */
 /* ------------------------------------------------------------------ */
 
-/// 线程 id → acpx 命名会话名。acpx 对会话名的约束未知，只保留字母数字、
-/// 连字符与下划线，其余一律替换成连字符，保证跨端（前端/Rust）推导一致。
-pub(crate) fn record_name(thread_id: &str) -> String {
+/// 线程 id → acpx 命名会话名（deer-<engine>-<threadId>，按引擎隔离会话，
+/// 换引擎即换上下文）。acpx 对会话名的约束未知，只保留字母数字、连字符与
+/// 下划线，其余一律替换成连字符，保证跨端（前端/Rust）推导一致。
+pub(crate) fn record_name(engine: &str, thread_id: &str) -> String {
     let safe: String = thread_id
         .chars()
         .map(|c| {
@@ -83,7 +121,7 @@ pub(crate) fn record_name(thread_id: &str) -> String {
             }
         })
         .collect();
-    format!("{RECORD_PREFIX}{safe}")
+    format!("{RECORD_PREFIX}{engine}-{safe}")
 }
 
 /// Node 版本是否满足 acpx 要求（≥22.13）。
@@ -158,12 +196,12 @@ fn write_mcp_config() -> Option<PathBuf> {
 }
 
 /// 一次 prompt 调用的完整参数（prompt 经 `-f -` 走 stdin，避免被当成选项）。
-/// 注意：--format/--json-strict/--deny-all 是顶层选项，必须放在 `claude`
-/// 子命令之前（子命令不继承它们，放后面会退出并打印帮助）。
+/// 注意：--format/--json-strict/--deny-all 是顶层选项，必须放在引擎子命令
+/// 之前（子命令不继承它们，放后面会退出并打印帮助）。
 /// mcp_config 有值时同样在顶层追加 --mcp-config 与 --allowed-tools：
 /// 权限仍是 --deny-all，只精确放行书架 MCP 的三个工具（spike 实测
 /// allowed-tools 能在 deny-all 之下放行指定 MCP 工具）。
-pub(crate) fn prompt_args(record: &str, mcp_config: Option<&Path>) -> Vec<String> {
+pub(crate) fn prompt_args(engine: &str, record: &str, mcp_config: Option<&Path>) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "--format".into(),
         "json".into(),
@@ -178,7 +216,7 @@ pub(crate) fn prompt_args(record: &str, mcp_config: Option<&Path>) -> Vec<String
     }
     args.push("--timeout".into());
     args.push((PROMPT_TIMEOUT.as_secs() - 10).to_string());
-    args.push("claude".into());
+    args.push(engine.into());
     args.push("-s".into());
     args.push(record.into());
     args.push("-f".into());
@@ -220,8 +258,8 @@ pub(crate) fn book_cards_from_update(params: &Value) -> Option<Vec<Value>> {
 /* ------------------------------------------------------------------ */
 
 /// GUI 环境 PATH 拿不到用户安装目录，与 claude CLI 同款探测：已知目录 →
-/// 登录 shell PATH → 继承 PATH。
-async fn acpx_candidates() -> Vec<PathBuf> {
+/// 登录 shell PATH → 继承 PATH（acpx 与各引擎 CLI 的状态探测共用）。
+async fn search_dirs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").ok();
     let known = known_bin_dirs(home.as_deref());
     let shell_dirs = probe_shell_path().await.unwrap_or_default();
@@ -233,16 +271,21 @@ async fn acpx_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for dir in known.iter().chain(&shell_dirs).chain(&path_dirs) {
-        let candidate = dir.join("acpx");
-        if seen.insert(candidate.to_string_lossy().into_owned()) {
-            out.push(candidate);
+        if seen.insert(dir.to_string_lossy().into_owned()) {
+            out.push(dir.clone());
         }
     }
     out
 }
 
+fn candidates_in(dirs: &[PathBuf], bin: &str) -> Vec<PathBuf> {
+    dirs.iter()
+        .map(|dir| dir.join(bin))
+        .collect()
+}
+
 async fn find_acpx() -> Result<PathBuf, String> {
-    for candidate in acpx_candidates().await {
+    for candidate in candidates_in(&search_dirs().await, "acpx") {
         if candidate.is_file() {
             return Ok(candidate);
         }
@@ -250,6 +293,13 @@ async fn find_acpx() -> Result<PathBuf, String> {
     Err(format!(
         "未找到 acpx（已探测 ~/.local/bin、~/.npm-global/bin、nvm、homebrew 与 PATH）。请在终端执行 npm install -g acpx@0.21.1 安装后重启应用。"
     ))
+}
+
+/// 单个引擎的本机状态：厂商 CLI 可执行文件在任一探测目录里即视为已安装。
+fn engine_installed_in(dirs: &[PathBuf], bin: &str) -> bool {
+    candidates_in(dirs, bin)
+        .into_iter()
+        .any(|candidate| candidate.is_file())
 }
 
 /// 跑 `node --version`，返回版本字符串（如 v24.20.0）。
@@ -334,6 +384,107 @@ pub async fn acpx_env_check() -> AcpxEnvStatus {
     }
 }
 
+/// 引擎 → 一键安装包（仅 acpx 官方 npm 适配器包；厂商 CLI 不代装，前端只展示官方安装方式）。
+const AI_ENGINE_INSTALLS: &[(&str, &str, &str)] = &[
+    ("claude", "@agentclientprotocol/claude-agent-acp", "^0.95.0"),
+    ("codex", "@agentclientprotocol/codex-acp", "^1.1.5"),
+    ("pi", "pi-acp", "^0.0.33"),
+    ("mux", "mux", "^0.28.0"),
+];
+
+#[derive(Debug, Serialize)]
+pub struct AiEngineStatus {
+    pub id: String,
+    pub installed: bool,
+}
+
+/// Tauri command：探测全部引擎的本机安装状态（纯文件检查，毫秒级）。
+#[tauri::command]
+pub async fn ai_engine_status() -> Vec<AiEngineStatus> {
+    let dirs = search_dirs().await;
+    AI_ENGINE_SPECS
+        .iter()
+        .map(|(id, bin)| AiEngineStatus {
+            id: (*id).to_string(),
+            installed: engine_installed_in(&dirs, bin),
+        })
+        .collect()
+}
+
+/// Tauri command：全局安装一个引擎的 acpx 适配器包（白名单 + 锁定版本线），
+/// npm 输出逐行经 ai://install-log 推给前端；结束时推 done 帧（success=退出码）。
+#[tauri::command]
+pub async fn ai_engine_install(app: AppHandle, engine_id: String) -> Result<(), String> {
+    let Some((_, pkg, range)) = AI_ENGINE_INSTALLS
+        .iter()
+        .find(|(id, _, _)| *id == engine_id)
+    else {
+        return Err(format!(
+            "引擎 {engine_id} 不支持一键安装（厂商 CLI 请用官方方式安装）。"
+        ));
+    };
+    let spec = format!("{pkg}@{range}");
+    let node = find_node();
+    let node_dir = node.parent().map(Path::to_path_buf);
+    let npm = node_dir
+        .as_ref()
+        .map(|dir| dir.join("npm"))
+        .filter(|npm| npm.is_file())
+        .unwrap_or_else(|| PathBuf::from("npm"));
+    let mut cmd = Command::new(&npm);
+    cmd.args(["install", "-g", &spec])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(dir) = &node_dir {
+        let path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{}:{}", dir.display(), path));
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动 npm 失败（{}）：{e}", npm.display()))?;
+    log("install", &format!("npm install -g {spec} pid={:?}", child.id()));
+    let emit_line = {
+        let app = app.clone();
+        let engine_id = engine_id.clone();
+        move |line: String| {
+            let _ = app.emit(
+                "ai://install-log",
+                json!({ "engineId": engine_id, "line": line }),
+            );
+        }
+    };
+    let mut stdout = BufReader::new(child.stdout.take().ok_or("npm stdout 不可用")?).lines();
+    let mut stderr = BufReader::new(child.stderr.take().ok_or("npm stderr 不可用")?).lines();
+    let emit_err_line = emit_line.clone();
+    let out_task = tokio::spawn(async move {
+        while let Ok(Some(line)) = stdout.next_line().await {
+            log("install", &line);
+            emit_line(line);
+        }
+    });
+    let err_task = tokio::spawn(async move {
+        while let Ok(Some(line)) = stderr.next_line().await {
+            log("install", &line);
+            emit_err_line(line);
+        }
+    });
+    let _ = tokio::join!(out_task, err_task);
+    let status = child.wait().await.map_err(|e| format!("npm 进程异常：{e}"))?;
+    let success = status.success();
+    log("install", &format!("npm install -g {spec} exit={status:?}"));
+    let _ = app.emit(
+        "ai://install-log",
+        json!({ "engineId": engine_id, "done": true, "success": success }),
+    );
+    if success {
+        Ok(())
+    } else {
+        Err(format!("安装 {spec} 失败（npm 退出码 {status}），详见安装日志。"))
+    }
+}
+
 /// acpx_chat 的前置检查：找到 acpx、Node 版本达标、acpx 版本在锁定线内。
 /// 每次对话都跑版本检查成本可接受（两次毫秒级子进程），换来版本被真正锁死。
 async fn verify_env() -> Result<PathBuf, String> {
@@ -365,7 +516,7 @@ async fn verify_env() -> Result<PathBuf, String> {
 /* acpx 子进程                                                          */
 /* ------------------------------------------------------------------ */
 
-fn spawn_cmd(acpx: &Path, args: &[String], home: &Path) -> Command {
+fn spawn_cmd(acpx: &Path, args: &[String], home: &Path, engine: &str) -> Command {
     let node = find_node();
     let mut cmd = Command::new(acpx);
     cmd.args(args)
@@ -381,9 +532,11 @@ fn spawn_cmd(acpx: &Path, args: &[String], home: &Path) -> Command {
         cmd.env("PATH", format!("{}:{}", node_dir.display(), path));
     }
     // 可选 OAuth 令牌（用户自管的 ~/.config/deer/claude-oauth-token）：
-    // acpx 拉起的 claude-agent-acp 适配器同样吃这个环境变量。
-    if let Some(token) = read_oauth_token() {
-        cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
+    // 只有 claude 链路的适配器吃这个环境变量，其他引擎不注入。
+    if engine == "claude" {
+        if let Some(token) = read_oauth_token() {
+            cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
+        }
     }
     cmd
 }
@@ -425,12 +578,13 @@ struct PromptOutcome {
     session_id: Option<String>,
 }
 
-/// 跑一次 `acpx claude -s <record> -f -`：prompt 写进 stdin，逐行解析
+/// 跑一次 `acpx <engine> -s <record> -f -`：prompt 写进 stdin，逐行解析
 /// stdout 的 ACP NDJSON，增量经 on_chunk 交给调用方（生产路径 emit 给前端）。
 /// 返回累计正文、会话 id 与停止原因；错误信息携带 stderr 尾部与 stdout 里的
 /// 错误响应原文，供上层分类（NO_SESSION / 瞬时 spawn 失败）。
 async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
     acpx: &Path,
+    engine: &str,
     record: &str,
     prompt: &str,
     message_id: &str,
@@ -440,12 +594,17 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
     let t0 = std::time::Instant::now();
     let home = std::env::var("HOME").unwrap_or_default();
     let home = PathBuf::from(&home);
-    let args = prompt_args(record, mcp_config);
-    let mut cmd = spawn_cmd(acpx, &args, &home);
-    // 深度思考恒开：每轮注入 MAX_THINKING_TOKENS，claude-agent-acp 会把它
-    // 传给 SDK 的 maxThinkingTokens，思考内容以 agent_thought_chunk 流回。
-    cmd.env("MAX_THINKING_TOKENS", "10000");
-    log("acpx", "深度思考恒开（MAX_THINKING_TOKENS=10000）");
+    let args = prompt_args(engine, record, mcp_config);
+    let mut cmd = spawn_cmd(acpx, &args, &home, engine);
+    // 深度思考恒开（claude 链路）：每轮注入 MAX_THINKING_TOKENS，
+    // claude-agent-acp 会把它传给 SDK 的 maxThinkingTokens，思考内容以
+    // agent_thought_chunk 流回。其他引擎由各自 CLI 的深度思考能力决定。
+    if engine == "claude" {
+        cmd.env("MAX_THINKING_TOKENS", "10000");
+        log("acpx", "深度思考恒开（MAX_THINKING_TOKENS=10000，claude）");
+    } else {
+        log("acpx", &format!("引擎 {engine} 不注入 claude 专属思考预算"));
+    }
     let mut child = cmd.spawn().map_err(|e| {
         let msg = format!("启动 acpx 失败（{}）：{e}", acpx.display());
         log("spawn", &msg);
@@ -599,11 +758,12 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
     })
 }
 
-/// 确保 acpx 命名会话存在：`sessions new -s <record>`，瞬时失败重试。
+/// 确保 acpx 命名会话存在：`<engine> sessions new -s <record>`，瞬时失败重试。
 /// 有 ACP session id 时用 --resume-session 把旧会话接回来（NO_SESSION 修复路径）。
 /// 带 MCP 配置创建会话，让内置聊天挂上的书架工具在会话里可用。
 async fn ensure_session(
     acpx: &Path,
+    engine: &str,
     record: &str,
     resume: Option<&str>,
     mcp_config: Option<&Path>,
@@ -613,7 +773,7 @@ async fn ensure_session(
         vec![
             "--mcp-config".into(),
             path.to_string_lossy().into_owned(),
-            "claude".to_string(),
+            engine.to_string(),
             "sessions".to_string(),
             "new".to_string(),
             "-s".to_string(),
@@ -621,7 +781,7 @@ async fn ensure_session(
         ]
     } else {
         vec![
-            "claude".to_string(),
+            engine.to_string(),
             "sessions".to_string(),
             "new".to_string(),
             "-s".to_string(),
@@ -634,7 +794,7 @@ async fn ensure_session(
     }
     let mut last_err = String::new();
     for attempt in 1..=TRANSIENT_RETRIES {
-        let output = spawn_cmd(acpx, &args, &home)
+        let output = spawn_cmd(acpx, &args, &home, engine)
             .stdin(Stdio::null())
             .output()
             .await;
@@ -673,6 +833,7 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
     on_chunk: &mut F,
     message_id: &str,
     prompt: &str,
+    engine: &str,
     record: &str,
     resume_session_id: Option<&str>,
 ) -> Result<crate::claude_acp::ClaudeChatResult, String> {
@@ -682,13 +843,17 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
     let mcp_config = write_mcp_config();
     log(
         "acpx",
-        &match &mcp_config {
-            Some(path) => format!("书架 MCP server 已挂载（{}）", path.display()),
-            None => "书架 MCP server 不可用（无法定位自身可执行文件），本轮无书架工具".to_string(),
-        },
+        &format!(
+            "engine={engine} {}",
+            match &mcp_config {
+                Some(path) => format!("书架 MCP server 已挂载（{}）", path.display()),
+                None => "书架 MCP server 不可用（无法定位自身可执行文件），本轮无书架工具".to_string(),
+            }
+        ),
     );
     let mut outcome = run_prompt(
         acpx.as_path(),
+        engine,
         record,
         prompt,
         message_id,
@@ -699,9 +864,17 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
     if let Err(err) = &outcome {
         if is_no_session_error(err) || is_transient_spawn_error(err) {
             log("acpx", &format!("prompt 失败（{}），ensure 后重试一次", if is_no_session_error(err) { "NO_SESSION" } else { "瞬时" }));
-            ensure_session(acpx.as_path(), record, resume_session_id, mcp_config.as_deref()).await?;
+            ensure_session(
+                acpx.as_path(),
+                engine,
+                record,
+                resume_session_id,
+                mcp_config.as_deref(),
+            )
+            .await?;
             outcome = run_prompt(
                 acpx.as_path(),
+                engine,
                 record,
                 prompt,
                 message_id,
@@ -722,8 +895,8 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
     })
 }
 
-/// Tauri command：经 acpx 跑一轮聊天（唯一聊天链路，只通 claude）。
-/// 会话映射：thread_id → acpx 命名会话 deer-<threadId>（record_name）。
+/// Tauri command：经 acpx 跑一轮聊天（唯一聊天链路，引擎由前端选定）。
+/// 会话映射：thread_id → acpx 命名会话 deer-<engine>-<threadId>（record_name）。
 /// 全局串行（CHAT_GATE，同一时刻只跑一个会话）；增量事件经 claude://chunk
 /// 实时推送，前端渲染无差别。
 #[tauri::command]
@@ -733,6 +906,7 @@ pub async fn acpx_chat(
     message_id: String,
     thread_id: String,
     resume_session_id: Option<String>,
+    engine: Option<String>,
 ) -> Result<crate::claude_acp::ClaudeChatResult, String> {
     if prompt.trim().is_empty() {
         return Err("消息不能为空".to_string());
@@ -740,7 +914,12 @@ pub async fn acpx_chat(
     if thread_id.trim().is_empty() {
         return Err("缺少会话线程 id".to_string());
     }
-    let record = record_name(thread_id.trim());
+    // 旧版前端不带 engine 时回落 claude；带了一律走白名单，杜绝任意子命令注入。
+    let engine = engine.unwrap_or_else(|| "claude".to_string());
+    if !is_known_engine(&engine) {
+        return Err(format!("未知引擎：{engine}"));
+    }
+    let record = record_name(&engine, thread_id.trim());
 
     let permit = match CHAT_GATE.try_lock() {
         Ok(guard) => guard,
@@ -775,6 +954,7 @@ pub async fn acpx_chat(
         &mut emit_chunk,
         &message_id,
         &prompt,
+        &engine,
         &record,
         resume_session_id.as_deref(),
     )
@@ -791,10 +971,29 @@ mod tests {
 
     #[test]
     fn record_names_are_prefixed_and_sanitized() {
-        assert_eq!(record_name("thread_abc123"), "deer-thread_abc123");
+        // 会话名带引擎段：deer-<engine>-<threadId>，换引擎即换会话
+        assert_eq!(
+            record_name("claude", "thread_abc123"),
+            "deer-claude-thread_abc123"
+        );
+        assert_eq!(record_name("codex", "thread_abc123"), "deer-codex-thread_abc123");
         // 线程 id 里的非法字符（冒号/空格/斜杠）替换成连字符，不能带出会话名语法
-        assert_eq!(record_name("thread:x y"), "deer-thread-x-y");
-        assert_eq!(record_name("../etc"), "deer----etc");
+        assert_eq!(record_name("claude", "thread:x y"), "deer-claude-thread-x-y");
+        assert_eq!(record_name("claude", "../etc"), "deer-claude----etc");
+    }
+
+    #[test]
+    fn engines_are_whitelisted() {
+        assert!(is_known_engine("claude"));
+        assert!(is_known_engine("qwen"));
+        assert!(!is_known_engine("rm -rf"));
+        assert!(!is_known_engine(""));
+        // 一键安装白名单与引擎白名单对得上（只有 4 个适配器包引擎）
+        assert_eq!(AI_ENGINE_INSTALLS.len(), 4);
+        for (id, pkg, range) in AI_ENGINE_INSTALLS {
+            assert!(is_known_engine(id), "{id} 应在引擎白名单内");
+            assert!(!pkg.is_empty() && range.starts_with('^'));
+        }
     }
 
     #[test]
@@ -857,9 +1056,9 @@ mod tests {
 
     #[test]
     fn prompt_args_are_strict_json_and_deny_tools() {
-        let args = prompt_args("deer-thread_x", None);
+        let args = prompt_args("claude", "deer-claude-thread_x", None);
         let joined = args.join(" ");
-        // 顶层选项必须出现在 `claude` 子命令之前（实测放后面会打印帮助退出）
+        // 顶层选项必须出现在引擎子命令之前（实测放后面会打印帮助退出）
         assert!(joined.find("--format json").unwrap() < joined.find("claude").unwrap());
         assert!(joined.contains("--json-strict"));
         // 权限策略：伴读聊天禁用工具（--deny-all）
@@ -868,15 +1067,24 @@ mod tests {
         assert!(!joined.contains("--verbose"));
         // prompt 走 stdin（-f -），不作为命令行参数出现
         assert!(joined.contains("-f -"));
-        // 命名会话紧跟子命令（-s 是 claude 子命令的选项）
+        // 命名会话紧跟子命令（-s 是引擎子命令的选项）
         let claude_pos = joined.find("claude").unwrap();
-        assert!(joined.find("-s deer-thread_x").unwrap() > claude_pos);
+        assert!(joined.find("-s deer-claude-thread_x").unwrap() > claude_pos);
+    }
+
+    #[test]
+    fn prompt_args_take_engine_subcommand() {
+        let args = prompt_args("qwen", "deer-qwen-thread_x", None);
+        let joined = args.join(" ");
+        // 引擎子命令由参数决定，顶层选项仍在其之前
+        assert!(joined.find("--deny-all").unwrap() < joined.find("qwen").unwrap());
+        assert!(joined.contains("-s deer-qwen-thread_x"));
     }
 
     #[test]
     fn prompt_args_inject_mcp_config_and_allow_only_shelf_tools() {
         let path = Path::new("/tmp/deer-mcp-server.json");
-        let args = prompt_args("deer-thread_x", Some(path));
+        let args = prompt_args("claude", "deer-claude-thread_x", Some(path));
         let joined = args.join(" ");
         let claude_pos = joined.find("claude").unwrap();
         // 顶层 --mcp-config 与 --allowed-tools 同样必须在 claude 之前
@@ -933,7 +1141,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "依赖本机 acpx 与已登录的 claude CLI，手工跑"]
     async fn real_acpx_chat_named_session_resume_round_trip() {
-        let record = record_name("selftest-e2e");
+        let record = record_name("claude", "selftest-e2e");
         // 逐块到达时间（毫秒）：验证流式是否真的逐块（攒批会在日志里一眼看出）
         let chunks = std::sync::Mutex::new(Vec::<(u128, String)>::new());
         let t0 = std::time::Instant::now();
@@ -946,6 +1154,7 @@ mod tests {
             },
             "e2e-msg-1",
             "回复两个字：收到",
+            "claude",
             &record,
             None,
         )
@@ -974,6 +1183,7 @@ mod tests {
             &mut |_, _, delta: String| chunks2.lock().unwrap().push(delta),
             "e2e-msg-2",
             "我上一条消息让你回复的是哪两个字？只答那两个字。",
+            "claude",
             &record,
             Some(&result.session_id),
         )

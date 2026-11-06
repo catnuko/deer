@@ -17,10 +17,10 @@ const baseProps = {
 } as const;
 
 describe("QuickSettingsPanel", () => {
-  it("渲染三组设置：四档字号、四个色块、两种翻页方式，当前项标记选中", () => {
+  it("渲染三组设置：六档字号、四个色块、两种翻页方式，当前项标记选中", () => {
     render(<QuickSettingsPanel {...baseProps} />);
 
-    for (const size of [14, 15, 17, 19]) {
+    for (const size of [12, 14, 15, 17, 19, 22]) {
       expect(screen.getByRole("button", { name: String(size) })).toHaveAttribute(
         "aria-pressed",
         size === 15 ? "true" : "false",

@@ -47,7 +47,7 @@ describe("ReaderToolbar", () => {
       onToggleNotes: vi.fn(),
       onToggleQuickSettings: vi.fn(),
       onToggleConceptMap: vi.fn(),
-      onSummarizeChapter: vi.fn(),
+      onOpenPanel: vi.fn(),
     });
 
     for (const label of [
@@ -55,7 +55,7 @@ describe("ReaderToolbar", () => {
       "目录",
       "笔记与高亮",
       "显示设置",
-      "总结本章",
+      "AI 伴读",
       "概念地图",
       "设置",
     ]) {
@@ -93,19 +93,36 @@ describe("ReaderToolbar", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("窄窗：AI 动作收进「更多」，点击菜单项仍触发回调", async () => {
+  it("窄窗：AI 伴读保持直按，概念地图收进「更多」", async () => {
     stubMatchMedia(false);
-    const onSummarizeChapter = vi.fn();
-    renderToolbar({ onSummarizeChapter, onToggleConceptMap: vi.fn() });
+    const onOpenPanel = vi.fn();
+    const onToggleConceptMap = vi.fn();
+    renderToolbar({ onOpenPanel, onToggleConceptMap });
 
+    const aiButton = screen.getByRole("button", { name: "AI 伴读" });
+    await userEvent.click(aiButton);
+    expect(onOpenPanel).toHaveBeenCalledOnce();
     expect(
-      screen.queryByRole("button", { name: "总结本章" }),
+      screen.queryByRole("menuitem", { name: "AI 伴读" }),
     ).not.toBeInTheDocument();
+
     await userEvent.click(
       screen.getByRole("button", { name: "更多 AI 动作" }),
     );
-    await userEvent.click(screen.getByRole("menuitem", { name: "总结本章" }));
-    expect(onSummarizeChapter).toHaveBeenCalledOnce();
+    await userEvent.click(screen.getByRole("menuitem", { name: "概念地图" }));
+    expect(onToggleConceptMap).toHaveBeenCalledOnce();
+  });
+
+  it("AI 伴读按钮只开面板：点击只触发 onOpenPanel，无发送类回调", async () => {
+    stubMatchMedia(true);
+    const onOpenPanel = vi.fn();
+    renderToolbar({ onOpenPanel, panelOpen: true });
+    const user = userEvent.setup();
+
+    const aiButton = screen.getByRole("button", { name: "AI 伴读" });
+    expect(aiButton).toHaveAttribute("aria-pressed", "true");
+    await user.click(aiButton);
+    expect(onOpenPanel).toHaveBeenCalledOnce();
   });
 
   it("没提供回调时不显示对应入口", () => {
@@ -119,7 +136,7 @@ describe("ReaderToolbar", () => {
       screen.queryByRole("button", { name: "显示设置" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "总结本章" }),
+      screen.queryByRole("button", { name: "AI 伴读" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "概念地图" }),

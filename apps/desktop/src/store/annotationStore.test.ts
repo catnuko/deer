@@ -77,6 +77,29 @@ describe("划选注解持久化（按书隔离，CFI 定位）", () => {
     expect(list.find((x) => x.id === b.id)?.color).toBe("#5AD45A");
   });
 
+  it("add 带 style、setStyle 只改指定注解的样式，旧数据无 style 字段", () => {
+    const store = useAnnotationStore.getState();
+    const a = store.add({
+      bookId: "book-a",
+      cfi: "epubcfi(/6/4!/4/2)",
+      color: "#82B2F9",
+    });
+    expect(a.style).toBeUndefined();
+
+    const b = store.add({
+      bookId: "book-a",
+      cfi: "epubcfi(/6/4!/4/6)",
+      color: "#82B2F9",
+      style: "line",
+    });
+
+    store.setStyle(a.id, "dash");
+
+    const list = useAnnotationStore.getState().listForBook("book-a");
+    expect(list.find((x) => x.id === a.id)?.style).toBe("dash");
+    expect(list.find((x) => x.id === b.id)?.style).toBe("line");
+  });
+
   it("setNote 编辑与清空笔记，其他字段不动", () => {
     const store = useAnnotationStore.getState();
     const a = store.add({
@@ -134,5 +157,27 @@ describe("划选注解持久化（按书隔离，CFI 定位）", () => {
     const parsed = JSON.parse(raw as string);
     expect(parsed.annotations["book-a"]).toHaveLength(1);
     expect(parsed.annotations["book-a"][0].note).toBe("笔记");
+  });
+
+  it("clearAllAnnotations 清空所有书并落盘为空库", async () => {
+    useAnnotationStore.getState().add({
+      bookId: "book-a",
+      cfi: "epubcfi(/6/4!/4/2)",
+      color: "#FFD60A",
+    });
+    useAnnotationStore.getState().add({
+      bookId: "book-b",
+      cfi: "epubcfi(/6/8!/4/2)",
+      color: "#6FB6FF",
+      note: "第二条",
+    });
+
+    useAnnotationStore.getState().clearAllAnnotations();
+    expect(useAnnotationStore.getState().annotations).toEqual({});
+    expect(useAnnotationStore.getState().listForBook("book-a")).toHaveLength(0);
+
+    await new Promise((r) => setTimeout(r, 0));
+    const parsed = JSON.parse(memory.get("deer.annotations.v1") as string);
+    expect(parsed.annotations).toEqual({});
   });
 });

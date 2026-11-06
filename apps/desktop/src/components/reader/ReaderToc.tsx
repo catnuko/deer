@@ -14,25 +14,20 @@ type ReaderTocProps = {
   currentIndex: number;
   onSelect: (index: number) => void;
   className?: string;
-  /** dock：左栏固定宽；sheet：塞进小窗浮层，撑满容器。 */
-  variant?: "dock" | "sheet";
 };
 
+/**
+ * 目录列表：目录不再常驻左栏，本组件只负责「容器填满、列表滚动」的
+ * 内容形态，落位（宽窗浮层 / 窄窗 Sheet）由使用方包壳。
+ */
 export function ReaderToc({
   chapters,
   currentIndex,
   onSelect,
   className,
-  variant = "dock",
 }: ReaderTocProps) {
   return (
-    <aside
-      className={cn(
-        "border-border bg-sidebar flex shrink-0 flex-col",
-        variant === "sheet" ? "h-full w-full" : "w-56 border-r",
-        className,
-      )}
-    >
+    <aside className={cn("bg-sidebar flex h-full w-full shrink-0 flex-col", className)}>
       <div className="text-muted-foreground flex h-10 items-center gap-2 px-4 text-xs font-medium">
         <List className="size-3.5" />
         目录
@@ -43,7 +38,7 @@ export function ReaderToc({
         </div>
       ) : (
         <ScrollArea className="min-h-0 flex-1">
-          <nav className="flex flex-col gap-0.5 px-2 pb-4">
+          <nav className="flex min-w-0 flex-col gap-0.5 pr-4 pb-4 pl-2">
             {chapters.map((chapter) => {
               const active = chapter.index === currentIndex;
               return (
@@ -52,15 +47,20 @@ export function ReaderToc({
                   variant="ghost"
                   size="sm"
                   aria-current={active ? "page" : undefined}
+                  title={chapter.title}
                   onClick={() => onSelect(chapter.index)}
                   className={cn(
-                    "h-auto justify-start px-2.5 py-2 text-left text-[13px] leading-snug font-normal",
+                    // 基础按钮类带 whitespace-nowrap，且在 CSS 里排在 whitespace-normal 之后，
+                    // 必须用 important 后缀才能真正允许折行。
+                    "h-auto w-full min-w-0 justify-start px-2.5 py-2 text-left text-[13px] leading-snug font-normal whitespace-normal!",
                     active
                       ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
                       : "text-muted-foreground",
                   )}
                 >
-                  {chapter.title}
+                  <span className="line-clamp-2 w-full min-w-0 break-words">
+                    {chapter.title}
+                  </span>
                 </Button>
               );
             })}

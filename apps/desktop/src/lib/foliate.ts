@@ -64,6 +64,21 @@ export function bookToc(book: Book): TocItem[] {
   return flattenToc((book.toc ?? []) as unknown as RawTocNode[]);
 }
 
+export type ReadingStyleOptions = {
+  fontSize: number;
+  lineHeight: number;
+  /** 传入时压掉书自带背景（护眼纸色）；不传保持书原样。 */
+  paperColor?: string;
+  /** 深色主题：书文档注入深底浅字（书自带白底不压会露出白页）。 */
+  dark?: boolean;
+  /** 系统字体栈；不传（跟随书籍排版）不注入 font-family。 */
+  fontFamilyCss?: string;
+  /** 正文左右内边距（px）；不传保持书自带边距。 */
+  pageMarginPx?: number;
+  /** 脚注悬浮提示样式；关闭时不注入（同时不接线，见 ReaderPage）。 */
+  footnotePreview?: boolean;
+};
+
 /**
  * 注入正文 iframe 的阅读设置样式。foliate 把它追加在书自带 CSS 之后，
  * 用 !important 保证字号/行高不被书内样式覆盖（这是验收 3 的落点）。
@@ -71,21 +86,56 @@ export function bookToc(book: Book): TocItem[] {
  * paperColor 传入时同时压掉书自带的 html/body 背景（护眼纸色）；
  * 不传保持书原样。paginator 的视口底色由 index.css 的 ::part(filter) 规则
  * 读取同一个 --deer-paper 变量补齐，避免书页四周露出书原背景。
+ * dark 时注入深底浅字（阅读区跟随应用深色主题），与 paperColor 互斥使用。
  */
-export function readingStyles(
-  fontSize: number,
-  lineHeight: number,
-  paperColor?: string,
-): string {
+export function readingStyles({
+  fontSize,
+  lineHeight,
+  paperColor,
+  dark,
+  fontFamilyCss,
+  pageMarginPx,
+  footnotePreview = true,
+}: ReadingStyleOptions): string {
   const paper = paperColor
     ? `
 html, body { background: ${paperColor} !important; }
 `
     : "";
+  // 色值对应应用深色 token：--background oklch(0.145 0 0)、--foreground oklch(0.985 0 0)。
+  // 正文文本容器强制继承，压掉书自带的深色字（如 #333），否则深底配深字不可读。
+  const darkPaper = dark
+    ? `
+html, body { background: #0a0a0a !important; color: #fafafa !important; }
+h1, h2, h3, h4, h5, h6, p, li, blockquote, figcaption, dt, dd, td, th { color: inherit !important; }
+`
+    : "";
+  const fontFamily = fontFamilyCss
+    ? `body, p, div, span { font-family: ${fontFamilyCss} !important; }
+`
+    : "";
+  const pageMargin =
+    typeof pageMarginPx === "number"
+      ? `body { padding-left: ${pageMarginPx}px !important; padding-right: ${pageMarginPx}px !important; }
+`
+      : "";
+  const footnote = footnotePreview
+    ? `
+/* 脚注/尾注引用的悬浮提示：接线时盖章 data-papr-note（裸 type= 与纯上标
+   形 CSS 选不到，见 noteHover.ts），help 光标 + 悬浮点状下划线。非 EPUB
+   不接线不盖章，规则自然失效。 */
+a[data-papr-note] { cursor: help; }
+a[data-papr-note]:hover {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+}
+`
+    : "";
   return `
-${paper}html { font-size: ${fontSize}px !important; }
+${paper}${darkPaper}html { font-size: ${fontSize}px !important; }
 body, p, div, span { line-height: ${lineHeight} !important; }
-`;
+${fontFamily}${pageMargin}${footnote}`;
 }
 
 export type ImportedMetadata = {

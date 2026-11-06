@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
+import { ReaderOverlay } from "@/components/reader/ReaderOverlay";
 import { RefreshCw, Sparkles, X } from "lucide-react";
 import {
   buildConceptMapPrompt,
@@ -43,6 +45,10 @@ type ConceptMapPhase =
 const NODE_RADIUS = 30;
 
 type ConceptMapPanelProps = {
+  /** 开合由父级持有；关闭时保留挂载，好播 150ms 退场。 */
+  open?: boolean;
+  /** navigation 关闭时立即摘除。 */
+  immediate?: boolean;
   bookId: string;
   bookTitle: string;
   /** 章节标识（缓存 key 的一半），如 "sec:3"。 */
@@ -54,6 +60,8 @@ type ConceptMapPanelProps = {
 };
 
 export function ConceptMapPanel({
+  open = true,
+  immediate = false,
   bookId,
   bookTitle,
   chapterKey,
@@ -67,15 +75,7 @@ export function ConceptMapPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tauri] = useState(() => isTauriRuntime());
 
-  // Esc 关闭（布局重排 P8）：与显示设置面板行为对齐。
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
+  
   // 打开面板或切章时重置：渲染期比对 key 调整状态（React 推荐做法），
   // 避免 effect 内同步 setState；重挂载时初值本就是 idle/null，天然幂等。
   const panelKey = `${bookId}\u0000${chapterKey}`;
@@ -88,6 +88,7 @@ export function ConceptMapPanel({
 
   // 打开面板时先查缓存：有就直接展示，没有停在「未生成」。
   useEffect(() => {
+    if (!open) return;
     let cancelled = false;
     void (async () => {
       await load();
@@ -104,7 +105,7 @@ export function ConceptMapPanel({
     return () => {
       cancelled = true;
     };
-  }, [bookId, chapterKey, load]);
+  }, [bookId, chapterKey, load, open]);
 
   const generate = useCallback(async () => {
     setSelectedId(null);
@@ -166,14 +167,18 @@ export function ConceptMapPanel({
       : null;
 
   return (
-    <div
-      role="group"
-      aria-label="章节概念地图"
-      className="border-border bg-background absolute inset-4 z-20 flex flex-col rounded-lg border shadow-md"
-      onClick={(event) => {
-        // 别让点击冒泡到正文的边缘翻页捕获层。
-        event.stopPropagation();
-      }}
+    <ReaderOverlay
+      open={open}
+      immediate={immediate}
+      exit="panel"
+      variant="scale"
+      modal
+      role="dialog"
+      ariaLabel="章节概念地图"
+      // 与设置弹窗同规格：900×640，视口放不下时退回 94vw×86vh。
+      className="border-border bg-background flex h-[640px] max-h-[86vh] w-[900px] max-w-[94vw] flex-col overflow-hidden rounded-lg border shadow-md"
+      closeOnOutside
+      onClose={onClose}
     >
       <div className="border-border flex shrink-0 items-center justify-between border-b px-4 py-2.5">
         <div className="min-w-0">
@@ -269,7 +274,7 @@ export function ConceptMapPanel({
               const x2 = edge.to.x - (dx / len) * NODE_RADIUS;
               const y2 = edge.to.y - (dy / len) * NODE_RADIUS;
               return (
-                <g key={i}>
+                <g key={i} className="deer-edge-in">
                   <line
                     x1={x1}
                     y1={y1}
@@ -291,14 +296,19 @@ export function ConceptMapPanel({
                 </g>
               );
             })}
-            {phase.data.nodes.map((node) => {
+            {phase.data.nodes.map((node, index) => {
               const pos = layout.positions[node.id];
               if (!pos) return null;
               const selectedNode = node.id === selectedId;
               return (
                 <g
                   key={node.id}
-                  className="cursor-pointer"
+                  className="deer-node-in cursor-pointer"
+                  style={
+                    {
+                      "--deer-index": index < 12 ? index : 0,
+                    } as CSSProperties
+                  }
                   onClick={() => setSelectedId(selectedNode ? null : node.id)}
                 >
                   <circle
@@ -306,7 +316,7 @@ export function ConceptMapPanel({
                     cy={pos.y}
                     r={NODE_RADIUS}
                     className={cn(
-                      "fill-card stroke-border transition-[stroke]",
+                      "fill-card stroke-border transition-[stroke] duration-fast ease-enter",
                       selectedNode && "stroke-primary",
                     )}
                     strokeWidth={selectedNode ? 2.5 : 1.5}
@@ -316,7 +326,7 @@ export function ConceptMapPanel({
                     y={pos.y + NODE_RADIUS + 14}
                     textAnchor="middle"
                     className={cn(
-                      "fill-foreground text-[11px]",
+                      "fill-foreground text-[11px] transition-colors duration-fast ease-enter",
                       selectedNode && "fill-primary font-medium",
                     )}
                   >
@@ -357,6 +367,6 @@ export function ConceptMapPanel({
           </p>
         )}
       </div>
-    </div>
+    </ReaderOverlay>
   );
 }

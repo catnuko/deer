@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { AnnotationStyle } from "@/components/reader/highlightColors";
 
 /**
  * 划选高亮/笔记的持久化：按书分组，CFI 是回显与定位的 key。
@@ -11,6 +12,8 @@ export type StoredAnnotation = {
   cfi: string;
   /** 高亮色值（highlightColors 的 value）。 */
   color: string;
+  /** 划线样式；旧数据无此字段，渲染层按 marker 处理。 */
+  style?: AnnotationStyle;
   /** 划选时的文本摘录，编辑菜单与后续引用用。 */
   excerpt?: string;
   note?: string;
@@ -30,12 +33,16 @@ export type AnnotationStore = AnnotationState & {
     bookId: string;
     cfi: string;
     color: string;
+    style?: AnnotationStyle;
     excerpt?: string;
     note?: string;
   }): StoredAnnotation;
   setColor(id: string, color: string): void;
+  setStyle(id: string, style: AnnotationStyle): void;
   setNote(id: string, note: string): void;
   remove(id: string): void;
+  /** 清空全部书的高亮与笔记（设置页「清空笔记」）。 */
+  clearAllAnnotations(): void;
 };
 
 const STORE_FILE = "annotations.json";
@@ -120,11 +127,12 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => {
       return get().annotations[bookId] ?? [];
     },
 
-    add({ bookId, cfi, color, excerpt, note }) {
+    add({ bookId, cfi, color, style, excerpt, note }) {
       const annotation: StoredAnnotation = {
         id: id(),
         cfi,
         color,
+        ...(style ? { style } : {}),
         ...(excerpt ? { excerpt } : {}),
         ...(note ? { note } : {}),
         createdAt: Date.now(),
@@ -143,6 +151,10 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => {
       patch(id, { color });
     },
 
+    setStyle(id, style) {
+      patch(id, { style });
+    },
+
     setNote(id, note) {
       patch(id, note ? { note } : { note: undefined });
     },
@@ -155,6 +167,11 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => {
         }
         return { annotations: next };
       });
+      persist();
+    },
+
+    clearAllAnnotations() {
+      set({ annotations: {} });
       persist();
     },
   };

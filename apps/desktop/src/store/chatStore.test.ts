@@ -236,4 +236,22 @@ describe("chatStore", () => {
     expect(map[a.id]).toBeUndefined();
     expect(map[b.id]).toBe("acp-b");
   });
+
+  it("clearAllChat 清空全部线程、消息、反馈与 acpx 映射", () => {
+    const store = useChatStore.getState();
+    const a = store.ensureThread("book-a", "甲书");
+    store.appendMessage(a.id, "user", "问题");
+    store.setFeedback("msg-x", "up");
+    store.setAcpxSession(a.id, "acp-a");
+
+    store.clearAllChat();
+
+    const state = useChatStore.getState();
+    expect(state.threads).toEqual({});
+    expect(state.messages).toEqual({});
+    expect(state.activeThreadByBook).toEqual({});
+    expect(state.feedback).toEqual({});
+    expect(state.acpxSessionByThread).toEqual({});
+    expect(state.ready).toBe(true);
+  });
 });

@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { MinimalCard } from "@/components/ui/minimal-card";
 import { getCoverUrl } from "@/lib/covers";
-import { formatBytes, formatDate } from "@/lib/format";
 import type { Book, Shelf } from "@/lib/types";
 
 type BookCardProps = {
@@ -47,7 +46,7 @@ export function BookCard({
   const progressPercent = Math.round(Math.min(Math.max(book.progress, 0), 1) * 100);
 
   return (
-    <MinimalCard className="group/card flex flex-col gap-3 p-3">
+    <MinimalCard className="deer-lift group/card flex flex-col gap-2 p-3 hover:-translate-y-0.5 hover:shadow-lg">
       <button
         type="button"
         onClick={() => onOpen(book)}
@@ -58,10 +57,10 @@ export function BookCard({
           <img
             src={coverUrl}
             alt={`《${book.title}》封面`}
-            className="absolute inset-0 size-full object-cover"
+            className="absolute inset-0 size-full object-cover transition-transform duration-fast ease-enter group-hover/card:scale-[1.03]"
           />
         ) : (
-          <div className="from-secondary to-muted absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gradient-to-br p-4 text-center">
+          <div className="from-secondary to-muted absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gradient-to-br p-4 text-center transition-transform duration-fast ease-enter group-hover/card:scale-[1.03]">
             <span className="text-primary/80 text-3xl font-semibold">
               {book.title.slice(0, 1)}
             </span>
@@ -82,14 +81,11 @@ export function BookCard({
 
       <div className="flex min-w-0 items-start gap-1 px-1">
         <div className="min-w-0 flex-1">
-          <h3 className="line-clamp-2 text-sm leading-snug font-semibold">
+          <h3 className="truncate text-sm leading-snug font-semibold">
             {book.title}
           </h3>
-          <p className="text-muted-foreground mt-1 truncate text-xs">
+          <p className="text-muted-foreground mt-0.5 truncate text-xs">
             {book.author}
-          </p>
-          <p className="text-muted-foreground/80 mt-1 text-[11px]">
-            {formatBytes(book.sizeBytes)} · {formatDate(book.addedAt)}
           </p>
         </div>
 

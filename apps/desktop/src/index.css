@@ -41,8 +41,33 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* 动效 token（docs/design-handoff/motion.md §1）：必须独立成非 inline 的
+   @theme 块，否则变量不输出到 :root，减少动态效果时无法统一覆盖。 */
+@theme {
+  --transition-duration-fast: 120ms;
+  --transition-duration-base: 200ms;
+  --transition-duration-exit: 150ms;
+
+  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
 :root {
   --radius: 0.875rem;
+  /* slow 目前没有被任何 utility/var() 引用，放进 @theme 会被 Tailwind 当作
+     未使用主题变量裁掉，运行时拿不到值；显式落在 :root 才能被媒体查询覆盖。 */
+  --transition-duration-slow: 300ms;
+  /* AI 侧栏专用：起步即有速度、收尾柔和的缓动。全局 ease-enter 的 y1=0
+     起步速度为 0，面板窄幅移动时读起来像「先慢后快」，故单列不共用。 */
+  --transition-duration-panel-in: 240ms;
+  --transition-duration-panel-out: 160ms;
+  --ease-panel: cubic-bezier(0.33, 0.7, 0.2, 1);
+  /* 位移与错峰没有 Tailwind 命名空间，按 motion.md §1.3 落在这里。 */
+  --motion-shift-panel: 6px;
+  --motion-shift-list: 2px;
+  --motion-shift-hover: 2px;
+  --motion-stagger: 40ms;
+  --motion-stagger-max: 12;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -121,7 +146,356 @@
 
 /* 阅读纸色（M4）：paginator 的 #background 以 part "filter" 转发出来，
    阅读页在浅色主题下设置 --deer-paper 覆盖它；未设置时用应用背景兜底。
-   !important 压过 paginator 在 load 时写死的行内背景。 */
+   !important 压过 paginator 在 load 时写死的行内背景。
+   纸色切换只过渡这层底色，正文文字颜色不参与（motion.md M3）。 */
 foliate-view::part(filter) {
   background: var(--deer-paper, var(--background)) !important;
+  transition: background-color var(--transition-duration-base) var(--ease-enter);
+}
+
+/* 翻页淡入档：只做容器淡入，不动分页定位（M1 三档里的「淡入」）。 */
+@keyframes deer-page-turn {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.deer-page-turn {
+  animation: deer-page-turn var(--transition-duration-exit) var(--ease-enter);
+}
+
+/* ---------- 浮层与列表动效（motion.md §2–§5） ---------- */
+
+/* L1 面板：自上缘落入 4px，200ms；退出反向 150ms（仅快捷设置与概念地图）。 */
+@keyframes deer-overlay-drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes deer-overlay-drop-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* 概念地图无锚点，用 0.98→1 缩放代替位移。 */
+@keyframes deer-overlay-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes deer-overlay-scale-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+.deer-overlay-in-drop {
+  animation: deer-overlay-drop-in var(--transition-duration-base) var(--ease-enter);
+}
+
+.deer-overlay-out-drop {
+  animation: deer-overlay-drop-out var(--transition-duration-exit) var(--ease-exit) both;
+}
+
+/* 视口居中模态的遮罩：与面板同一条进出节奏（200ms 入 / 150ms 出）。 */
+@keyframes deer-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes deer-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.deer-backdrop-in {
+  animation: deer-backdrop-in var(--transition-duration-base) var(--ease-enter) both;
+}
+
+.deer-backdrop-out {
+  animation: deer-backdrop-out var(--transition-duration-exit) var(--ease-exit) both;
+}
+
+.deer-overlay-in-scale {
+  animation: deer-overlay-scale-in var(--transition-duration-base) var(--ease-enter);
+}
+
+.deer-overlay-out-scale {
+  animation: deer-overlay-scale-out var(--transition-duration-exit) var(--ease-exit) both;
+}
+
+/* 小浮层（划选菜单、脚注卡）：朝锚点方向 4px 进入，120ms。 */
+@keyframes deer-pop-in-above {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes deer-pop-in-below {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.deer-pop-in-above {
+  animation: deer-pop-in-above var(--transition-duration-fast) var(--ease-enter);
+}
+
+.deer-pop-in-below {
+  animation: deer-pop-in-below var(--transition-duration-fast) var(--ease-enter);
+}
+
+/* 脚注预览卡：原地淡入淡出，无位移（motion.md M2，catnuko 真机反馈）。 */
+@keyframes deer-peek-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes deer-peek-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.deer-peek-in {
+  animation: deer-peek-in var(--transition-duration-fast) var(--ease-enter) both;
+}
+
+.deer-peek-out {
+  animation: deer-peek-out var(--transition-duration-fast) var(--ease-exit) both;
+}
+
+/* 布局内面板（AI 侧栏、目录 dock）：宽度瞬时到位，只有内容 120ms 淡入。 */
+@keyframes deer-content-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.deer-content-fade {
+  animation: deer-content-fade-in var(--transition-duration-fast) var(--ease-enter);
+}
+
+/* AI 侧栏：宽度仍瞬时到位（motion.md 禁止宽度过渡），内容带方向进出——
+   从右侧 12px 滑入 240ms；关闭 160ms 侧滑淡出，播完由组件摘除（presence）。
+   缓动用面板专用的 --ease-panel（起步有速度），不复用全局 ease-enter/exit。 */
+/* 起点默认值用于从零开始的那一次；被打断时组件用 --panel-start-* 传入当前
+   不透明度/transform，接着当前画面走，不跳到关键帧的固定端点。 */
+@keyframes deer-panel-in {
+  from {
+    opacity: var(--panel-start-opacity, 0);
+    transform: var(--panel-start-transform, translateX(12px));
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes deer-panel-out {
+  from {
+    opacity: var(--panel-start-opacity, 1);
+    transform: var(--panel-start-transform, translateX(0));
+  }
+  to {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+
+.deer-panel-in {
+  animation: deer-panel-in var(--transition-duration-panel-in) var(--ease-panel);
+}
+
+/* 退场停在最后一帧：animationend 到节点摘除之间不允许弹回自然态（opacity 1 / 原位）。 */
+.deer-panel-out {
+  animation: deer-panel-out var(--transition-duration-panel-out) var(--ease-panel);
+  animation-fill-mode: forwards;
+}
+
+/* 常态：不含动画，用于入场结束/退场回退后的落位，换类时不重播。 */
+.deer-panel-open {
+  opacity: 1;
+  transform: none;
+}
+
+/* 书架列表入场：200ms + 2px，前 12 项按 40ms 错峰。 */
+@keyframes deer-list-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.deer-list-item {
+  animation: deer-list-item-in var(--transition-duration-base) var(--ease-enter) both;
+  animation-delay: calc(var(--deer-index, 0) * var(--motion-stagger));
+}
+
+/* 设置右栏切组：内容淡入上移 4px，120ms；旧内容由 keyed 重挂即时换掉（M8）。 */
+@keyframes deer-section-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.deer-section-in {
+  animation: deer-section-in var(--transition-duration-fast) var(--ease-enter);
+}
+
+/* 概念地图：节点淡入 + 0.96→1，按渲染顺序 40ms 错峰（最多前 12 个）；
+   连线只淡入，不做描边动画（M10）。 */
+@keyframes deer-node-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.deer-node-in {
+  animation: deer-node-in var(--transition-duration-fast) var(--ease-enter) both;
+  animation-delay: calc(var(--deer-index, 0) * var(--motion-stagger));
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes deer-edge-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.deer-edge-in {
+  animation: deer-edge-in var(--transition-duration-fast) var(--ease-enter) both;
+}
+
+/* 主题切换：有 View Transition 时走原生伪元素，否则只过渡 body 底色与文字。 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--transition-duration-base);
+  animation-timing-function: var(--ease-enter);
+}
+
+.deer-theme-fading body {
+  transition:
+    background-color var(--transition-duration-base) var(--ease-enter),
+    color var(--transition-duration-base) var(--ease-enter);
+}
+
+/* 系统「减少动态效果」（motion.md §4）：时长归零但保留 0.01ms，
+   避免靠 animationend 收尾的组件事件不触发。 */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-duration-fast: 0ms;
+    --transition-duration-base: 0ms;
+    --transition-duration-exit: 0ms;
+    --transition-duration-slow: 0ms;
+    --transition-duration-panel-in: 0ms;
+    --transition-duration-panel-out: 0ms;
+    --motion-shift-panel: 0px;
+    --motion-shift-list: 0px;
+    --motion-shift-hover: 0px;
+    --motion-stagger: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* 无限脉冲会被压成高频闪帧，必须单独停掉换成静态占位。 */
+  .deer-skeleton,
+  .deer-skeleton * {
+    animation: none !important;
+    opacity: 0.6;
+  }
+
+  /* M5 的 hover/active 抬升在降级下取消（motion.md §4.2）：只清 translate，
+     不动 transform —— 弹窗居中与提示箭头还要靠它。 */
+  .deer-lift:hover,
+  .deer-lift:active {
+    translate: none !important;
+  }
+
+  /* AI 侧栏进出在降级下只淡入淡出：位移不参与，时长已由 token 归零。 */
+  .deer-panel-in,
+  .deer-panel-out {
+    transform: none !important;
+  }
 }

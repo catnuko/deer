@@ -46,6 +46,8 @@ export type ChatStore = ChatStoreState & {
     books: ChatBookRef[],
   ): void;
   clearThread(threadId: string): void;
+  /** 清空全部本机聊天记录（设置页「清空聊天记录」）。 */
+  clearAllChat(): void;
 };
 
 /* ------------------------------------------------------------------ */
@@ -248,6 +250,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
         return next;
       });
       touchThread(threadId);
+      persist();
+    },
+
+    clearAllChat() {
+      // 全清 = 回到空库；复用既有 EMPTY 形态与 persist，不新造持久化。
+      set({ ...EMPTY, ready: true });
       persist();
     },
 

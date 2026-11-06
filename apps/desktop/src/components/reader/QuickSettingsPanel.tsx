@@ -1,6 +1,6 @@
-import { useEffect } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ReaderOverlay } from "@/components/reader/ReaderOverlay";
 import {
   FONT_SIZES,
   PAGE_FLOWS,
@@ -16,6 +16,10 @@ const PAGE_FLOW_LABELS: Record<PageFlow, string> = {
 };
 
 type QuickSettingsPanelProps = {
+  /** 开合由父级持有，壳负责进出动画与 Esc / 点外关闭。 */
+  open?: boolean;
+  /** navigation 关闭（翻页、跳章）时立即摘除，不播 150ms 退场。 */
+  immediate?: boolean;
   fontSize: FontSize;
   paperColor: PaperColor;
   pageFlow: PageFlow;
@@ -33,6 +37,8 @@ type QuickSettingsPanelProps = {
  * 与 SelectionPopover 一样在根上拦截。
  */
 export function QuickSettingsPanel({
+  open = true,
+  immediate = false,
   fontSize,
   paperColor,
   pageFlow,
@@ -42,24 +48,16 @@ export function QuickSettingsPanel({
   onPageFlowChange,
   onClose,
 }: QuickSettingsPanelProps) {
-  // Esc 关闭（布局重排 P8）：与其他阅读页浮层行为对齐。
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div
-      role="group"
-      aria-label="阅读显示设置"
-      className="border-border bg-background absolute top-4 right-4 z-20 w-60 rounded-lg border p-3 shadow-md"
-      onClick={(event) => {
-        // 别让点击冒泡到正文的边缘翻页捕获层。
-        event.stopPropagation();
-      }}
+    <ReaderOverlay
+      open={open}
+      immediate={immediate}
+      exit="panel"
+      variant="drop"
+      ariaLabel="阅读显示设置"
+      className="border-border bg-background top-4 right-4 w-60 rounded-lg border p-3 shadow-md"
+      closeOnOutside
+      onClose={onClose}
     >
       <div className="mb-2 flex items-center justify-between">
         <span className="text-sm font-medium">显示设置</span>
@@ -75,14 +73,14 @@ export function QuickSettingsPanel({
 
       <section aria-label="字号" className="mb-3">
         <p className="text-muted-foreground mb-1.5 text-xs">字号</p>
-        <div className="flex gap-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
           {FONT_SIZES.map((size) => (
             <button
               key={size}
               type="button"
               aria-pressed={size === fontSize}
               className={cn(
-                "border-border text-foreground h-8 flex-1 rounded-md border text-xs",
+                "border-border text-foreground h-8 rounded-md border text-xs transition-colors duration-fast ease-enter",
                 size === fontSize && "bg-primary text-primary-foreground border-primary",
               )}
               onClick={() => onFontSizeChange(size)}
@@ -107,8 +105,8 @@ export function QuickSettingsPanel({
                 aria-pressed={value === paperColor}
                 disabled={paperColorDisabled}
                 className={cn(
-                  "size-7 rounded-full border border-black/10 transition-transform hover:scale-110",
-                  "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100",
+                  "size-7 rounded-full border border-black/10 transition-shadow duration-exit ease-exit",
+                  "disabled:cursor-not-allowed disabled:opacity-40",
                   value === paperColor && "ring-primary ring-offset-background ring-2 ring-offset-1",
                 )}
                 style={{ backgroundColor: value }}
@@ -138,6 +136,6 @@ export function QuickSettingsPanel({
           ))}
         </div>
       </section>
-    </div>
+    </ReaderOverlay>
   );
 }
