@@ -55,6 +55,7 @@ describe("SelectionPopover", () => {
     expect(
       screen.queryByRole("button", { name: "颜色：浅蓝" }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("selection-menu-submenu")).not.toBeInTheDocument();
   });
 
   it("点击复制把选中文本交给 onCopy，且不冒泡到正文容器", async () => {
@@ -161,6 +162,18 @@ describe("SelectionPopover 编辑已有划线", () => {
     expect(
       screen.getByRole("button", { name: "颜色：浅蓝" }),
     ).toHaveAttribute("aria-pressed", "true");
+
+    // 行 2 是独立浮层（二级菜单），挂在主菜单上方而不是同一张卡片里。
+    const submenu = screen.getByTestId("selection-menu-submenu");
+    const main = screen.getByTestId("selection-menu-main");
+    expect(submenu.className).toContain("absolute");
+    expect(submenu.contains(screen.getByRole("button", { name: "样式：马克笔" }))).toBe(
+      true,
+    );
+    expect(main.contains(screen.getByRole("button", { name: "样式：马克笔" }))).toBe(
+      false,
+    );
+    expect(submenu.nextElementSibling).toBe(main);
   });
 
   it("行 2 点样式把新样式连同当前颜色交给 onHighlight，菜单不关", async () => {
