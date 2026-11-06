@@ -125,8 +125,8 @@ export function ReaderToolbar({
 
         <div className="bg-border h-5 w-px" />
 
-        {/* 书名独占可收缩弹性区：长书名末尾省略号，右侧按钮永不被挤走。 */}
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        {/* 书名弹性区封顶顶栏一半：长书名到上限即省略号，右侧按钮永不被挤走。 */}
+        <div className="flex min-w-0 max-w-[50%] flex-1 items-center gap-2">
           <BookOpen className="text-muted-foreground size-4 shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium">{bookTitle}</span>
           <span className="text-muted-foreground hidden min-w-0 truncate text-xs sm:inline">
