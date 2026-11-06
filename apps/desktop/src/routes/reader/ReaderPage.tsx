@@ -1678,8 +1678,7 @@ function RealReader({
         onClose={onClosePanel}
         open={chatOpen}
         onSummarizeChapter={onSummarizeChapter}
-        // 与书架页统一为悬浮面板：盖在正文上，主区不推挤（根容器 relative）。
-        className="absolute inset-y-0 right-0 z-30 shadow-[-12px_0_28px_-18px_rgb(0_0_0_/_0.35)]"
+        // 与书架页统一为嵌入式停靠：占主区右侧宽度推挤正文，常驻不因点外收起。
       />
     </div>
   );
@@ -1956,8 +1955,7 @@ function DemoReader({
         onClose={onClosePanel}
         open={chatOpen}
         onSummarizeChapter={summarizeChapter}
-        // 与书架页统一为悬浮面板：盖在正文上，主区不推挤（根容器 relative）。
-        className="absolute inset-y-0 right-0 z-30 shadow-[-12px_0_28px_-18px_rgb(0_0_0_/_0.35)]"
+        // 与书架页统一为嵌入式停靠：占主区右侧宽度推挤正文，常驻不因点外收起。
       />
     </div>
   );

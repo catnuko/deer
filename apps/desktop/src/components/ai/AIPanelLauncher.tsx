@@ -30,24 +30,14 @@ export function AIPanelLauncher() {
     if (new URLSearchParams(location.search).get("ai") === "1") setOpen(true);
   }, [location.search, setOpen]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, setOpen]);
-
   if (!onEntryRoute || !mounted) return null;
 
   return (
     <ChatPanel
       book={book}
       open={open}
-      // 书架与阅读页同一形态：面板浮在内容上（覆盖式），主区宽度恒定，
-      // 开合与卸载都不触发主区重排。
-      className="absolute inset-y-0 right-0 z-30 shadow-[-12px_0_28px_-18px_rgb(0_0_0_/_0.35)]"
+      // 书架与阅读页同一形态：面板嵌入式停靠在主区右侧、推挤主区，
+      // 打开后常驻（点面板外/Esc 不收起），只有面板内关闭按钮能收。
       onExited={() => setMounted(false)}
       onClose={() => setOpen(false)}
     />

@@ -46,7 +46,7 @@ describe("AIPanelLauncher", () => {
     expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-open", "true");
   });
 
-  it("书架页面板是覆盖式抽屉：绝对定位在右侧，不占主区布局宽度", () => {
+  it("书架页面板是嵌入式停靠：不绝对定位，作为 flex 兄弟推挤主区", () => {
     render(
       <MemoryRouter initialEntries={["/bookshelf"]}>
         <AIPanelLauncher />
@@ -54,9 +54,8 @@ describe("AIPanelLauncher", () => {
     );
     setPanelOpen(true);
     const panel = screen.getByTestId("chat-panel");
-    expect(panel.className).toContain("absolute");
-    expect(panel.className).toContain("inset-y-0");
-    expect(panel.className).toContain("right-0");
+    expect(panel.className).not.toContain("absolute");
+    expect(panel.className).not.toContain("z-30");
   });
 
   it("关闭后仍留在树上等退场动画，onExited 后才摘除", () => {
