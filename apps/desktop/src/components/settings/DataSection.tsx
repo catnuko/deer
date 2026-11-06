@@ -5,6 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import { SettingRow } from "@/components/settings/SettingRow";
 import { ConfirmDialog } from "@/components/settings/ConfirmDialog";
 import { isTauri } from "@/lib/platform";
+import { formatStorageTotal } from "@/lib/format";
 import { summarizeStorage } from "@/lib/storageSummary";
 import { useDataDir } from "@/lib/useDataDir";
 import { useAnnotationStore } from "@/store/annotationStore";
@@ -39,6 +40,15 @@ export function DataSection() {
 
   const summary = useMemo(
     () => summarizeStorage({ books, annotations, messages }),
+    [books, annotations, messages],
+  );
+
+  // 占用总数为估算值：书籍按文件大小原计，标注与聊天按持久化 JSON 的近似体积。
+  const totalBytes = useMemo(
+    () =>
+      books.reduce((sum, book) => sum + (book.sizeBytes ?? 0), 0) +
+      (JSON.stringify(annotations ?? {}).length +
+        JSON.stringify(messages ?? {}).length),
     [books, annotations, messages],
   );
 
@@ -99,7 +109,8 @@ export function DataSection() {
         <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
           {summary.bookCount} 本书 · {summary.annotationCount} 条标注 · 其中{" "}
           {summary.noteCount} 条含笔记 · {summary.chatThreadCount} 个会话共{" "}
-          {summary.chatMessageCount} 条聊天消息
+          {summary.chatMessageCount} 条聊天消息 · 占用约{" "}
+          {formatStorageTotal(totalBytes)}
         </p>
       </div>
 
