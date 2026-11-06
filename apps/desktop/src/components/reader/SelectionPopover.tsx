@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { Copy, Highlighter, NotebookPen, Sparkles, type LucideIcon } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -52,8 +52,9 @@ export function SelectionPopover({
   const style = existing?.style ?? DEFAULT_ANNOTATION_STYLE;
   const color = existing?.color ?? DEFAULT_HIGHLIGHT_COLOR;
 
-  // 行 2 展开/收起会改浮层高度：按真实尺寸重测落位（翻转 + 夹边）。
-  useLayoutEffect(() => {
+  // 量出真实尺寸后重算落位：行 1 + 行 2 永远是一个整体，行 2 紧贴行 1
+  // 正下方，整块优先放选区上方、放不下才整块翻下方（fitPopover）。
+  const measureAndFit = useCallback(() => {
     const wrap = wrapRef.current;
     const popup = wrap?.firstElementChild as HTMLElement | null;
     const host = wrap?.offsetParent as HTMLElement | null;
@@ -68,7 +69,27 @@ export function SelectionPopover({
         { width, height },
       ),
     );
-  }, [expanded, mode, x, selTop, selBottom]);
+  }, [x, selTop, selBottom]);
+
+  // 行 2 展开/收起、写想法切换等已知的高度变化在这里重测。
+  useLayoutEffect(() => {
+    measureAndFit();
+  }, [measureAndFit, expanded, mode]);
+
+  // 尺寸的其余变化（字体加载完成、窄宿主内折行等）不经过上面的依赖，
+  // 一律由 ResizeObserver 兜底重测，保证任何一帧都不会出现行 1 在选区
+  // 上方、行 2 却按旧高度伸进选区下方的「两行被选区隔开」状态。
+  const measureRef = useRef(measureAndFit);
+  useEffect(() => {
+    measureRef.current = measureAndFit;
+  });
+  useEffect(() => {
+    const popup = wrapRef.current?.firstElementChild;
+    if (!popup || typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(() => measureRef.current());
+    observer.observe(popup);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <div
