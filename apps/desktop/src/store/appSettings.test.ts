@@ -15,6 +15,7 @@ describe("appSettings store", () => {
     expect(DEFAULT_APP_SETTINGS).toEqual({
       startupView: "bookshelf",
       bookshelfSort: "recent",
+      aiEngine: DEFAULT_APP_SETTINGS.aiEngine,
     });
     expect(useAppSettings.getState().startupView).toBe("bookshelf");
     expect(useAppSettings.getState().bookshelfSort).toBe("recent");
@@ -34,6 +35,7 @@ describe("appSettings store", () => {
     ).toEqual({
       startupView: "bookshelf",
       bookshelfSort: "recent",
+      aiEngine: DEFAULT_APP_SETTINGS.aiEngine,
     });
   });
 
