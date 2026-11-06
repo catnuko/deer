@@ -125,13 +125,14 @@ function focusToolbarButton(id: string) {
 }
 
 /**
- * 宽窗目录浮层的点外 / Esc 关闭（窄窗 Sheet 自带这两条路径，不挂）。
+ * 宽窗浮层（目录/笔记）的点外 / Esc 关闭（窄窗 Sheet 自带这两条路径，不挂）。
  * 触发按钮自己管理开合，点它不在此收口，避免和 onClick 打架。
  */
 function useTocPopupDismiss(
   enabled: boolean,
   popupRef: React.RefObject<HTMLElement | null>,
   onClose: () => void,
+  triggerId = "reader-toolbar-toc",
 ) {
   useEffect(() => {
     if (!enabled) return;
@@ -139,7 +140,7 @@ function useTocPopupDismiss(
       const target = event.target as Node | null;
       if (!target) return;
       if (popupRef.current?.contains(target)) return;
-      if (document.getElementById("reader-toolbar-toc")?.contains(target)) return;
+      if (document.getElementById(triggerId)?.contains(target)) return;
       onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -151,7 +152,7 @@ function useTocPopupDismiss(
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [enabled, popupRef, onClose]);
+  }, [enabled, popupRef, onClose, triggerId]);
 }
 
 type RealBookPhase =
@@ -351,6 +352,12 @@ export function ReaderPage() {
 
   // 笔记管理面板（M3）：列表直接订阅 annotationStore，跳转/删除复用 foliate 能力。
   const [notesOpen, setNotesOpen] = useState(false);
+  // 宽窗笔记与目录同形态（浮层）：点外 / Esc 收口，焦点归还顶栏按钮。
+  const notesPopupRef = useRef<HTMLDivElement>(null);
+  const closeNotesPopup = useCallback(() => {
+    setNotesOpen(false);
+    focusToolbarButton("reader-toolbar-notes");
+  }, []);
   // 阅读页快捷显示设置面板（M4）。
   const [quickSettingsOpen, setQuickSettingsOpen] = useState(false);
   // 目录开关：默认收起（所有宽度），宽窗浮层 / 窄窗 Sheet 共用一套开合。
@@ -362,6 +369,12 @@ export function ReaderPage() {
     focusToolbarButton("reader-toolbar-toc");
   }, []);
   useTocPopupDismiss(tocOpen && isWide, tocPopupRef, closeTocPopup);
+  useTocPopupDismiss(
+    notesOpen && isWide,
+    notesPopupRef,
+    closeNotesPopup,
+    "reader-toolbar-notes",
+  );
   // 跨越到窄窗时把 dock 形态的面板收起，避免 Sheet 突然盖到正文上。
   // 窄窗下挂载时初值本就是收起，只需监听断点跨越事件（不在 effect 里同步 setState）。
   useEffect(() => {
@@ -1167,9 +1180,10 @@ const copyAnnotationText = useCallback((text: string) => {
         notesOpen={notesOpen}
         annotations={annotationsForBook}
         onToggleNotes={toggleNotesOverlays}
-        onCloseNotes={() => setNotesOpen(false)}
+        onCloseNotes={closeNotesPopup}
         onSelectAnnotation={jumpToAnnotation}
         onDeleteAnnotationById={deleteAnnotationById}
+        notesPopupRef={notesPopupRef}
         quickSettingsOpen={quickSettingsOpen}
         quickSettingsImmediate={quickSettingsImmediate}
         paperColor={paperColor}
@@ -1254,13 +1268,15 @@ type RealReaderProps = {
   onCloseNotes: () => void;
   onSelectAnnotation: (cfi: string) => void;
   onDeleteAnnotationById: (id: string) => void;
+  /** 宽窗笔记浮层的宿主 ref（点外/Esc 收口用）。 */
+  notesPopupRef: React.RefObject<HTMLDivElement | null>;
   quickSettingsOpen: boolean;
   /** 关闭来源为 navigation：浮层立即摘除，不播退场。 */
   quickSettingsImmediate: boolean;
   paperColor: PaperColor;
   pageFlow: PageFlow;
   isDark: boolean;
-  /** 宽窗（≥md）为 true：目录/笔记用左栏 dock，窄窗用 Sheet 浮层（布局重排 v1）。 */
+  /** 宽窗（≥md）为 true：目录/笔记用浮层，窄窗用 Sheet 浮层（布局重排 v1）。 */
   wideViewport: boolean;
   tocOpen: boolean;
   /** 无目录的书（图片书等）：目录面板显示空态、按钮置灰。 */
@@ -1324,6 +1340,7 @@ function RealReader({
   onCloseNotes,
   onSelectAnnotation,
   onDeleteAnnotationById,
+  notesPopupRef,
   quickSettingsOpen,
   quickSettingsImmediate,
   paperColor,
@@ -1411,16 +1428,7 @@ function RealReader({
             </Sheet>
           )}
 
-          {wideViewport ? (
-            notesOpen ? (
-              <AnnotationPanel
-                annotations={annotations ?? []}
-                onSelect={onSelectAnnotation}
-                onDelete={onDeleteAnnotationById}
-                onClose={onCloseNotes}
-              />
-            ) : null
-          ) : (
+          {wideViewport ? null : (
             <Sheet
               open={notesOpen}
               onOpenChange={(open) => {
@@ -1460,6 +1468,27 @@ function RealReader({
                   className="border-border bg-popover absolute inset-y-2 left-2 z-20 w-72 overflow-hidden rounded-lg border shadow-md"
                 >
                   {renderToc()}
+                </div>
+              ) : null}
+              {/* 宽窗笔记浮层：与目录同一形态，盖在正文上不占左栏；点外/Esc 由
+                  useTocPopupDismiss 收口，选中跳原文后关闭。 */}
+              {wideViewport && notesOpen ? (
+                <div
+                  ref={notesPopupRef}
+                  // 别让点击冒泡进边缘翻页捕获层。
+                  onClick={(event) => event.stopPropagation()}
+                  className="border-border bg-popover absolute inset-y-2 left-2 z-20 w-80 overflow-hidden rounded-lg border shadow-md"
+                >
+                  <AnnotationPanel
+                    variant="sheet"
+                    annotations={annotations ?? []}
+                    onSelect={(cfi) => {
+                      onSelectAnnotation(cfi);
+                      onCloseNotes();
+                    }}
+                    onDelete={onDeleteAnnotationById}
+                    onClose={onCloseNotes}
+                  />
                 </div>
               ) : null}
               {/* 正文渲染在 foliate 的 iframe 里，点击不会冒泡到父文档，
