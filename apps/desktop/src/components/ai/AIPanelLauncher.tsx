@@ -45,8 +45,8 @@ export function AIPanelLauncher() {
     <ChatPanel
       book={book}
       open={open}
-      // 书架是浏览场景：面板浮在内容上（覆盖式抽屉），主区宽度恒定，
-      // 开合与卸载都不触发书架网格重排。阅读页仍用并排推挤。
+      // 书架与阅读页同一形态：面板浮在内容上（覆盖式），主区宽度恒定，
+      // 开合与卸载都不触发主区重排。
       className="absolute inset-y-0 right-0 z-30 shadow-[-12px_0_28px_-18px_rgb(0_0_0_/_0.35)]"
       onExited={() => setMounted(false)}
       onClose={() => setOpen(false)}
