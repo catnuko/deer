@@ -1554,6 +1554,12 @@ function RealReader({
                       ? onCopyAnnotation
                       : undefined
                   }
+                  // 行 1 四个按钮齐：编辑态也把选区/摘录交给 AI 面板（问 Deer）。
+                  onAsk={
+                    annotationMenu.annotation.excerpt
+                      ? () => onAskSelection(annotationMenu.annotation.excerpt ?? "")
+                      : undefined
+                  }
                   onHighlight={onChangeAnnotationStyle}
                   onNote={onEditAnnotationNote}
                   onDelete={onDeleteAnnotation}
