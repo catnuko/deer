@@ -774,6 +774,8 @@ export function ChatPanel({
       aria-hidden={open ? undefined : true}
       className={cn(
         "bg-background border-border w-96 shrink-0 flex-col overflow-hidden border-l",
+        // <820px：固定宽度停靠列会挤没正文，退化为全屏覆盖层（脱离文档流盖住主区）。
+        "max-[819px]:fixed max-[819px]:inset-0 max-[819px]:z-50 max-[819px]:w-full max-[819px]:border-l-0",
         // 退场动画期间保持布局占位，播完才折叠；宽度始终不参与过渡。
         // overflow-hidden：入场/退场的内容侧移只在本盒内裁掉，不越出到滚动祖先，
         // 否则阅读页的 main 会因为它多出的 12px 闪出横向滚动条。
@@ -797,7 +799,7 @@ export function ChatPanel({
             {book.title}
           </p>
         </div>
-        <Badge variant="secondary" className="mt-1 shrink-0 text-[11px]">
+        <Badge variant="secondary" className="mt-1 shrink-0 text-[11px] max-[819px]:hidden">
           {tauri ? "acpx · Claude" : "未接后端（浏览器预览）"}
         </Badge>
         {onSummarizeChapter ? (

@@ -85,7 +85,7 @@ export function NotesPage() {
                     {note.source === "ai" ? (
                       <Badge
                         variant="secondary"
-                        className="absolute top-2 right-8 px-1.5 text-[10px]"
+                        className="absolute top-2 right-8 px-1.5 text-[10px] max-[819px]:right-12"
                       >
                         {AI_NOTE_LABEL}
                       </Badge>
@@ -94,7 +94,7 @@ export function NotesPage() {
                       variant="ghost"
                       size="icon"
                       aria-label={`删除《${group.bookTitle}》中的这条笔记`}
-                      className="absolute top-1.5 right-1 size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                      className="absolute top-1.5 right-1 size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-[819px]:top-0 max-[819px]:right-0 max-[819px]:size-10 max-[819px]:opacity-100"
                       onClick={() => removeAnnotation(note.id)}
                     >
                       <Trash2 className="size-3.5" />

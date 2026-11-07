@@ -1546,8 +1546,8 @@ function RealReader({
               ) : null}
               {/* 正文渲染在 foliate 的 iframe 里，点击不会冒泡到父文档，
                   所以边缘翻页靠这两个透明捕获层接住。 */}
-              <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
-              <div className="absolute inset-y-0 right-0 w-[15%]" aria-hidden="true" />
+              <div className="absolute inset-y-0 left-0 w-[15%] max-[819px]:w-[8%]" aria-hidden="true" />
+              <div className="absolute inset-y-0 right-0 w-[15%] max-[819px]:w-[8%]" aria-hidden="true" />
               <QuickSettingsPanel
                 open={quickSettingsOpen}
                 immediate={quickSettingsImmediate}
@@ -1668,7 +1668,7 @@ function RealReader({
             </div>
 
             <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
-              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
+              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums max-[819px]:hidden">
                 第 {currentIndex + 1} / {Math.max(tocEntries.length, 1)} 章
                 {phase.status === "ready" && phase.toc[currentIndex]
                   ? ` · ${phase.toc[currentIndex].title}`
@@ -1695,6 +1695,7 @@ function RealReader({
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="max-[819px]:size-11"
                     aria-label="上一页"
                     onClick={() => onPageTurn("prev")}
                   >
@@ -1703,6 +1704,7 @@ function RealReader({
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="max-[819px]:size-11"
                     aria-label="下一页"
                     onClick={() => onPageTurn("next")}
                   >
@@ -1981,7 +1983,7 @@ function DemoReader({
             </div>
 
             <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
-              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
+              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums max-[819px]:hidden">
                 第 {chapterIndex + 1} / {chapterCount} 章 · {chapter.title}
               </span>
               <div

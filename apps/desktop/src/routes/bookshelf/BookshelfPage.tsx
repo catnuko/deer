@@ -326,7 +326,7 @@ export function BookshelfPage() {
 
       <div className="flex min-h-0 flex-1 flex-col">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="border-border flex flex-wrap items-center gap-3 border-b px-6 py-3">
+          <div className="border-border flex flex-wrap items-center gap-3 border-b px-6 py-3 max-[819px]:px-3">
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -459,7 +459,7 @@ export function BookshelfPage() {
 
           {/* AI 面板改为覆盖式抽屉后本列宽度恒定，滚动条不会随开合出现/消失，
               之前为消重排加的 scrollbar-gutter 已无必要（会恒占 15px）。 */}
-          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24">
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24 max-[819px]:px-3">
             {isReady && continueReading ? (
               <div className="mb-5 max-w-xl">
                 <ContinueReadingCard
@@ -487,7 +487,7 @@ export function BookshelfPage() {
                 onImport={handleImport}
               />
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-4">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-4 max-[819px]:grid-cols-[repeat(auto-fill,minmax(140px,1fr))]">
                 {visibleBooks.map((book, index) => (
                   <div
                     key={book.id}
