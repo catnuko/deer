@@ -104,6 +104,9 @@ import {
 /** 宽窄窗断点（布局重排 v1）：目录/笔记面板 dock ↔ Sheet 切换共用。 */
 const WIDE_MEDIA_QUERY = "(min-width: 768px)";
 
+/** 触屏划选：selectionchange 防抖窗口，选区稳定这么久才弹菜单。 */
+const SELECTION_TOUCH_DEBOUNCE_MS = 400;
+
 /** foliate 的 paginator 实现 setStyles，但 Renderer 接口没有声明它。 */
 type StyleableRenderer = HTMLElement & {
   setStyles?: (styles: string) => void;
@@ -987,9 +990,32 @@ const copyAnnotationText = useCallback((text: string) => {
       };
       doc.addEventListener("pointerup", sync);
       doc.addEventListener("keyup", sync);
+      // 触屏划选（长按 / 拖选择手柄）期间 pointerup 在部分平台不触发或不
+      // 可靠，补 selectionchange 防抖一路：选区稳定 400ms 即弹菜单；选区
+      // 清空只取消挂起的防抖（收菜单仍靠 pointerup 即时路径）。桌面划选
+      // 两条路径并存，防抖晚到的 sync 读同一选区，行为不变。
+      let selectionDebounceTimer = 0;
+      const onSelectionChange = () => {
+        if (cancelled) return;
+        if (selectionDebounceTimer) {
+          window.clearTimeout(selectionDebounceTimer);
+          selectionDebounceTimer = 0;
+        }
+        const sel = doc.getSelection();
+        if (!sel || sel.isCollapsed) return;
+        selectionDebounceTimer = window.setTimeout(() => {
+          selectionDebounceTimer = 0;
+          sync();
+        }, SELECTION_TOUCH_DEBOUNCE_MS);
+      };
+      doc.addEventListener("selectionchange", onSelectionChange);
       docCleanups.push(() => {
         doc.removeEventListener("pointerup", sync);
         doc.removeEventListener("keyup", sync);
+        if (selectionDebounceTimer) {
+          window.clearTimeout(selectionDebounceTimer);
+        }
+        doc.removeEventListener("selectionchange", onSelectionChange);
       });
       // 脚注/尾注悬浮预览（仅 EPUB）：与划选菜单互不干扰——mousedown 收
       // 卡片在 foliate 链接跳转前发生，划选链路不经过悬浮状态。
@@ -1613,6 +1639,7 @@ function RealReader({
                   closing={notePeekClosing}
                   onPointerEnter={onCancelNoteScheduledClose}
                   onPointerLeave={onCloseNotePeek}
+                  onTapClose={onCloseNotePeek}
                 />
               ) : null}
               {annotationMenu ? (

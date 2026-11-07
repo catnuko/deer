@@ -112,8 +112,9 @@ describe("resolveNote", () => {
 });
 
 /** 在 happy-dom 里搭一个接线环境：happy-dom 的 iframe.contentDocument
- *  拿不到同步文档，用 DOMParser 文档 + 桩 defaultView.frameElement。 */
-function wireFixture(chHtml: string, host: Partial<NoteHoverHost>) {
+ *  拿不到同步文档，用 DOMParser 文档 + 桩 defaultView.frameElement。
+ *  touchQuery=true 时 defaultView.matchMedia 桩成触屏（hover:none+coarse）。 */
+function wireFixture(chHtml: string, host: Partial<NoteHoverHost>, touchQuery = false) {
   const doc = parseDoc(chHtml);
   const fakeFrame = {
     getBoundingClientRect: () =>
@@ -122,6 +123,9 @@ function wireFixture(chHtml: string, host: Partial<NoteHoverHost>) {
   const fakeView = {
     frameElement: fakeFrame,
     getComputedStyle: window.getComputedStyle.bind(window),
+    ...(touchQuery
+      ? { matchMedia: () => ({ matches: true }) as unknown as MediaQueryList }
+      : {}),
   };
   Object.defineProperty(doc, "defaultView", { value: fakeView });
   const fullHost: NoteHoverHost = {
@@ -235,5 +239,82 @@ describe("wireNoteHover", () => {
     ref.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
     await waitFor(NOTE_HOVER_DELAY_MS + 100);
     expect(onPeek).not.toHaveBeenCalled();
+  });
+});
+
+describe("wireNoteHover（触屏）", () => {
+  const touchDoc = (html: string, host: Partial<NoteHoverHost>) =>
+    wireFixture(html, host, true);
+
+  it("点引用立即弹卡并拦下后续 click（不跳转）", async () => {
+    const onPeek = vi.fn();
+    const { doc, handle } = touchDoc(
+      "<p><sup><a href='notes.xhtml#fn1' id='ref'>[1]</a></sup></p>",
+      { onPeek },
+    );
+    const bubbleClick = vi.fn();
+    doc.addEventListener("click", bubbleClick);
+    const ref = doc.body.querySelector("#ref") as HTMLAnchorElement;
+    ref.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    expect(bubbleClick).not.toHaveBeenCalled();
+    // 立即弹卡：不等 220ms 悬浮停顿。
+    await waitFor(50);
+    expect(onPeek).toHaveBeenCalledTimes(1);
+    expect(onPeek.mock.calls[0][0].href).toBe("notes.xhtml#fn1");
+    doc.removeEventListener("click", bubbleClick);
+    handle.dispose();
+  });
+
+  it("点非引用不拦截，冒泡 click 照常", () => {
+    const onPeek = vi.fn();
+    const { doc, handle } = touchDoc(
+      "<p><sup><a href='notes.xhtml#fn1' id='ref'>[1]</a></sup><a href='ch2.xhtml' id='plain'>下一章</a></p>",
+      { onPeek },
+    );
+    const bubbleClick = vi.fn();
+    doc.addEventListener("click", bubbleClick);
+    const plain = doc.body.querySelector("#plain") as HTMLAnchorElement;
+    plain.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    expect(bubbleClick).toHaveBeenCalledTimes(1);
+    expect(onPeek).not.toHaveBeenCalled();
+    doc.removeEventListener("click", bubbleClick);
+    handle.dispose();
+  });
+
+  it("触屏滚动收卡", async () => {
+    const onClose = vi.fn();
+    const { doc, handle } = touchDoc(
+      "<p><sup><a href='notes.xhtml#fn1' id='ref'>[1]</a></sup></p>",
+      { onClose },
+    );
+    const ref = doc.body.querySelector("#ref") as HTMLAnchorElement;
+    ref.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    doc.dispatchEvent(new Event("scroll"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    handle.dispose();
+  });
+
+  it("桌面（非触屏）不走点按拦截，scroll 也不收卡", async () => {
+    const onPeek = vi.fn();
+    const onClose = vi.fn();
+    const { doc, handle } = wireFixture(
+      "<p><sup><a href='notes.xhtml#fn1' id='ref'>[1]</a></sup></p>",
+      { onPeek, onClose },
+    );
+    const ref = doc.body.querySelector("#ref") as HTMLAnchorElement;
+    ref.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    doc.dispatchEvent(new Event("scroll"));
+    await waitFor(100);
+    expect(onPeek).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    handle.dispose();
   });
 });
