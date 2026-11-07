@@ -3,8 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { StickyNote, Trash2 } from "lucide-react";
 import { formatTime } from "@/components/reader/AnnotationPanel";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useAnnotationStore } from "@/store/annotationStore";
+import { AI_NOTE_LABEL, useAnnotationStore } from "@/store/annotationStore";
 import { useBookStore } from "@/store/bookStore";
 import { aggregateNotesOf, type NoteEntry } from "./notesList";
 
@@ -37,6 +38,8 @@ export function NotesPage() {
   );
 
   function openNote(note: NoteEntry) {
+    // AI 笔记没有 CFI，点击不跳原文。
+    if (!note.cfi) return;
     navigate(
       `/reader?book=${encodeURIComponent(note.bookId)}&cfi=${encodeURIComponent(note.cfi)}`,
     );
@@ -64,31 +67,29 @@ export function NotesPage() {
                     key={note.id}
                     className="bg-background hover:bg-sidebar-accent group relative rounded-md"
                   >
-                    <button
-                      type="button"
-                      aria-label={`跳到《${group.bookTitle}》中的这条笔记`}
-                      onClick={() => openNote(note)}
-                      className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="mt-0.5 h-4 w-1 shrink-0 rounded-full"
-                        style={{ backgroundColor: note.color }}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="text-foreground line-clamp-2 block text-[13px] leading-snug">
-                          {note.excerpt || note.note || "（无文本摘录）"}
-                        </span>
-                        {note.note && note.excerpt ? (
-                          <span className="text-muted-foreground mt-1 line-clamp-2 block text-xs leading-snug">
-                            {note.note}
-                          </span>
-                        ) : null}
-                        <span className="text-muted-foreground mt-1 block text-[11px] tabular-nums">
-                          {formatTime(note.createdAt)}
-                        </span>
-                      </span>
-                    </button>
+                    {note.cfi ? (
+                      <button
+                        type="button"
+                        aria-label={`跳到《${group.bookTitle}》中的这条笔记`}
+                        onClick={() => openNote(note)}
+                        className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left"
+                      >
+                        <NoteBody note={note} />
+                      </button>
+                    ) : (
+                      // AI 笔记没有 CFI，点击不跳原文，整条不可点。
+                      <div className="flex w-full items-start gap-2 px-2.5 py-2 text-left">
+                        <NoteBody note={note} />
+                      </div>
+                    )}
+                    {note.source === "ai" ? (
+                      <Badge
+                        variant="secondary"
+                        className="absolute top-2 right-8 px-1.5 text-[10px]"
+                      >
+                        {AI_NOTE_LABEL}
+                      </Badge>
+                    ) : null}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -106,6 +107,32 @@ export function NotesPage() {
         )}
       </div>
     </div>
+  );
+}
+
+/** 笔记条目的内容区：色条 + 摘录/笔记 + 时间，跳转与否由外层的按钮/裸 div 决定。 */
+function NoteBody({ note }: { note: NoteEntry }) {
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className="mt-0.5 h-4 w-1 shrink-0 rounded-full"
+        style={{ backgroundColor: note.color }}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="text-foreground line-clamp-2 block text-[13px] leading-snug">
+          {note.excerpt || note.note || "（无文本摘录）"}
+        </span>
+        {note.note && note.excerpt ? (
+          <span className="text-muted-foreground mt-1 line-clamp-2 block text-xs leading-snug">
+            {note.note}
+          </span>
+        ) : null}
+        <span className="text-muted-foreground mt-1 block text-[11px] tabular-nums">
+          {formatTime(note.createdAt)}
+        </span>
+      </span>
+    </>
   );
 }
 

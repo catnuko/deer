@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -7,9 +7,10 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAui,
+  useAuiState,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { ArrowUp, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
+import { ArrowUp, NotebookPen, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
@@ -17,11 +18,21 @@ import { acpxChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
 import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { GradientHeading } from "@/components/ui/gradient-heading";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import type { CurrentBook } from "@/lib/ai/currentBook";
 import { ChatBookCard } from "@/components/ai/ChatBookCard";
 import { useChatStore } from "@/store/chatStore";
+import { AI_NOTE_COLOR, useAnnotationStore } from "@/store/annotationStore";
 
 /** 从 composer 提交的消息里抽出纯文本。 */
 function extractText(message: { content: readonly unknown[] }): string {
@@ -58,6 +69,116 @@ function ReasoningPart({ text }: { text?: string }) {
       <summary className="cursor-pointer select-none">深度思考</summary>
       <p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{text}</p>
     </details>
+  );
+}
+
+/** 助手消息存笔记需要的面板内能力：回复在途状态与落库动作。 */
+const SaveNoteContext = createContext<{
+  replying: boolean;
+  saveNote: (assistantMessageId: string, note: string) => void;
+} | null>(null);
+
+/** 用户提问截前 120 字作为 AI 笔记的摘录（按码点，不切代理对）。 */
+function excerptOf(text: string, limit = 120): string {
+  return Array.from(text.trim()).slice(0, limit).join("");
+}
+
+function SaveNoteDialog({
+  open,
+  draft,
+  onDraftChange,
+  onOpenChange,
+  onSave,
+}: {
+  open: boolean;
+  draft: string;
+  onDraftChange: (draft: string) => void;
+  onOpenChange: (open: boolean) => void;
+  onSave: (note: string) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>存为笔记</DialogTitle>
+          <DialogDescription>
+            保存后会出现在这本书的笔记列表里，来源标记为 AI 对话。
+          </DialogDescription>
+        </DialogHeader>
+        <Textarea
+          aria-label="笔记内容"
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          rows={8}
+          className="max-h-64 overflow-y-auto text-[13px]"
+        />
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </Button>
+          <Button
+            size="sm"
+            disabled={!draft.trim()}
+            onClick={() => {
+              onSave(draft);
+              onOpenChange(false);
+            }}
+          >
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** 助手消息操作条上的「存为笔记」：弹小编辑框，确认后写入当前书的笔记列表。 */
+function SaveNoteButton() {
+  const ctx = useContext(SaveNoteContext);
+  const messageId = useAuiState((s) => s.message.id);
+  const content = useAuiState((s) => s.message.content);
+  const messageText = useMemo(
+    () =>
+      content
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .filter(Boolean)
+        .join("\n\n"),
+    [content],
+  );
+  const [open, setOpen] = useState(false);
+  // 草稿放在这一层：打开瞬间用点击处理器重置为回复全文，不需要 effect。
+  const [draft, setDraft] = useState("");
+  if (!messageText.trim()) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="存为笔记"
+        title="存为笔记"
+        disabled={!ctx || ctx.replying}
+        className="text-muted-foreground hover:bg-accent hover:text-accent-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-50"
+        onClick={() => {
+          setDraft(messageText);
+          setOpen(true);
+        }}
+      >
+        <NotebookPen className="size-3.5" />
+      </button>
+      <SaveNoteDialog
+        open={open}
+        draft={draft}
+        onDraftChange={setDraft}
+        onOpenChange={setOpen}
+        onSave={(note) => {
+          if (messageId) ctx?.saveNote(messageId, note);
+        }}
+      />
+    </>
   );
 }
 
@@ -124,6 +245,7 @@ function AssistantMessage() {
       <ActionBarPrimitive.Root className="mt-1 ml-1 flex items-center gap-0.5">
         <FeedbackButton direction="up" />
         <FeedbackButton direction="down" />
+        <SaveNoteButton />
       </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
   );
@@ -492,6 +614,35 @@ export function ChatPanel({
     if (thread) clearThread(thread.id);
   };
 
+  // 存 AI 笔记（需求：从对话总结出笔记）：note=回复全文，excerpt=用户提问
+  // 截前 120 字，无 CFI、source=ai。按 assistantMessageId 反查它前面的提问。
+  const saveNote = useCallback(
+    (assistantMessageId: string, note: string) => {
+      const trimmed = note.trim();
+      if (!trimmed) return;
+      const state = useChatStore.getState();
+      const threadId = state.activeThreadByBook[book.id];
+      if (!threadId) return;
+      const list = state.messages[threadId] ?? [];
+      const index = list.findIndex((m) => m.id === assistantMessageId);
+      const previous = index > 0 ? list[index - 1] : undefined;
+      const question =
+        previous?.role === "user" ? excerptOf(previous.content) : "";
+      useAnnotationStore.getState().add({
+        bookId: book.id,
+        color: AI_NOTE_COLOR,
+        ...(question ? { excerpt: question } : {}),
+        note: trimmed,
+        source: "ai",
+      });
+    },
+    [book.id],
+  );
+  const saveNoteContext = useMemo(
+    () => ({ replying, saveNote }),
+    [replying, saveNote],
+  );
+
   return (
     <aside
       aria-label="AI 伴读"
@@ -575,6 +726,7 @@ export function ChatPanel({
       </div>
 
       <AssistantRuntimeProvider runtime={runtime}>
+        <SaveNoteContext.Provider value={saveNoteContext}>
         {draft ? <ComposerPreset key={draft.id} draft={draft} /> : null}
         <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
           <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -590,6 +742,7 @@ export function ChatPanel({
           </ThreadPrimitive.Viewport>
           <Composer />
         </ThreadPrimitive.Root>
+        </SaveNoteContext.Provider>
       </AssistantRuntimeProvider>
       </div>
     </aside>

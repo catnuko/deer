@@ -115,4 +115,40 @@ describe("NotesPage", () => {
     expect(screen.getByText("还没有任何笔记。")).toBeInTheDocument();
     expect(screen.queryByText("《三体》")).not.toBeInTheDocument();
   });
+
+  it("AI 笔记带 AI 徽标、点击不跳原文，删除照常", async () => {
+    useBookStore.setState({ books: [book], shelves: [], ready: true, load: async () => {} });
+    useAnnotationStore.setState({
+      annotations: {
+        "book-1": [
+          {
+            id: "ai-1",
+            color: "#94A3B8",
+            excerpt: "这个章节讲了什么？",
+            note: "本章讲了宇宙社会学",
+            source: "ai",
+            createdAt: new Date("2026-11-01T09:00:00").getTime(),
+          },
+        ],
+      },
+      ready: true,
+      load: async () => {},
+    });
+    renderPage();
+
+    expect(screen.getByText("本章讲了宇宙社会学")).toBeInTheDocument();
+    expect(screen.getByText("AI")).toBeInTheDocument();
+    // 无 CFI：没有「跳原文」按钮，点击条目也不发生导航。
+    expect(
+      screen.queryByRole("button", { name: "跳到《三体》中的这条笔记" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByText("本章讲了宇宙社会学"));
+    expect(screen.queryByTestId("location")).not.toBeInTheDocument();
+
+    // 删除通路对 AI 笔记照常生效。
+    await userEvent.click(
+      screen.getByRole("button", { name: "删除《三体》中的这条笔记" }),
+    );
+    expect(screen.queryByText("本章讲了宇宙社会学")).not.toBeInTheDocument();
+  });
 });

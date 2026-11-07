@@ -18,6 +18,7 @@ const { isTauriRuntime, acpxChat, acpxEnvCheck } = await import(
 );
 const { ChatPanel } = await import("./ChatPanel");
 const { useChatStore } = await import("@/store/chatStore");
+const { useAnnotationStore } = await import("@/store/annotationStore");
 
 const BOOK: CurrentBook = { id: "book-1", title: "三体" };
 
@@ -73,6 +74,7 @@ afterEach(() => {
   cleanup();
   // zustand 是模块级单例，测试间必须还原，否则串状态。
   resetStore();
+  useAnnotationStore.setState({ annotations: {}, ready: true });
 });
 
 describe("ChatPanel", () => {
@@ -590,8 +592,7 @@ describe("ChatPanel", () => {
     );
   });
 
-  it("acpx 书架工具返回书单时渲染成书卡，点击打开对应书", async () => {
-    vi.mocked(isTauriRuntime).mockReturnValue(true);
+  it("acpx 书架工具返回书单时渲染成书卡，点击打开对应书", async () => {    vi.mocked(isTauriRuntime).mockReturnValue(true);
     // 模拟 Rust 侧从书架 MCP 工具结果抽出书单后推来的 books 事件。
     vi.mocked(acpxChat).mockImplementation(async (opts) => {
       opts.onBooks?.([
@@ -622,5 +623,65 @@ describe("ChatPanel", () => {
     const threadId = activeThread();
     const messages = useChatStore.getState().messages[threadId];
     expect(messages[1].books?.[0]?.id).toBe("b1");
+  });
+
+  it("助手回复可存为笔记：预填回复、可编辑，确认后写入当前书的笔记列表", async () => {
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    await sendMessage("这个章节讲了什么？");
+    await eventually(() =>
+      expect(screen.getByText(/粗看下来，全书围绕/)).toBeInTheDocument(),
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "存为笔记" }));
+
+    // 弹窗预填回复全文，可编辑。
+    const textarea = screen.getByLabelText("笔记内容");
+    expect(textarea).toHaveValue(
+      "（示例回复 · 未接模型）粗看下来，全书围绕「留下还是离开」这条线展开，反复用同一个场景的变化来标记时间。",
+    );
+    await user.clear(textarea);
+    await user.type(textarea, "改过的笔记内容");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    const annotations = useAnnotationStore.getState().annotations[BOOK.id] ?? [];
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0]).toMatchObject({
+      source: "ai",
+      note: "改过的笔记内容",
+      excerpt: "这个章节讲了什么？",
+    });
+    // AI 笔记没有 CFI。
+    expect(annotations[0]!.cfi).toBeUndefined();
+  });
+
+  it("空会话没有入口；回复在途时「存为笔记」出现但禁用", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    let resolveChat!: (v: { text: string; sessionId: string }) => void;
+    vi.mocked(acpxChat).mockImplementation(async (opts) => {
+      // 先到一部分正文，回复挂起不结束。
+      opts.onDelta?.("正在生成的一部分回复");
+      return new Promise((resolve) => {
+        resolveChat = resolve;
+      });
+    });
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+
+    // 空会话没有助手回复：没有入口。
+    expect(
+      screen.queryByRole("button", { name: "存为笔记" }),
+    ).not.toBeInTheDocument();
+
+    await sendMessage("在吗");
+
+    // 正文块到达即出现入口，但回复在途：禁用。
+    const button = await eventually(() =>
+      screen.getByRole("button", { name: "存为笔记" }),
+    );
+    expect(button).toBeDisabled();
+
+    resolveChat({ text: "正在生成的一部分回复", sessionId: "sess_note" });
+    await eventually(() => expect(button).toBeEnabled());
   });
 });

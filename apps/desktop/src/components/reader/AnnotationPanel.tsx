@@ -1,8 +1,9 @@
 import { StickyNote, Trash2, X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import type { StoredAnnotation } from "@/store/annotationStore";
+import { AI_NOTE_LABEL, type StoredAnnotation } from "@/store/annotationStore";
 
 type AnnotationPanelProps = {
   annotations: StoredAnnotation[];
@@ -17,6 +18,32 @@ export function formatTime(createdAt: number): string {
   const date = new Date(createdAt);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** 笔记条目的内容区：色条 + 摘录/笔记 + 时间，跳转与否由外层的按钮/裸 div 决定。 */
+function AnnotationBody({ annotation }: { annotation: StoredAnnotation }) {
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className="mt-0.5 h-4 w-1 shrink-0 rounded-full"
+        style={{ backgroundColor: annotation.color }}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="text-foreground line-clamp-2 block text-[13px] leading-snug">
+          {annotation.excerpt || annotation.note || "（无文本摘录）"}
+        </span>
+        {annotation.note && annotation.excerpt ? (
+          <span className="text-muted-foreground mt-1 line-clamp-2 block text-xs leading-snug">
+            {annotation.note}
+          </span>
+        ) : null}
+        <span className="text-muted-foreground mt-1 block text-[11px] tabular-nums">
+          {formatTime(annotation.createdAt)}
+        </span>
+      </span>
+    </>
+  );
 }
 
 /** 笔记管理面板（M3）：当前书的全部高亮/笔记，点击跳原文，列表内删除。 */
@@ -60,30 +87,28 @@ export function AnnotationPanel({
                 key={annotation.id}
                 className="bg-background hover:bg-sidebar-accent group relative rounded-md"
               >
-                <button
-                  type="button"
-                  onClick={() => onSelect(annotation.cfi)}
-                  className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="mt-0.5 h-4 w-1 shrink-0 rounded-full"
-                    style={{ backgroundColor: annotation.color }}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="text-foreground line-clamp-2 block text-[13px] leading-snug">
-                      {annotation.excerpt || annotation.note || "（无文本摘录）"}
-                    </span>
-                    {annotation.note && annotation.excerpt ? (
-                      <span className="text-muted-foreground mt-1 line-clamp-2 block text-xs leading-snug">
-                        {annotation.note}
-                      </span>
-                    ) : null}
-                    <span className="text-muted-foreground mt-1 block text-[11px] tabular-nums">
-                      {formatTime(annotation.createdAt)}
-                    </span>
-                  </span>
-                </button>
+                {annotation.cfi ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelect(annotation.cfi!)}
+                    className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left"
+                  >
+                    <AnnotationBody annotation={annotation} />
+                  </button>
+                ) : (
+                  // AI 笔记没有 CFI，点击不跳原文，整条不可点。
+                  <div className="flex w-full items-start gap-2 px-2.5 py-2 text-left">
+                    <AnnotationBody annotation={annotation} />
+                  </div>
+                )}
+                {annotation.source === "ai" ? (
+                  <Badge
+                    variant="secondary"
+                    className="absolute top-2 right-8 px-1.5 text-[10px]"
+                  >
+                    {AI_NOTE_LABEL}
+                  </Badge>
+                ) : null}
                 <Button
                   variant="ghost"
                   size="icon"

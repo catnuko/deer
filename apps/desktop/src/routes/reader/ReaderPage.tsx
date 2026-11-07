@@ -495,6 +495,8 @@ const copyAnnotationText = useCallback((text: string) => {
         .getState()
         .annotations[bookKey]?.find((a) => a.id === id);
       if (!annotation) return;
+      // AI 笔记没有 CFI，不参与 foliate 高亮。
+      if (!annotation.cfi) return;
       useAnnotationStore.getState().remove(id);
       void viewRef.current
         ?.deleteAnnotation({ value: annotation.cfi })
@@ -573,7 +575,7 @@ const copyAnnotationText = useCallback((text: string) => {
   const updateAnnotationMenu = useCallback(
     (style: AnnotationStyle, color: string) => {
       const annotation = annotationMenu?.annotation;
-      if (!annotation || !bookKey) return;
+      if (!annotation || !bookKey || !annotation.cfi) return;
       useAnnotationStore.getState().setColor(annotation.id, color);
       useAnnotationStore.getState().setStyle(annotation.id, style);
       void viewRef.current
@@ -848,15 +850,18 @@ const copyAnnotationText = useCallback((text: string) => {
       const view = viewRef.current;
       if (!view) return;
       for (const a of useAnnotationStore.getState().listForBook(shelfBook.id)) {
+        // AI 笔记没有 CFI，画不到 foliate 上。
+        if (!a.cfi) continue;
+        const cfi = a.cfi;
         void view
           .addAnnotation({
-            value: a.cfi,
+            value: cfi,
             color: a.color,
             style: a.style,
             note: a.note,
           })
           .then(() => {
-            drawnAnnotationCfisRef.current.add(a.cfi);
+            drawnAnnotationCfisRef.current.add(cfi);
           })
           .catch(() => undefined);
       }
