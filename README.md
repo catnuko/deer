@@ -47,7 +47,31 @@ Deer doesn't read for you. It helps you read better, think further, and enjoy th
 - `acpx@0.21.1` for AI features: `npm install -g acpx@0.21.1`
 - At least one engine CLI of your choice (the Settings → AI list shows install status for each)
 
-## Getting started
+## Screenshots
+
+| | |
+|---|---|
+| ![Bookshelf](docs/screenshots/bookshelf.png) | ![Reader](docs/screenshots/reader.png) |
+| *Bookshelf with continue-reading* | *Reader with footnote links* |
+
+![AI companion](docs/screenshots/ai-panel.png)
+*The AI companion docked beside the page*
+
+## Installation
+
+Download the latest disk image from [Releases](https://github.com/catnuko/deer/releases) — the asset is named like `Deer_0.2.0_aarch64.dmg`:
+
+1. Open the `.dmg` and drag **Deer** into `Applications`.
+2. First launch: because the build is **unsigned** (no Apple Developer certificate yet), macOS Gatekeeper blocks apps it can't verify. Right-click **Deer.app → Open**, then confirm; or clear the quarantine flag:
+   ```bash
+   xattr -cr /Applications/Deer.app
+   ```
+
+- **Platform:** Apple Silicon (aarch64) only
+- **macOS:** 11 (Big Sur) or later
+- Books, notes and settings stay on your machine; AI features additionally need Node 22.13+, acpx and one engine CLI — see [Requirements](#requirements)
+
+## Getting started (build from source)
 
 ```bash
 pnpm install

@@ -47,7 +47,31 @@ Deer 不替你读书；它帮你读得更好、想得更远，也享受这段旅
 - AI 功能需要 `acpx@0.21.1`：`npm install -g acpx@0.21.1`
 - 至少安装一个你想用的引擎 CLI（设置 → AI 伴读 会逐行显示安装状态）
 
-## 快速开始
+## 截图
+
+| | |
+|---|---|
+| ![书架](docs/screenshots/bookshelf.png) | ![阅读](docs/screenshots/reader.png) |
+| *书架与继续阅读* | *阅读页与脚注链接* |
+
+![AI 伴读](docs/screenshots/ai-panel.png)
+*停靠在书页旁边的 AI 伴读面板*
+
+## 安装
+
+从 [Releases](https://github.com/catnuko/deer/releases) 下载最新的镜像文件，资产名形如 `Deer_0.2.0_aarch64.dmg`：
+
+1. 打开 `.dmg`，把 **Deer** 拖进「应用程序」。
+2. 首次启动：构建目前**未签名**（还没有 Apple 开发者证书），macOS Gatekeeper 会拦下无法验证的应用。右键 **Deer.app → 打开**并确认；或直接清除隔离标记：
+   ```bash
+   xattr -cr /Applications/Deer.app
+   ```
+
+- **平台：** 仅 Apple Silicon（aarch64）
+- **系统：** macOS 11（Big Sur）及以上
+- 书籍、笔记和设置都保存在本机；AI 功能另外需要 Node 22.13+、acpx 和一个引擎 CLI，见[环境要求](#环境要求)
+
+## 快速开始（从源码构建）
 
 ```bash
 pnpm install
