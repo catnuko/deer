@@ -17,7 +17,10 @@ import type { Book, Shelf } from "@/lib/types";
 type BookCardProps = {
   book: Book;
   shelves: Shelf[];
+  /** 点卡片：打开整页详情。 */
   onOpen(book: Book): void;
+  /** 菜单里的「阅读」：直达阅读页；缺省跟随 onOpen。 */
+  onRead?(book: Book): void;
   onToggleShelf(book: Book, shelf: Shelf): void;
   onDelete(book: Book): void;
   actionsDisabled?: boolean;
@@ -27,6 +30,7 @@ export function BookCard({
   book,
   shelves,
   onOpen,
+  onRead,
   onToggleShelf,
   onDelete,
   actionsDisabled = false,
@@ -51,7 +55,7 @@ export function BookCard({
         type="button"
         onClick={() => onOpen(book)}
         className="focus-visible:ring-ring relative block aspect-[2/3] w-full overflow-hidden rounded-[16px] focus-visible:ring-2 focus-visible:outline-none"
-        aria-label={`阅读《${book.title}》`}
+        aria-label={`打开《${book.title}》详情`}
       >
         {coverUrl ? (
           <img
@@ -103,7 +107,7 @@ export function BookCard({
             <MoreHorizontal />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem onClick={() => onOpen(book)}>
+            <DropdownMenuItem onClick={() => (onRead ?? onOpen)(book)}>
               阅读
             </DropdownMenuItem>
             <DropdownMenuSeparator />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -38,16 +38,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TextureButton } from "@/components/ui/texture-button";
 import { PREVIEW_BOOKS, PREVIEW_SHELVES } from "@/lib/preview";
 import { isTauri } from "@/lib/platform";
+import { useMediaQuery } from "@/lib/useMediaQuery";
+import { cn } from "@/lib/utils";
 import type { Book, Shelf } from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { useAIPanelStore } from "@/store/aiPanelStore";
 import { useAppSettings } from "@/store/appSettings";
 import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 import { BookCard } from "./BookCard";
+import { BookDetailView } from "./BookDetailView";
 import { ContinueReadingCard } from "./ContinueReadingCard";
 import { continueReadingBookOf } from "./continueReading";
 import { sortBooks } from "./sortBooks";
@@ -88,6 +92,26 @@ export function BookshelfPage() {
   const [shelfForm, setShelfForm] = useState<ShelfForm | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // 整页详情（设计稿 v2）：覆盖在书架上，右滑进 / 左滑出；<820px 退化为底部全屏 sheet。
+  const wide = useMediaQuery("(min-width: 820px)");
+  const [detailBook, setDetailBook] = useState<Book | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailTriggerRef = useRef<HTMLElement | null>(null);
+
+  const openDetail = useCallback((book: Book) => {
+    // 记下触发元素，返回时把焦点还给它。
+    detailTriggerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setDetailBook(book);
+    requestAnimationFrame(() => setDetailOpen(true));
+  }, []);
+
+  const closeDetail = useCallback(() => {
+    setDetailOpen(false);
+    detailTriggerRef.current?.focus();
+    detailTriggerRef.current = null;
+  }, []);
 
   useEffect(() => {
     void load();
@@ -195,6 +219,11 @@ export function BookshelfPage() {
     setBusy(true);
     try {
       await removeBook(bookToDelete.id);
+      if (detailBook?.id === bookToDelete.id) {
+        setDetailBook(null);
+        setDetailOpen(false);
+        detailTriggerRef.current = null;
+      }
       setBookToDelete(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
@@ -233,7 +262,13 @@ export function BookshelfPage() {
   const errorBanner = actionError ?? storeError;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col transition-[opacity,transform] duration-base ease-exit",
+          detailOpen && wide && "pointer-events-none -translate-x-4 opacity-0",
+        )}
+      >
       <PageHeader
         title="书架"
         actions={
@@ -463,7 +498,8 @@ export function BookshelfPage() {
                     <BookCard
                       book={book}
                       shelves={shelves}
-                      onOpen={(target) =>
+                      onOpen={openDetail}
+                      onRead={(target) =>
                         navigate(`/reader?book=${encodeURIComponent(target.id)}`)
                       }
                       onToggleShelf={handleToggleShelf}
@@ -552,6 +588,63 @@ export function BookshelfPage() {
           }}
           onSubmit={handleSubmitShelf}
         />
+      )}
+      </div>
+
+      {detailBook && wide && (
+        <div
+          aria-hidden={!detailOpen}
+          className={cn(
+            "bg-background absolute inset-0 z-30 flex flex-col transition-[opacity,transform] duration-[220ms] ease-enter",
+            detailOpen
+              ? "translate-x-0 opacity-100"
+              : "pointer-events-none translate-x-6 opacity-0",
+          )}
+        >
+          <BookDetailView
+            book={detailBook}
+            variant="page"
+            onBack={closeDetail}
+            onContinueRead={() =>
+              navigate(`/reader?book=${encodeURIComponent(detailBook.id)}`)
+            }
+            onLocate={(cfi) =>
+              navigate(
+                `/reader?book=${encodeURIComponent(detailBook.id)}&cfi=${encodeURIComponent(cfi)}`,
+              )
+            }
+            onRemove={() => setBookToDelete(detailBook)}
+          />
+        </div>
+      )}
+
+      {detailBook && !wide && (
+        <Sheet
+          open={detailOpen}
+          onOpenChange={(next) => {
+            if (!next) closeDetail();
+          }}
+        >
+          <SheetContent
+            side="bottom"
+            className="flex h-full flex-col gap-0 p-0"
+          >
+            <BookDetailView
+              book={detailBook}
+              variant="sheet"
+              onBack={closeDetail}
+              onContinueRead={() =>
+                navigate(`/reader?book=${encodeURIComponent(detailBook.id)}`)
+              }
+              onLocate={(cfi) =>
+                navigate(
+                  `/reader?book=${encodeURIComponent(detailBook.id)}&cfi=${encodeURIComponent(cfi)}`,
+                )
+              }
+              onRemove={() => setBookToDelete(detailBook)}
+            />
+          </SheetContent>
+        </Sheet>
       )}
     </div>
   );
