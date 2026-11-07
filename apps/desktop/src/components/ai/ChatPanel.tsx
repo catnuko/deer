@@ -14,6 +14,11 @@ import { ArrowUp, NotebookPen, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from 
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
+import {
+  buildBookSummaryPrompt,
+  buildPageSummaryPrompt,
+} from "@/lib/ai/bookSummary";
+import { buildChapterSummaryPrompt } from "@/lib/ai/chapterSummary";
 import { acpxChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
 import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
 import { cn } from "@/lib/utils";
@@ -265,9 +270,90 @@ function EmptyState({ book }: { book: CurrentBook }) {
   );
 }
 
-function Composer() {
+/** 快捷指令：点击直接发送的问题按钮（输入区上方一排 chip）。 */
+export type QuickCommand = {
+  /** 返回要随问题一起发送的正文；null/缺省表示拿不到正文，只发问题本身。 */
+  getText?: () => Promise<string | null>;
+  /** false 时按钮置灰并显示 unavailableReason（如图片书无可读正文）。 */
+  available?: boolean;
+  unavailableReason?: string;
+};
+
+export type QuickCommands = {
+  chapter?: QuickCommand;
+  book?: QuickCommand;
+  page?: QuickCommand;
+};
+
+const QUICK_COMMAND_LABELS: Record<keyof QuickCommands, string> = {
+  chapter: "这个章节讲了什么？",
+  book: "这本书说了什么？",
+  page: "当前页讲了什么？",
+};
+
+const QUICK_COMMAND_ORDER: (keyof QuickCommands)[] = [
+  "chapter",
+  "book",
+  "page",
+];
+
+function QuickCommandsBar({
+  commands,
+  disabled,
+  onSelect,
+}: {
+  commands: QuickCommands;
+  disabled: boolean;
+  onSelect: (kind: keyof QuickCommands) => void;
+}) {
+  const items = QUICK_COMMAND_ORDER.filter((kind) => commands[kind]);
+  if (items.length === 0) return null;
+
+  return (
+    <div
+      data-testid="quick-commands"
+      role="toolbar"
+      aria-label="快捷指令"
+      className="mb-2 flex gap-1.5 overflow-x-auto"
+    >
+      {items.map((kind) => {
+        const command = commands[kind]!;
+        const unavailable = command.available === false;
+        return (
+          <button
+            key={kind}
+            type="button"
+            disabled={disabled || unavailable}
+            title={unavailable ? (command.unavailableReason ?? "该格式不支持") : undefined}
+            className="bg-secondary text-secondary-foreground hover:bg-secondary/80 shrink-0 cursor-pointer rounded-full px-2.5 py-1 text-xs transition-colors disabled:pointer-events-none disabled:opacity-50"
+            onClick={() => onSelect(kind)}
+          >
+            {QUICK_COMMAND_LABELS[kind]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Composer({
+  quickCommands,
+  onQuickSend,
+  quickSendDisabled,
+}: {
+  quickCommands?: QuickCommands;
+  onQuickSend: (kind: keyof QuickCommands) => void;
+  quickSendDisabled: boolean;
+}) {
   return (
     <ComposerPrimitive.Root className="border-border bg-background border-t p-3">
+      {quickCommands ? (
+        <QuickCommandsBar
+          commands={quickCommands}
+          disabled={quickSendDisabled}
+          onSelect={onQuickSend}
+        />
+      ) : null}
       <div className="border-input bg-card focus-within:border-ring/60 flex items-end gap-2 rounded-xl border p-2 transition-colors">
         <ComposerPrimitive.Input
           rows={1}
@@ -321,6 +407,7 @@ export function ChatPanel({
   readingContext,
   draft,
   onSummarizeChapter,
+  quickCommands,
   ref,
 }: {
   book: CurrentBook;
@@ -336,6 +423,8 @@ export function ChatPanel({
   draft?: ChatPanelDraft | null;
   /** 「总结本章」显式动作（面板内快捷入口）；不提供则不显示。打开面板本身不发消息。 */
   onSummarizeChapter?: () => void;
+  /** 输入区上方的快捷指令 chip（点击直接发送）；不提供则不显示。 */
+  quickCommands?: QuickCommands;
   ref?: React.Ref<ChatPanelHandle>;
 }) {
   const ready = useChatStore((s) => s.ready);
@@ -557,6 +646,42 @@ export function ChatPanel({
   );
   useImperativeHandle(ref, () => ({ send }), [send]);
 
+  // 快捷指令：取文本期间整条禁点（pendingCommand），发送后由 replying 接管。
+  const [pendingCommand, setPendingCommand] = useState<keyof QuickCommands | null>(
+    null,
+  );
+  const quickSend = useCallback(
+    async (kind: keyof QuickCommands) => {
+      const command = quickCommands?.[kind];
+      if (!command || command.available === false) return;
+      if (replyingRef.current || pendingCommand !== null) return;
+      const question = QUICK_COMMAND_LABELS[kind];
+      setPendingCommand(kind);
+      try {
+        const text = command.getText ? await command.getText() : null;
+        let raw = question;
+        if (text) {
+          if (kind === "chapter") {
+            raw = buildChapterSummaryPrompt(text).prompt;
+          } else if (kind === "book") {
+            raw = buildBookSummaryPrompt(text).prompt;
+          } else {
+            raw = buildPageSummaryPrompt(text).prompt;
+          }
+        }
+        // 拿不到正文时只发问题本身：N1 上下文仍会带上书名/章节，
+        // 桌面端 AI 还能借助书架 MCP 工具作答。
+        await sendUserMessage(
+          buildPrompt(raw, ctxRef.current ?? { bookTitle: book.title }),
+          question,
+        );
+      } finally {
+        setPendingCommand(null);
+      }
+    },
+    [book.title, pendingCommand, quickCommands, sendUserMessage],
+  );
+
   const runtime = useExternalStoreRuntime<ChatMessage>({
     messages,
     isRunning: replying,
@@ -740,7 +865,11 @@ export function ChatPanel({
               <p className="text-muted-foreground mb-3 ml-1 text-xs">正在输入…</p>
             )}
           </ThreadPrimitive.Viewport>
-          <Composer />
+          <Composer
+            quickCommands={quickCommands}
+            onQuickSend={(kind) => void quickSend(kind)}
+            quickSendDisabled={replying || pendingCommand !== null}
+          />
         </ThreadPrimitive.Root>
         </SaveNoteContext.Provider>
       </AssistantRuntimeProvider>

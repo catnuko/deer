@@ -19,6 +19,9 @@ const { isTauriRuntime, acpxChat, acpxEnvCheck } = await import(
 const { ChatPanel } = await import("./ChatPanel");
 const { useChatStore } = await import("@/store/chatStore");
 const { useAnnotationStore } = await import("@/store/annotationStore");
+const { buildPrompt } = await import("@/lib/ai/readingContext");
+const { buildChapterSummaryPrompt } = await import("@/lib/ai/chapterSummary");
+const { buildBookSummaryPrompt } = await import("@/lib/ai/bookSummary");
 
 const BOOK: CurrentBook = { id: "book-1", title: "三体" };
 
@@ -683,5 +686,153 @@ describe("ChatPanel", () => {
 
     resolveChat({ text: "正在生成的一部分回复", sessionId: "sess_note" });
     await eventually(() => expect(button).toBeEnabled());
+  });
+
+  it("不传 quickCommands 时不显示快捷指令条", () => {
+    render(<ChatPanel book={BOOK} onClose={() => {}} />);
+    expect(screen.queryByTestId("quick-commands")).not.toBeInTheDocument();
+  });
+
+  it("快捷指令条按宿主给的命令集合渲染：阅读页三枚、书架一枚", () => {
+    render(
+      <ChatPanel
+        book={BOOK}
+        onClose={() => {}}
+        quickCommands={{ chapter: { getText: async () => "x" }, book: {}, page: { getText: async () => "y" } }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "这个章节讲了什么？" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "这本书说了什么？" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "当前页讲了什么？" })).toBeInTheDocument();
+
+    // 书架宿主：只给 book 命令。
+    cleanup();
+    render(
+      <ChatPanel book={BOOK} onClose={() => {}} quickCommands={{ book: {} }} />,
+    );
+    expect(screen.getByRole("button", { name: "这本书说了什么？" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "这个章节讲了什么？" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "当前页讲了什么？" })).not.toBeInTheDocument();
+  });
+
+  it("点章节快捷指令：直接发送，prompt 复用章节总结通路并带 N1 上下文", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(acpxChat).mockResolvedValue({
+      text: "本章总结了……",
+      sessionId: "sess_quick",
+    });
+    render(
+      <ChatPanel
+        book={BOOK}
+        onClose={() => {}}
+        readingContext={{ bookTitle: "三体", chapterTitle: "疯狂年代", progress: 0.4 }}
+        quickCommands={{
+          chapter: { getText: async () => "第一章正文内容" },
+        }}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "这个章节讲了什么？" }),
+    );
+
+    await eventually(() => expect(acpxChat).toHaveBeenCalledTimes(1));
+    const expected = buildPrompt(
+      buildChapterSummaryPrompt("第一章正文内容").prompt,
+      { bookTitle: "三体", chapterTitle: "疯狂年代", progress: 0.4 },
+    );
+    expect(vi.mocked(acpxChat).mock.calls[0][0].prompt).toBe(expected);
+    // 气泡里显示按钮文案，不是完整 prompt（chip 与气泡各一份）。
+    expect(screen.getAllByText("这个章节讲了什么？")).toHaveLength(2);
+  });
+
+  it("点全书快捷指令：超 30k 截断并注明依据范围", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(acpxChat).mockResolvedValue({
+      text: "全书总结了……",
+      sessionId: "sess_book",
+    });
+    render(
+      <ChatPanel
+        book={BOOK}
+        onClose={() => {}}
+        quickCommands={{ book: { getText: async () => "丙".repeat(30_500) } }}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "这本书说了什么？" }),
+    );
+
+    await eventually(() => expect(acpxChat).toHaveBeenCalledTimes(1));
+    const expected = buildPrompt(buildBookSummaryPrompt("丙".repeat(30_500)).prompt, {
+      bookTitle: "三体",
+    });
+    expect(vi.mocked(acpxChat).mock.calls[0][0].prompt).toBe(expected);
+    expect(vi.mocked(acpxChat).mock.calls[0][0].prompt).toContain(
+      "全书过长，总结基于前 30000 字符",
+    );
+  });
+
+  it("拿不到正文时只发问题本身（N1 上下文仍带上书名）", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(acpxChat).mockResolvedValue({
+      text: "你好",
+      sessionId: "sess_plain",
+    });
+    render(
+      <ChatPanel
+        book={BOOK}
+        onClose={() => {}}
+        quickCommands={{ book: { getText: async () => null } }}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "这本书说了什么？" }),
+    );
+
+    await eventually(() => expect(acpxChat).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(acpxChat).mock.calls[0][0].prompt).toBe(
+      buildPrompt("这本书说了什么？", { bookTitle: "三体" }),
+    );
+  });
+
+  it("格式不支持时按钮置灰并带说明；回复在途时整条禁点", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    let resolveChat!: (v: { text: string; sessionId: string }) => void;
+    vi.mocked(acpxChat).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveChat = resolve;
+        }),
+    );
+    render(
+      <ChatPanel
+        book={BOOK}
+        onClose={() => {}}
+        quickCommands={{
+          chapter: {
+            getText: async () => "x",
+            available: false,
+            unavailableReason: "该格式不支持",
+          },
+          book: { getText: async () => "y" },
+        }}
+      />,
+    );
+
+    const chapterChip = screen.getByRole("button", { name: "这个章节讲了什么？" });
+    expect(chapterChip).toBeDisabled();
+    expect(chapterChip).toHaveAttribute("title", "该格式不支持");
+
+    // 点击后回复在途：可用的一枚也被禁，期间无法并发发送。
+    const bookChip = screen.getByRole("button", { name: "这本书说了什么？" });
+    await userEvent.click(bookChip);
+    await eventually(() => expect(bookChip).toBeDisabled());
+    expect(acpxChat).toHaveBeenCalledTimes(1);
+
+    resolveChat({ text: "回复", sessionId: "sess_dis" });
+    await eventually(() => expect(bookChip).toBeEnabled());
   });
 });

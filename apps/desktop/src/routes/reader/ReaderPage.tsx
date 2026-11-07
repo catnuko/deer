@@ -10,7 +10,7 @@ import type {
   View as FoliateView,
 } from "@/vendor/foliate-js/view.js";
 import { Overlayer } from "@/vendor/foliate-js/overlayer.js";
-import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle } from "@/components/ai/ChatPanel";
+import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle, type QuickCommands } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { AnnotationPanel } from "@/components/reader/AnnotationPanel";
 import { ConceptMapPanel } from "@/components/reader/ConceptMapPanel";
@@ -30,7 +30,12 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
   buildChapterSummaryPrompt,
   extractSectionText,
+  truncateChapterText,
 } from "@/lib/ai/chapterSummary";
+import {
+  extractBookTextFromView,
+  PAGE_SUMMARY_CHAR_LIMIT,
+} from "@/lib/ai/bookSummary";
 import { buildPrompt } from "@/lib/ai/readingContext";
 import {
   formatSelectionDraft,
@@ -308,6 +313,8 @@ export function ReaderPage() {
   // 章节总结用：relocate 时记录当前 spine section（TOC 的章可能跨多个 section，
   // v1 先总结当前 section，跨 section 章只总结当前一小节）。
   const currentSectionRef = useRef(0);
+  // relocate 是否上报了可见区 Range：页级快捷指令（当前页讲了什么）的可用性。
+  const [pageTextAvailable, setPageTextAvailable] = useState(false);
   // 已画到 foliate overlayer 上的 CFI：设置页「清空笔记」后按差集移除，
   // 让当前打开的书也不用刷新就消失。
   const drawnAnnotationCfisRef = useRef<Set<string>>(new Set());
@@ -341,6 +348,42 @@ export function ReaderPage() {
     viewRef.current?.deselect();
     setChatOpen(true);
   }, []);
+
+  // 快捷指令（B）：章节/全书走 foliate 抽文本，当前页用 relocate 上报的
+  // 可见区 Range。图片书（CBZ/PDF）没有可读正文：章节与全书置灰；
+  // 可见区暂时拿不到（固定布局未就绪等）时页级置灰。
+  const textCapable =
+    !shelfBook || (shelfBook.format !== "cbz" && shelfBook.format !== "pdf");
+  const quickCommands: QuickCommands = {
+    chapter: {
+      getText: readCurrentSectionText,
+      ...(textCapable
+        ? {}
+        : { available: false, unavailableReason: "该格式不支持" }),
+    },
+    book: {
+      getText: async () => {
+        const result = await extractBookTextFromView(viewRef.current);
+        return result?.text ?? null;
+      },
+      ...(textCapable
+        ? {}
+        : { available: false, unavailableReason: "该格式不支持" }),
+    },
+    ...(pageTextAvailable
+      ? {
+          page: {
+            getText: async () => {
+              const range = viewRef.current?.lastLocation?.range;
+              return range
+                ? truncateChapterText(range.toString(), PAGE_SUMMARY_CHAR_LIMIT)
+                    .text
+                : null;
+            },
+          },
+        }
+      : {}),
+  };
 
   // 复制走系统剪贴板；Tauri webview 是安全上下文，navigator.clipboard 可用。
   const copySelection = useCallback((text: string) => {
@@ -760,6 +803,7 @@ const copyAnnotationText = useCallback((text: string) => {
         }
       }
       currentSectionRef.current = section.current;
+      setPageTextAvailable(Boolean(detail.range));
       const fraction = clampProgress(detail.fraction as number);
       setScrollProgress(fraction);
       lastPositionRef.current = { progress: fraction, cfi: detail.cfi ?? null };
@@ -1222,6 +1266,7 @@ const copyAnnotationText = useCallback((text: string) => {
         onToggleConceptMap={toggleConceptMap}
         onCloseConceptMap={closeConceptMap}
         getChapterText={readCurrentSectionText}
+        quickCommands={quickCommands}
         onClosePanel={() => setChatOpen(false)}
       />
     );
@@ -1318,6 +1363,7 @@ type RealReaderProps = {
   onToggleConceptMap: () => void;
   onCloseConceptMap: () => void;
   getChapterText: () => Promise<string | null>;
+  quickCommands: QuickCommands;
   onClosePanel: () => void;
 };
 
@@ -1379,6 +1425,7 @@ function RealReader({
   onToggleConceptMap,
   onCloseConceptMap,
   getChapterText,
+  quickCommands,
   onClosePanel,
 }: RealReaderProps) {
   const tocEntries: ReaderTocEntry[] =
@@ -1683,6 +1730,7 @@ function RealReader({
         onClose={onClosePanel}
         open={chatOpen}
         onSummarizeChapter={onSummarizeChapter}
+        quickCommands={quickCommands}
         // 与书架页统一为嵌入式停靠：占主区右侧宽度推挤正文，常驻不因点外收起。
       />
     </div>
@@ -1754,6 +1802,16 @@ function DemoReader({
     );
     panelRef.current?.send(prompt, "总结本章");
     onOpenPanel();
+  };
+
+  // 快捷指令（B）：演示书没有 foliate view，章节/全书直接拼段落；
+  // 滚动流没有「当前页」概念，不提供页级指令。
+  const quickCommands: QuickCommands = {
+    chapter: { getText: async () => chapter.paragraphs.join("\n\n") },
+    book: {
+      getText: async () =>
+        book.chapters.map((c) => c.paragraphs.join("\n\n")).join("\n\n"),
+    },
   };
 
   // 换章回到开头：新正文从头读，进度条归零（状态在切换时同步重置，避免 effect 里 setState）。
@@ -1960,6 +2018,7 @@ function DemoReader({
         onClose={onClosePanel}
         open={chatOpen}
         onSummarizeChapter={summarizeChapter}
+        quickCommands={quickCommands}
         // 与书架页统一为嵌入式停靠：占主区右侧宽度推挤正文，常驻不因点外收起。
       />
     </div>
