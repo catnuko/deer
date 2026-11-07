@@ -628,7 +628,7 @@ describe("ChatPanel", () => {
     expect(messages[1].books?.[0]?.id).toBe("b1");
   });
 
-  it("助手回复可存为笔记：预填回复、可编辑，确认后写入当前书的笔记列表", async () => {
+  it("助手回复可总结为笔记：预填回复、可编辑，确认后写入当前书的笔记列表", async () => {
     render(<ChatPanel book={BOOK} onClose={() => {}} />);
 
     await sendMessage("这个章节讲了什么？");
@@ -637,7 +637,7 @@ describe("ChatPanel", () => {
     );
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "存为笔记" }));
+    await user.click(screen.getByRole("button", { name: "总结为笔记" }));
 
     // 弹窗预填回复全文，可编辑。
     const textarea = screen.getByLabelText("笔记内容");
@@ -659,7 +659,7 @@ describe("ChatPanel", () => {
     expect(annotations[0]!.cfi).toBeUndefined();
   });
 
-  it("空会话没有入口；回复在途时「存为笔记」出现但禁用", async () => {
+  it("空会话没有入口；回复在途时「总结为笔记」出现但禁用", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true);
     let resolveChat!: (v: { text: string; sessionId: string }) => void;
     vi.mocked(acpxChat).mockImplementation(async (opts) => {
@@ -673,14 +673,14 @@ describe("ChatPanel", () => {
 
     // 空会话没有助手回复：没有入口。
     expect(
-      screen.queryByRole("button", { name: "存为笔记" }),
+      screen.queryByRole("button", { name: "总结为笔记" }),
     ).not.toBeInTheDocument();
 
     await sendMessage("在吗");
 
     // 正文块到达即出现入口，但回复在途：禁用。
     const button = await eventually(() =>
-      screen.getByRole("button", { name: "存为笔记" }),
+      screen.getByRole("button", { name: "总结为笔记" }),
     );
     expect(button).toBeDisabled();
 

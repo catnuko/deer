@@ -105,7 +105,7 @@ function SaveNoteDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>存为笔记</DialogTitle>
+          <DialogTitle>总结为笔记</DialogTitle>
           <DialogDescription>
             保存后会出现在这本书的笔记列表里，来源标记为 AI 对话。
           </DialogDescription>
@@ -141,7 +141,7 @@ function SaveNoteDialog({
   );
 }
 
-/** 助手消息操作条上的「存为笔记」：弹小编辑框，确认后写入当前书的笔记列表。 */
+/** 助手消息操作条上的「总结为笔记」：弹小编辑框，确认后写入当前书的笔记列表。 */
 function SaveNoteButton() {
   const ctx = useContext(SaveNoteContext);
   const messageId = useAuiState((s) => s.message.id);
@@ -163,8 +163,8 @@ function SaveNoteButton() {
     <>
       <button
         type="button"
-        aria-label="存为笔记"
-        title="存为笔记"
+        aria-label="总结为笔记"
+        title="总结为笔记"
         disabled={!ctx || ctx.replying}
         className="text-muted-foreground hover:bg-accent hover:text-accent-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-50"
         onClick={() => {
