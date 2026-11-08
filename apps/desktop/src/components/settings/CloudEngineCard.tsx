@@ -67,7 +67,12 @@ export function CloudEngineCard() {
         </div>
         <Select
           value={aiProvider}
-          onValueChange={(value) => setAiProvider(value as AiProviderKind)}
+          onValueChange={(value) => {
+            setAiProvider(value as AiProviderKind);
+            // 换接口类型时旧 Base URL 语义已失效（如 OpenAI 兼容地址
+            // 被 anthropic 当端点用会 404）；清空交给默认回落逻辑。
+            setAiBaseUrl("");
+          }}
         >
           <SelectTrigger className="w-44" aria-label="接口类型">
             <SelectValue />
