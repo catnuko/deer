@@ -9,6 +9,17 @@ import type { ChatPanelHandle } from "./ChatPanel";
 vi.mock("@/lib/ai/cloudEngine", () => ({
   runCloudChat: vi.fn(),
 }));
+vi.mock("@/lib/ai/claudeBackend", () => ({
+  acpxChat: vi.fn(),
+  // auto 模式自检失败 → 路由到云引擎，与既有云链路用例保持同一路径。
+  acpxEnvCheck: vi.fn(async () => ({
+    ok: false,
+    nodeOk: false,
+    nodeVersion: null,
+    acpxVersion: null,
+    message: "测试环境无 acpx",
+  })),
+}));
 vi.mock("@/lib/platform", () => ({
   isTauri: vi.fn(() => false),
 }));
