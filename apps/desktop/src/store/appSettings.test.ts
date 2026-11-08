@@ -52,6 +52,11 @@ describe("appSettings store", () => {
       aiBaseUrl: DEFAULT_APP_SETTINGS.aiBaseUrl,
       aiModel: DEFAULT_APP_SETTINGS.aiModel,
       aiApiKey: "",
+      syncEnabled: false,
+      syncUrl: "",
+      syncUsername: "",
+      syncPassword: "",
+      syncBooks: true,
     });
   });
 

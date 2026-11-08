@@ -48,7 +48,30 @@ export type ChatStore = ChatStoreState & {
   clearThread(threadId: string): void;
   /** 清空全部本机聊天记录（设置页「清空聊天记录」）。 */
   clearAllChat(): void;
+  /** 应用远端会话：thread 为 null 表示删除（消息随之清理）。 */
+  applyRemoteThread(
+    bookId: string,
+    threadId: string,
+    thread: ChatThread | null,
+  ): void;
+  /** 应用远端消息：message 为 null 表示删除。 */
+  applyRemoteMessage(
+    messageId: string,
+    threadId: string | undefined,
+    message: ChatMessage | null,
+  ): void;
 };
+
+/* ------------------------------------------------------------------ */
+/* 流式消息标记：同步只搬「最终态」，半截回复不入队                        */
+/* ------------------------------------------------------------------ */
+
+const streamingMessages = new Set<string>();
+
+/** 该消息是否还在流式生成中（生成中的消息不参与同步快照）。 */
+export function isMessageStreaming(messageId: string): boolean {
+  return streamingMessages.has(messageId);
+}
 
 /* ------------------------------------------------------------------ */
 /* 持久化：桌面端走 Tauri plugin-store，浏览器（Vite 预览）退化为 localStorage */
@@ -270,6 +293,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     appendToMessage(threadId, messageId, delta) {
+      streamingMessages.add(messageId);
       set((s) => ({
         messages: {
           ...s.messages,
@@ -281,6 +305,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     setMessageContent(threadId, messageId, content) {
+      streamingMessages.delete(messageId);
       set((s) => ({
         messages: {
           ...s.messages,
@@ -294,6 +319,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     appendToMessageThinking(threadId, messageId, delta) {
+      streamingMessages.add(messageId);
       set((s) => ({
         messages: {
           ...s.messages,
@@ -307,6 +333,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     appendToMessageBooks(threadId, messageId, books) {
+      streamingMessages.add(messageId);
       set((s) => ({
         messages: {
           ...s.messages,
@@ -318,6 +345,69 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }),
         },
       }));
+    },
+
+    /* -------------------------------------------------------------- */
+    /* 同步：远端会话/消息落地                                          */
+    /* -------------------------------------------------------------- */
+
+    applyRemoteThread(bookId, threadId, thread) {
+      set((s) => {
+        const list = s.threads[bookId] ?? [];
+
+        if (!thread) {
+          if (!list.some((item) => item.id === threadId)) return s;
+          const messages = { ...s.messages };
+          delete messages[threadId];
+          const activeThreadByBook = { ...s.activeThreadByBook };
+          if (activeThreadByBook[bookId] === threadId) {
+            delete activeThreadByBook[bookId];
+          }
+          return {
+            threads: { ...s.threads, [bookId]: list.filter((t) => t.id !== threadId) },
+            messages,
+            activeThreadByBook,
+          };
+        }
+
+        const index = list.findIndex((item) => item.id === threadId);
+        const next =
+          index === -1
+            ? [thread, ...list]
+            : list.map((item) => (item.id === threadId ? thread : item));
+        const messages = s.messages[threadId]
+          ? s.messages
+          : { ...s.messages, [threadId]: [] };
+        return { threads: { ...s.threads, [bookId]: next }, messages };
+      });
+      persist();
+    },
+
+    applyRemoteMessage(messageId, threadId, message) {
+      set((s) => {
+        if (!message) {
+          for (const [tid, list] of Object.entries(s.messages)) {
+            if (!list.some((item) => item.id === messageId)) continue;
+            return {
+              messages: {
+                ...s.messages,
+                [tid]: list.filter((item) => item.id !== messageId),
+              },
+            };
+          }
+          return s;
+        }
+
+        if (!threadId) return s;
+        const list = s.messages[threadId] ?? [];
+        const index = list.findIndex((item) => item.id === messageId);
+        const next =
+          index === -1
+            ? [...list, message]
+            : list.map((item) => (item.id === messageId ? message : item));
+        return { messages: { ...s.messages, [threadId]: next } };
+      });
+      persist();
     },
   };
 });
