@@ -49,6 +49,7 @@ import {
   makeBookFile,
   readingStyles,
 } from "@/lib/foliate";
+import { setReaderBridge } from "@/lib/ai/readerBridge";
 import { applyPaginatorLayout, paginatorLayoutFor } from "@/lib/pageLayout";
 import { toggleOverlayPair, type OverlayPair } from "./overlayPair";
 import { isTauri } from "@/lib/platform";
@@ -237,6 +238,11 @@ export function ReaderPage() {
     isDesktop && bookId ? books.find((book) => book.id === bookId) : undefined;
 
   const [realPhase, setRealPhase] = useState<RealBookPhase>({ status: "loading" });
+  // AI 工具桥读取的 phase 镜像：effect 里不取 state，避免闭包过期。
+  const realPhaseRef = useRef<RealBookPhase>({ status: "loading" });
+  useEffect(() => {
+    realPhaseRef.current = realPhase;
+  }, [realPhase]);
   const [scrollProgress, setScrollProgress] = useState(0);
   const viewerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<FoliateView | null>(null);
@@ -329,7 +335,8 @@ export function ReaderPage() {
   );
 
   // 读当前 spine section 的可读正文；抽不出（图片书/空章节）返回 null。
-  const readCurrentSectionText = async (): Promise<string | null> => {
+  // 只依赖 ref，恒定引用，供快捷指令/概念地图/AI 工具桥共用。
+  const readCurrentSectionText = useCallback(async (): Promise<string | null> => {
     const view = viewRef.current;
     const section = view?.book.sections[currentSectionRef.current];
     if (!view || !section) return null;
@@ -341,7 +348,7 @@ export function ReaderPage() {
     } catch {
       return null;
     }
-  };
+  }, []);
 
   const askDeer = useCallback((text: string) => {
     const formatted = formatSelectionDraft(text);
@@ -653,19 +660,12 @@ const copyAnnotationText = useCallback((text: string) => {
     setAnnotationMenu(null);
   }, [annotationMenu, deleteAnnotationById]);
 
-  // 总结当前 spine section：走 N1 的上下文注入，气泡里只显示「总结本章」。
+  // 总结当前 spine section：正文随消息发给云引擎，system 上下文由
+  // ChatPanel 统一组装，气泡里只显示「总结本章」。
   const summarizeCurrentSection = async () => {
     const text = await readCurrentSectionText();
     if (!text) return;
-    const prompt = buildPrompt(buildChapterSummaryPrompt(text).prompt, {
-      bookTitle: shelfBook?.title ?? "",
-      chapterTitle:
-        realPhase.status === "ready"
-          ? (realPhase.toc[realPhase.currentIndex]?.title ?? null)
-          : null,
-      progress: scrollProgress,
-    });
-    panelRef.current?.send(prompt, "总结本章");
+    panelRef.current?.send(buildChapterSummaryPrompt(text).prompt, "总结本章");
     setChatOpen(true);
   };
 
@@ -1053,6 +1053,71 @@ const copyAnnotationText = useCallback((text: string) => {
         element = view;
         viewRef.current = view;
 
+        // AI 工具桥：目录/当前章文本/跳转/书内搜索交给云引擎的工具层，
+        // 换书或离开阅读页时摘除（桥不在时对应工具自行降级）。
+        setReaderBridge({
+          bookId: bookKey,
+          getToc: () => bookToc(view.book),
+          getCurrentChapterTitle: async () => {
+            const phase = realPhaseRef.current;
+            return phase.status === "ready"
+              ? (phase.toc[phase.currentIndex]?.title ?? null)
+              : null;
+          },
+          getCurrentChapterText: readCurrentSectionText,
+          jumpTo: async (cfi) => {
+            try {
+              await viewRef.current?.goTo(cfi);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          jumpToTocIndex: async (index) => {
+            const current = viewRef.current;
+            const item = current ? bookToc(current.book)[index] : undefined;
+            if (!current || !item) return false;
+            try {
+              await current.goTo(item.href);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          searchInBook: async (query) => {
+            const current = viewRef.current;
+            if (!current) return [];
+            const matches: { cfi: string; excerpt: string }[] = [];
+            try {
+              for await (const result of current.search({
+                query,
+                matchCase: false,
+                matchDiacritics: false,
+                matchWholeWords: false,
+                // noop draw 压掉默认 outline：搜索不污染高亮层（返回类型
+                // 按 foliate 签名收窄，运行时只要求不画）。
+                draw: (() => {}) as unknown as (
+                  rects: DOMRectList,
+                  options?: Record<string, unknown>,
+                ) => SVGElement,
+              })) {
+                if (typeof result === "string") break; // 'done'
+                if ("cfi" in result && typeof result.cfi === "string") {
+                  matches.push({
+                    cfi: result.cfi,
+                    excerpt: String(result.excerpt ?? ""),
+                  });
+                }
+                // 桥层硬上限（工具层还会再裁剪），防大书全量命中撑爆上下文。
+                if (matches.length >= 50) break;
+              }
+            } catch {
+              // 搜索失败按空结果处理，工具层再向模型说明。
+            }
+            return matches;
+          },
+        });
+
         await view.open(file);
         if (cancelled) return;
 
@@ -1129,6 +1194,7 @@ const copyAnnotationText = useCallback((text: string) => {
       noteHandles.forEach((handle) => handle.dispose());
       noteHandles.clear();
       noteRuntimeRef.current = null;
+      setReaderBridge(null);
       element?.close();
       element?.remove();
       viewRef.current = null;
@@ -1141,6 +1207,7 @@ const copyAnnotationText = useCallback((text: string) => {
     showNotePeek,
     fadeNotePeek,
     turnPage,
+    readCurrentSectionText,
   ]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。

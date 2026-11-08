@@ -9,7 +9,8 @@ import {
   type ConceptMapData,
 } from "@/lib/ai/conceptMap";
 import { buildPrompt } from "@/lib/ai/readingContext";
-import { acpxChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
+import { runCloudOnce } from "@/lib/ai/cloudEngine";
+import { isTauri } from "@/lib/platform";
 import { useConceptMapStore } from "@/store/conceptMapStore";
 import { cn } from "@/lib/utils";
 
@@ -73,7 +74,7 @@ export function ConceptMapPanel({
   const save = useConceptMapStore((s) => s.save);
   const [phase, setPhase] = useState<ConceptMapPhase>({ status: "idle" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [tauri] = useState(() => isTauriRuntime());
+  const [tauri] = useState(() => isTauri());
 
   
   // 打开面板或切章时重置：渲染期比对 key 调整状态（React 推荐做法），
@@ -128,16 +129,13 @@ export function ConceptMapPanel({
           chapterTitle,
           progress: null,
         });
-        // 概念地图不走聊天面板：用「书 + 章」稳定的线程 id 映射 acpx 命名会话，
-        // 每次生成都开新会话（resumeSessionId 恒空，模型不需要上一轮上下文）。
-        const result = await acpxChat({
+        // 概念地图不走聊天面板：一次性生成（无工具、无历史），
+        // system 与上下文都压在 prompt 里（沿用 N1 的 buildPrompt）。
+        const text = await runCloudOnce({
+          system: `你是电子书伴读助手，为《${bookTitle}》${chapterTitle ? `的「${chapterTitle}」章节` : ""}生成概念地图。`,
           prompt,
-          messageId: `conceptmap_${Date.now()}`,
-          threadId: `conceptmap-${bookId}-${chapterKey}`,
-          resumeSessionId: null,
-          onDelta: () => undefined,
         });
-        data = parseConceptMap(result.text);
+        data = parseConceptMap(text);
         if (!data) {
           setPhase({
             status: "error",

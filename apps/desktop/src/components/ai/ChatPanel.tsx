@@ -13,14 +13,15 @@ import {
 import { ArrowUp, NotebookPen, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
-import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
+import { buildSystemPrompt, type ReadingContext } from "@/lib/ai/readingContext";
 import {
   buildBookSummaryPrompt,
   buildPageSummaryPrompt,
 } from "@/lib/ai/bookSummary";
 import { buildChapterSummaryPrompt } from "@/lib/ai/chapterSummary";
-import { acpxChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
-import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
+import { runCloudChat } from "@/lib/ai/cloudEngine";
+import { isTauri } from "@/lib/platform";
+import { useAppSettings } from "@/store/appSettings";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -367,8 +368,8 @@ function Composer({
         </ComposerPrimitive.Send>
       </div>
       <p className="text-muted-foreground mt-2 text-[11px]">
-        {isTauriRuntime()
-          ? "回复由你本机的 Claude Code 生成，深度思考常开，仅在本机运行。"
+        {isTauri()
+          ? "回复由云 API 模型生成；是否输出思考过程由所选模型决定。"
           : "未接入后端（浏览器预览），发送后返回的是本地演示回复。"}
       </p>
     </ComposerPrimitive.Root>
@@ -538,10 +539,8 @@ export function ChatPanel({
     ctxRef.current = readingContext ?? null;
   }, [readingContext]);
   // 运行时环境整个会话不会变，取一次即可。
-  const [tauri] = useState(() => isTauriRuntime());
-  // acpx 环境自检结果：进入聊天即查（acpx 是唯一链路），失败只提示不拦发送
-  // （Rust 侧 acpx_chat 自带同样的检查与指引）。设置页共用同一份检测逻辑。
-  const { status: envStatus } = useAcpxEnvStatus(tauri);
+  const [tauri] = useState(() => isTauri());
+  const aiModel = useAppSettings((s) => s.aiModel);
 
   useEffect(() => {
     if (!ready) void load();
@@ -573,12 +572,14 @@ export function ChatPanel({
     [book.id, book.title],
   );
 
-  // 发送一条消息：displayText 进用户气泡，claudePrompt 才是发给 claude 的
-  // 完整 prompt（N1 上下文注入后两者不再相同，章节总结也复用这条通路）。
+  // 发送一条消息：displayText 进用户气泡，claudePrompt 才是发给云引擎的
+  // 完整内容（章节总结等入口会带正文）；system 在这里按阅读上下文组装。
   const sendUserMessage = useCallback(
     async (claudePrompt: string, displayText: string) => {
       if (replyingRef.current || !claudePrompt.trim()) return;
       const threadId = currentThreadId();
+      // 历史在追加本轮提问前截取：prompt 单独随发，不重复计入。
+      const history = useChatStore.getState().messages[threadId] ?? [];
       appendMessage(threadId, "user", displayText);
       replyingRef.current = true;
       setReplying(true);
@@ -595,36 +596,38 @@ export function ChatPanel({
         return;
       }
 
-      // 桌面端：走 acpx 连接层（唯一链路），会话按线程命名（deer-<threadId>），
-      // acpx 负责跨进程恢复；Deer 只存 ACP session id，NO_SESSION 时回传给它
-      // 接回旧会话。深度思考恒开（Rust 侧每轮注入 MAX_THINKING_TOKENS）。
+      // 云引擎（AI SDK agent 循环）：桌面 / Android / iOS 通吃，
+      // 工具由 Deer 原生提供；流式增量与原链路回调同构。
       const assistant = appendMessage(threadId, "assistant", "");
-      const state = useChatStore.getState();
       try {
-        const result = await acpxChat({
+        const result = await runCloudChat({
+          system: buildSystemPrompt(ctxRef.current ?? { bookTitle: book.title }),
           prompt: claudePrompt,
-          messageId: assistant.id,
-          threadId,
-          resumeSessionId: state.acpxSessionByThread[threadId] ?? null,
-          onDelta: (delta) => {
-            useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
-          },
-          onThoughtDelta: (delta) => {
-            useChatStore
-              .getState()
-              .appendToMessageThinking(threadId, assistant.id, delta);
-          },
-          onBooks: (books) => {
-            useChatStore
-              .getState()
-              .appendToMessageBooks(threadId, assistant.id, books);
+          history,
+          callbacks: {
+            onDelta: (delta) => {
+              useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
+            },
+            onThoughtDelta: (delta) => {
+              useChatStore
+                .getState()
+                .appendToMessageThinking(threadId, assistant.id, delta);
+            },
+            onBooks: (books) => {
+              useChatStore
+                .getState()
+                .appendToMessageBooks(threadId, assistant.id, books);
+            },
           },
         });
-        useChatStore.getState().setAcpxSession(threadId, result.sessionId);
-        // 以 Rust 侧累计的完整正文为准落库（含持久化）。
+        // 以累计正文落库（含持久化）；空回复兜底一句可读提示。
         useChatStore
           .getState()
-          .setMessageContent(threadId, assistant.id, result.text);
+          .setMessageContent(
+            threadId,
+            assistant.id,
+            result.text || "（模型没有返回内容，请重试。）",
+          );
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         useChatStore
@@ -635,7 +638,7 @@ export function ChatPanel({
         setReplying(false);
       }
     },
-    [appendMessage, book.id, currentThreadId, tauri],
+    [appendMessage, book.id, book.title, currentThreadId, tauri],
   );
 
   const send = useCallback(
@@ -669,17 +672,14 @@ export function ChatPanel({
             raw = buildPageSummaryPrompt(text).prompt;
           }
         }
-        // 拿不到正文时只发问题本身：N1 上下文仍会带上书名/章节，
-        // 桌面端 AI 还能借助书架 MCP 工具作答。
-        await sendUserMessage(
-          buildPrompt(raw, ctxRef.current ?? { bookTitle: book.title }),
-          question,
-        );
+        // 拿不到正文时只发问题本身：system 仍会带上书名/章节上下文，
+        // AI 还能借助书架/书内工具作答。
+        await sendUserMessage(raw, question);
       } finally {
         setPendingCommand(null);
       }
     },
-    [book.title, pendingCommand, quickCommands, sendUserMessage],
+    [pendingCommand, quickCommands, sendUserMessage],
   );
 
   const runtime = useExternalStoreRuntime<ChatMessage>({
@@ -720,11 +720,7 @@ export function ChatPanel({
     onNew: async (message) => {
       const text = extractText(message);
       if (!text) return;
-      const prompt = buildPrompt(
-        text,
-        ctxRef.current ?? { bookTitle: book.title },
-      );
-      await sendUserMessage(prompt, text);
+      await sendUserMessage(text, text);
     },
     adapters: {
       feedback: {
@@ -800,7 +796,7 @@ export function ChatPanel({
           </p>
         </div>
         <Badge variant="secondary" className="mt-1 shrink-0 text-[11px] max-[819px]:hidden">
-          {tauri ? "acpx · Claude" : "未接后端（浏览器预览）"}
+          {tauri ? `云引擎 · ${aiModel.trim() || "未配置模型"}` : "未接后端（浏览器预览）"}
         </Badge>
         {onSummarizeChapter ? (
           <Button
@@ -835,20 +831,13 @@ export function ChatPanel({
 
       <div className="bg-secondary/60 text-secondary-foreground border-border border-b px-4 py-2 text-[11px] leading-relaxed">
         {tauri ? (
-          <p
-            data-testid="acpx-env-note"
-            className={cn(
-              envStatus && !envStatus.ok ? "text-destructive" : "text-muted-foreground",
-            )}
-          >
-            {envStatus
-              ? envStatus.ok
-                ? "acpx 连接层：会话由 acpx 管理，每个会话线程独立命名并跨进程恢复，深度思考常开。"
-                : envStatus.message
-              : "正在检查 acpx 环境…"}
+          <p data-testid="cloud-engine-note" className="text-muted-foreground">
+            {`回复由云 API 模型（${aiModel.trim() || "未配置模型"}）生成，书籍、对话与 API Key 都留在本机。未配置 Key 时发送会提示前往设置填写。`}
           </p>
         ) : (
-          "浏览器预览：没有 Tauri 后端，回复是写死的占位文本，不会联网。"
+          <p className="text-muted-foreground">
+            浏览器预览：没有 Tauri 后端，回复是写死的占位文本，不会联网。
+          </p>
         )}
       </div>
 
