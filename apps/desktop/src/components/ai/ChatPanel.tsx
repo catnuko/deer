@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -7,21 +7,38 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAui,
+  useAuiState,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { ArrowUp, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
+import { ArrowUp, NotebookPen, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
-import { buildPrompt, type ReadingContext } from "@/lib/ai/readingContext";
-import { acpxChat, isTauriRuntime } from "@/lib/ai/claudeBackend";
-import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
+import { buildSystemPrompt, type ReadingContext } from "@/lib/ai/readingContext";
+import {
+  buildBookSummaryPrompt,
+  buildPageSummaryPrompt,
+} from "@/lib/ai/bookSummary";
+import { buildChapterSummaryPrompt } from "@/lib/ai/chapterSummary";
+import { runCloudChat } from "@/lib/ai/cloudEngine";
+import { isTauri } from "@/lib/platform";
+import { useAppSettings } from "@/store/appSettings";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { GradientHeading } from "@/components/ui/gradient-heading";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import type { CurrentBook } from "@/lib/ai/currentBook";
 import { ChatBookCard } from "@/components/ai/ChatBookCard";
 import { useChatStore } from "@/store/chatStore";
+import { AI_NOTE_COLOR, useAnnotationStore } from "@/store/annotationStore";
 
 /** 从 composer 提交的消息里抽出纯文本。 */
 function extractText(message: { content: readonly unknown[] }): string {
@@ -58,6 +75,116 @@ function ReasoningPart({ text }: { text?: string }) {
       <summary className="cursor-pointer select-none">深度思考</summary>
       <p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{text}</p>
     </details>
+  );
+}
+
+/** 助手消息存笔记需要的面板内能力：回复在途状态与落库动作。 */
+const SaveNoteContext = createContext<{
+  replying: boolean;
+  saveNote: (assistantMessageId: string, note: string) => void;
+} | null>(null);
+
+/** 用户提问截前 120 字作为 AI 笔记的摘录（按码点，不切代理对）。 */
+function excerptOf(text: string, limit = 120): string {
+  return Array.from(text.trim()).slice(0, limit).join("");
+}
+
+function SaveNoteDialog({
+  open,
+  draft,
+  onDraftChange,
+  onOpenChange,
+  onSave,
+}: {
+  open: boolean;
+  draft: string;
+  onDraftChange: (draft: string) => void;
+  onOpenChange: (open: boolean) => void;
+  onSave: (note: string) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>总结为笔记</DialogTitle>
+          <DialogDescription>
+            保存后会出现在这本书的笔记列表里，来源标记为 AI 对话。
+          </DialogDescription>
+        </DialogHeader>
+        <Textarea
+          aria-label="笔记内容"
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          rows={8}
+          className="max-h-64 overflow-y-auto text-[13px]"
+        />
+        <DialogFooter>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </Button>
+          <Button
+            size="sm"
+            disabled={!draft.trim()}
+            onClick={() => {
+              onSave(draft);
+              onOpenChange(false);
+            }}
+          >
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** 助手消息操作条上的「总结为笔记」：弹小编辑框，确认后写入当前书的笔记列表。 */
+function SaveNoteButton() {
+  const ctx = useContext(SaveNoteContext);
+  const messageId = useAuiState((s) => s.message.id);
+  const content = useAuiState((s) => s.message.content);
+  const messageText = useMemo(
+    () =>
+      content
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .filter(Boolean)
+        .join("\n\n"),
+    [content],
+  );
+  const [open, setOpen] = useState(false);
+  // 草稿放在这一层：打开瞬间用点击处理器重置为回复全文，不需要 effect。
+  const [draft, setDraft] = useState("");
+  if (!messageText.trim()) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="总结为笔记"
+        title="总结为笔记"
+        disabled={!ctx || ctx.replying}
+        className="text-muted-foreground hover:bg-accent hover:text-accent-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-50"
+        onClick={() => {
+          setDraft(messageText);
+          setOpen(true);
+        }}
+      >
+        <NotebookPen className="size-3.5" />
+      </button>
+      <SaveNoteDialog
+        open={open}
+        draft={draft}
+        onDraftChange={setDraft}
+        onOpenChange={setOpen}
+        onSave={(note) => {
+          if (messageId) ctx?.saveNote(messageId, note);
+        }}
+      />
+    </>
   );
 }
 
@@ -124,6 +251,7 @@ function AssistantMessage() {
       <ActionBarPrimitive.Root className="mt-1 ml-1 flex items-center gap-0.5">
         <FeedbackButton direction="up" />
         <FeedbackButton direction="down" />
+        <SaveNoteButton />
       </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
   );
@@ -143,9 +271,90 @@ function EmptyState({ book }: { book: CurrentBook }) {
   );
 }
 
-function Composer() {
+/** 快捷指令：点击直接发送的问题按钮（输入区上方一排 chip）。 */
+export type QuickCommand = {
+  /** 返回要随问题一起发送的正文；null/缺省表示拿不到正文，只发问题本身。 */
+  getText?: () => Promise<string | null>;
+  /** false 时按钮置灰并显示 unavailableReason（如图片书无可读正文）。 */
+  available?: boolean;
+  unavailableReason?: string;
+};
+
+export type QuickCommands = {
+  chapter?: QuickCommand;
+  book?: QuickCommand;
+  page?: QuickCommand;
+};
+
+const QUICK_COMMAND_LABELS: Record<keyof QuickCommands, string> = {
+  chapter: "这个章节讲了什么？",
+  book: "这本书说了什么？",
+  page: "当前页讲了什么？",
+};
+
+const QUICK_COMMAND_ORDER: (keyof QuickCommands)[] = [
+  "chapter",
+  "book",
+  "page",
+];
+
+function QuickCommandsBar({
+  commands,
+  disabled,
+  onSelect,
+}: {
+  commands: QuickCommands;
+  disabled: boolean;
+  onSelect: (kind: keyof QuickCommands) => void;
+}) {
+  const items = QUICK_COMMAND_ORDER.filter((kind) => commands[kind]);
+  if (items.length === 0) return null;
+
+  return (
+    <div
+      data-testid="quick-commands"
+      role="toolbar"
+      aria-label="快捷指令"
+      className="mb-2 flex gap-1.5 overflow-x-auto"
+    >
+      {items.map((kind) => {
+        const command = commands[kind]!;
+        const unavailable = command.available === false;
+        return (
+          <button
+            key={kind}
+            type="button"
+            disabled={disabled || unavailable}
+            title={unavailable ? (command.unavailableReason ?? "该格式不支持") : undefined}
+            className="bg-secondary text-secondary-foreground hover:bg-secondary/80 shrink-0 cursor-pointer rounded-full px-2.5 py-1 text-xs transition-colors disabled:pointer-events-none disabled:opacity-50"
+            onClick={() => onSelect(kind)}
+          >
+            {QUICK_COMMAND_LABELS[kind]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Composer({
+  quickCommands,
+  onQuickSend,
+  quickSendDisabled,
+}: {
+  quickCommands?: QuickCommands;
+  onQuickSend: (kind: keyof QuickCommands) => void;
+  quickSendDisabled: boolean;
+}) {
   return (
     <ComposerPrimitive.Root className="border-border bg-background border-t p-3">
+      {quickCommands ? (
+        <QuickCommandsBar
+          commands={quickCommands}
+          disabled={quickSendDisabled}
+          onSelect={onQuickSend}
+        />
+      ) : null}
       <div className="border-input bg-card focus-within:border-ring/60 flex items-end gap-2 rounded-xl border p-2 transition-colors">
         <ComposerPrimitive.Input
           rows={1}
@@ -159,8 +368,8 @@ function Composer() {
         </ComposerPrimitive.Send>
       </div>
       <p className="text-muted-foreground mt-2 text-[11px]">
-        {isTauriRuntime()
-          ? "回复由你本机的 Claude Code 生成，深度思考常开，仅在本机运行。"
+        {isTauri()
+          ? "回复由云 API 模型生成；是否输出思考过程由所选模型决定。"
           : "未接入后端（浏览器预览），发送后返回的是本地演示回复。"}
       </p>
     </ComposerPrimitive.Root>
@@ -199,6 +408,7 @@ export function ChatPanel({
   readingContext,
   draft,
   onSummarizeChapter,
+  quickCommands,
   ref,
 }: {
   book: CurrentBook;
@@ -214,6 +424,8 @@ export function ChatPanel({
   draft?: ChatPanelDraft | null;
   /** 「总结本章」显式动作（面板内快捷入口）；不提供则不显示。打开面板本身不发消息。 */
   onSummarizeChapter?: () => void;
+  /** 输入区上方的快捷指令 chip（点击直接发送）；不提供则不显示。 */
+  quickCommands?: QuickCommands;
   ref?: React.Ref<ChatPanelHandle>;
 }) {
   const ready = useChatStore((s) => s.ready);
@@ -327,10 +539,8 @@ export function ChatPanel({
     ctxRef.current = readingContext ?? null;
   }, [readingContext]);
   // 运行时环境整个会话不会变，取一次即可。
-  const [tauri] = useState(() => isTauriRuntime());
-  // acpx 环境自检结果：进入聊天即查（acpx 是唯一链路），失败只提示不拦发送
-  // （Rust 侧 acpx_chat 自带同样的检查与指引）。设置页共用同一份检测逻辑。
-  const { status: envStatus } = useAcpxEnvStatus(tauri);
+  const [tauri] = useState(() => isTauri());
+  const aiModel = useAppSettings((s) => s.aiModel);
 
   useEffect(() => {
     if (!ready) void load();
@@ -362,12 +572,14 @@ export function ChatPanel({
     [book.id, book.title],
   );
 
-  // 发送一条消息：displayText 进用户气泡，claudePrompt 才是发给 claude 的
-  // 完整 prompt（N1 上下文注入后两者不再相同，章节总结也复用这条通路）。
+  // 发送一条消息：displayText 进用户气泡，claudePrompt 才是发给云引擎的
+  // 完整内容（章节总结等入口会带正文）；system 在这里按阅读上下文组装。
   const sendUserMessage = useCallback(
     async (claudePrompt: string, displayText: string) => {
       if (replyingRef.current || !claudePrompt.trim()) return;
       const threadId = currentThreadId();
+      // 历史在追加本轮提问前截取：prompt 单独随发，不重复计入。
+      const history = useChatStore.getState().messages[threadId] ?? [];
       appendMessage(threadId, "user", displayText);
       replyingRef.current = true;
       setReplying(true);
@@ -384,36 +596,38 @@ export function ChatPanel({
         return;
       }
 
-      // 桌面端：走 acpx 连接层（唯一链路），会话按线程命名（deer-<threadId>），
-      // acpx 负责跨进程恢复；Deer 只存 ACP session id，NO_SESSION 时回传给它
-      // 接回旧会话。深度思考恒开（Rust 侧每轮注入 MAX_THINKING_TOKENS）。
+      // 云引擎（AI SDK agent 循环）：桌面 / Android / iOS 通吃，
+      // 工具由 Deer 原生提供；流式增量与原链路回调同构。
       const assistant = appendMessage(threadId, "assistant", "");
-      const state = useChatStore.getState();
       try {
-        const result = await acpxChat({
+        const result = await runCloudChat({
+          system: buildSystemPrompt(ctxRef.current ?? { bookTitle: book.title }),
           prompt: claudePrompt,
-          messageId: assistant.id,
-          threadId,
-          resumeSessionId: state.acpxSessionByThread[threadId] ?? null,
-          onDelta: (delta) => {
-            useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
-          },
-          onThoughtDelta: (delta) => {
-            useChatStore
-              .getState()
-              .appendToMessageThinking(threadId, assistant.id, delta);
-          },
-          onBooks: (books) => {
-            useChatStore
-              .getState()
-              .appendToMessageBooks(threadId, assistant.id, books);
+          history,
+          callbacks: {
+            onDelta: (delta) => {
+              useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
+            },
+            onThoughtDelta: (delta) => {
+              useChatStore
+                .getState()
+                .appendToMessageThinking(threadId, assistant.id, delta);
+            },
+            onBooks: (books) => {
+              useChatStore
+                .getState()
+                .appendToMessageBooks(threadId, assistant.id, books);
+            },
           },
         });
-        useChatStore.getState().setAcpxSession(threadId, result.sessionId);
-        // 以 Rust 侧累计的完整正文为准落库（含持久化）。
+        // 以累计正文落库（含持久化）；空回复兜底一句可读提示。
         useChatStore
           .getState()
-          .setMessageContent(threadId, assistant.id, result.text);
+          .setMessageContent(
+            threadId,
+            assistant.id,
+            result.text || "（模型没有返回内容，请重试。）",
+          );
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         useChatStore
@@ -424,7 +638,7 @@ export function ChatPanel({
         setReplying(false);
       }
     },
-    [appendMessage, book.id, currentThreadId, tauri],
+    [appendMessage, book.id, book.title, currentThreadId, tauri],
   );
 
   const send = useCallback(
@@ -434,6 +648,39 @@ export function ChatPanel({
     [sendUserMessage],
   );
   useImperativeHandle(ref, () => ({ send }), [send]);
+
+  // 快捷指令：取文本期间整条禁点（pendingCommand），发送后由 replying 接管。
+  const [pendingCommand, setPendingCommand] = useState<keyof QuickCommands | null>(
+    null,
+  );
+  const quickSend = useCallback(
+    async (kind: keyof QuickCommands) => {
+      const command = quickCommands?.[kind];
+      if (!command || command.available === false) return;
+      if (replyingRef.current || pendingCommand !== null) return;
+      const question = QUICK_COMMAND_LABELS[kind];
+      setPendingCommand(kind);
+      try {
+        const text = command.getText ? await command.getText() : null;
+        let raw = question;
+        if (text) {
+          if (kind === "chapter") {
+            raw = buildChapterSummaryPrompt(text).prompt;
+          } else if (kind === "book") {
+            raw = buildBookSummaryPrompt(text).prompt;
+          } else {
+            raw = buildPageSummaryPrompt(text).prompt;
+          }
+        }
+        // 拿不到正文时只发问题本身：system 仍会带上书名/章节上下文，
+        // AI 还能借助书架/书内工具作答。
+        await sendUserMessage(raw, question);
+      } finally {
+        setPendingCommand(null);
+      }
+    },
+    [pendingCommand, quickCommands, sendUserMessage],
+  );
 
   const runtime = useExternalStoreRuntime<ChatMessage>({
     messages,
@@ -473,11 +720,7 @@ export function ChatPanel({
     onNew: async (message) => {
       const text = extractText(message);
       if (!text) return;
-      const prompt = buildPrompt(
-        text,
-        ctxRef.current ?? { bookTitle: book.title },
-      );
-      await sendUserMessage(prompt, text);
+      await sendUserMessage(text, text);
     },
     adapters: {
       feedback: {
@@ -492,12 +735,43 @@ export function ChatPanel({
     if (thread) clearThread(thread.id);
   };
 
+  // 存 AI 笔记（需求：从对话总结出笔记）：note=回复全文，excerpt=用户提问
+  // 截前 120 字，无 CFI、source=ai。按 assistantMessageId 反查它前面的提问。
+  const saveNote = useCallback(
+    (assistantMessageId: string, note: string) => {
+      const trimmed = note.trim();
+      if (!trimmed) return;
+      const state = useChatStore.getState();
+      const threadId = state.activeThreadByBook[book.id];
+      if (!threadId) return;
+      const list = state.messages[threadId] ?? [];
+      const index = list.findIndex((m) => m.id === assistantMessageId);
+      const previous = index > 0 ? list[index - 1] : undefined;
+      const question =
+        previous?.role === "user" ? excerptOf(previous.content) : "";
+      useAnnotationStore.getState().add({
+        bookId: book.id,
+        color: AI_NOTE_COLOR,
+        ...(question ? { excerpt: question } : {}),
+        note: trimmed,
+        source: "ai",
+      });
+    },
+    [book.id],
+  );
+  const saveNoteContext = useMemo(
+    () => ({ replying, saveNote }),
+    [replying, saveNote],
+  );
+
   return (
     <aside
       aria-label="AI 伴读"
       aria-hidden={open ? undefined : true}
       className={cn(
         "bg-background border-border w-96 shrink-0 flex-col overflow-hidden border-l",
+        // <820px：固定宽度停靠列会挤没正文，退化为全屏覆盖层（脱离文档流盖住主区）。
+        "max-[819px]:fixed max-[819px]:inset-0 max-[819px]:z-50 max-[819px]:w-full max-[819px]:border-l-0",
         // 退场动画期间保持布局占位，播完才折叠；宽度始终不参与过渡。
         // overflow-hidden：入场/退场的内容侧移只在本盒内裁掉，不越出到滚动祖先，
         // 否则阅读页的 main 会因为它多出的 12px 闪出横向滚动条。
@@ -521,8 +795,8 @@ export function ChatPanel({
             {book.title}
           </p>
         </div>
-        <Badge variant="secondary" className="mt-1 shrink-0 text-[11px]">
-          {tauri ? "acpx · Claude" : "未接后端（浏览器预览）"}
+        <Badge variant="secondary" className="mt-1 shrink-0 text-[11px] max-[819px]:hidden">
+          {tauri ? `云引擎 · ${aiModel.trim() || "未配置模型"}` : "未接后端（浏览器预览）"}
         </Badge>
         {onSummarizeChapter ? (
           <Button
@@ -557,24 +831,18 @@ export function ChatPanel({
 
       <div className="bg-secondary/60 text-secondary-foreground border-border border-b px-4 py-2 text-[11px] leading-relaxed">
         {tauri ? (
-          <p
-            data-testid="acpx-env-note"
-            className={cn(
-              envStatus && !envStatus.ok ? "text-destructive" : "text-muted-foreground",
-            )}
-          >
-            {envStatus
-              ? envStatus.ok
-                ? "acpx 连接层：会话由 acpx 管理，每个会话线程独立命名并跨进程恢复，深度思考常开。"
-                : envStatus.message
-              : "正在检查 acpx 环境…"}
+          <p data-testid="cloud-engine-note" className="text-muted-foreground">
+            {`回复由云 API 模型（${aiModel.trim() || "未配置模型"}）生成，书籍、对话与 API Key 都留在本机。未配置 Key 时发送会提示前往设置填写。`}
           </p>
         ) : (
-          "浏览器预览：没有 Tauri 后端，回复是写死的占位文本，不会联网。"
+          <p className="text-muted-foreground">
+            浏览器预览：没有 Tauri 后端，回复是写死的占位文本，不会联网。
+          </p>
         )}
       </div>
 
       <AssistantRuntimeProvider runtime={runtime}>
+        <SaveNoteContext.Provider value={saveNoteContext}>
         {draft ? <ComposerPreset key={draft.id} draft={draft} /> : null}
         <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
           <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -588,8 +856,13 @@ export function ChatPanel({
               <p className="text-muted-foreground mb-3 ml-1 text-xs">正在输入…</p>
             )}
           </ThreadPrimitive.Viewport>
-          <Composer />
+          <Composer
+            quickCommands={quickCommands}
+            onQuickSend={(kind) => void quickSend(kind)}
+            quickSendDisabled={replying || pendingCommand !== null}
+          />
         </ThreadPrimitive.Root>
+        </SaveNoteContext.Provider>
       </AssistantRuntimeProvider>
       </div>
     </aside>

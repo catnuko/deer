@@ -30,6 +30,21 @@ export const NOTE_HOVER_DELAY_MS = 220;
 /** 离开引用后延迟收卡，给「从引用移进卡片」留出时间窗（卡片可滚动）。 */
 export const NOTE_CLOSE_DELAY_MS = 140;
 
+/**
+ * 触屏判定：按真实指针能力（hover: none + pointer: coarse）而不是屏宽——
+ * 桌面把窗口拖窄用鼠标，悬浮等行为保持不变。
+ */
+export function isTouchDoc(doc: Document): boolean {
+  try {
+    return Boolean(
+      doc.defaultView?.matchMedia?.("(hover: none) and (pointer: coarse)")
+        .matches,
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** 悬浮卡片的数据：锚点矩形已在正文容器坐标系内。 */
 export interface NotePeekData {
   anchor: { left: number; top: number; width: number; height: number };
@@ -208,6 +223,33 @@ export function wireNoteHover(
     host.onClose();
   };
 
+  // 解析引用并弹卡：悬浮计时到期与触屏点按共用；坐标在解析完成时现量
+  // （章节解析期间引用可能已不在原位，seq/hover 双检兜底）。
+  const resolveAndPeek = (a: HTMLAnchorElement, href: string, current: number) => {
+    void host
+      .resolve(index, href)
+      .then((note) => {
+        if (!note || host.isCancelled()) return;
+        if (current !== seq || hover !== a) return;
+        const rect = a.getBoundingClientRect();
+        const frame = doc.defaultView?.frameElement as HTMLElement | null;
+        const frameRect = frame?.getBoundingClientRect();
+        const containerRect = host.getContainerRect();
+        if (!frameRect || !containerRect) return;
+        host.onPeek({
+          anchor: {
+            left: rect.left + frameRect.left - containerRect.left,
+            top: rect.top + frameRect.top - containerRect.top,
+            width: rect.width,
+            height: rect.height,
+          },
+          ...note,
+          href,
+        });
+      })
+      .catch(() => undefined);
+  };
+
   const onOver = (e: Event) => {
     const target = e.target as Element | null;
     const a = target?.closest?.("a[href]") as HTMLAnchorElement | null;
@@ -220,30 +262,7 @@ export function wireNoteHover(
     hoverTimer = window.setTimeout(() => {
       hoverTimer = 0;
       if (host.isCancelled() || hover !== a) return;
-      const href = a.getAttribute("href") ?? "";
-      void host
-        .resolve(index, href)
-        .then((note) => {
-          if (!note || host.isCancelled()) return;
-          // 章节解析期间指针可能已移到别的标记或翻页。
-          if (current !== seq || hover !== a) return;
-          const rect = a.getBoundingClientRect();
-          const frame = doc.defaultView?.frameElement as HTMLElement | null;
-          const frameRect = frame?.getBoundingClientRect();
-          const containerRect = host.getContainerRect();
-          if (!frameRect || !containerRect) return;
-          host.onPeek({
-            anchor: {
-              left: rect.left + frameRect.left - containerRect.left,
-              top: rect.top + frameRect.top - containerRect.top,
-              width: rect.width,
-              height: rect.height,
-            },
-            ...note,
-            href,
-          });
-        })
-        .catch(() => undefined);
+      resolveAndPeek(a, a.getAttribute("href") ?? "", current);
     }, NOTE_HOVER_DELAY_MS);
   };
 
@@ -273,10 +292,37 @@ export function wireNoteHover(
   const onMouseDown = () => close();
   const onWheel = () => close();
 
+  // 触屏不产生 mouseover，悬浮路径整条失效；改为点按引用立即弹卡（无
+  // 220ms 停顿）。监听在 capture 阶段、foliate 的链接 click 在冒泡阶段，
+  // stopImmediatePropagation 能抢在跳转前拦下。媒体查询为真的混合设备上
+  // 再以 pointerType 双保险：真实鼠标点击不走触屏路径。
+  const onTouchClick = (e: Event) => {
+    const pointerType = (e as PointerEvent).pointerType;
+    if (pointerType === "mouse") return;
+    const target = e.target as Element | null;
+    const a = target?.closest?.("a[href]") as HTMLAnchorElement | null;
+    if (!a || !isNoteReference(noteRefAttrs(a))) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    clearHoverTimer();
+    clearCloseTimer();
+    hover = a;
+    const current = ++seq;
+    resolveAndPeek(a, a.getAttribute("href") ?? "", current);
+  };
+
+  // 触屏滚动不产生 wheel，补 scroll 一路收卡（触屏专用，桌面滚动行为不变）。
+  const onScroll = () => close();
+
+  const touch = isTouchDoc(doc);
   doc.addEventListener("mouseover", onOver);
   doc.addEventListener("mouseout", onOut);
   doc.addEventListener("mousedown", onMouseDown);
   doc.addEventListener("wheel", onWheel, { passive: true });
+  if (touch) {
+    doc.addEventListener("click", onTouchClick, true);
+    doc.addEventListener("scroll", onScroll, { passive: true });
+  }
 
   return {
     close,
@@ -290,6 +336,10 @@ export function wireNoteHover(
       doc.removeEventListener("mouseout", onOut);
       doc.removeEventListener("mousedown", onMouseDown);
       doc.removeEventListener("wheel", onWheel);
+      if (touch) {
+        doc.removeEventListener("click", onTouchClick, true);
+        doc.removeEventListener("scroll", onScroll);
+      }
     },
   };
 }

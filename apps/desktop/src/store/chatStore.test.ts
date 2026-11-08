@@ -17,7 +17,6 @@ function reset() {
     messages: {},
     activeThreadByBook: {},
     feedback: {},
-    acpxSessionByThread: {},
     ready: true,
   });
 }
@@ -115,7 +114,7 @@ describe("chatStore", () => {
     expect(state.claudeSessionByBook).toBeUndefined();
 
     // 再落盘时旧字段不复写回（迁移彻底，不留死数据）。
-    useChatStore.getState().setAcpxSession("t-1", "acp-1");
+    useChatStore.getState().appendMessage("t-1", "user", "问题");
     await new Promise((r) => setTimeout(r, 0));
     const saved = JSON.parse(memory.get("deer.chat.v1") ?? "{}");
     expect(saved.deepThinking).toBeUndefined();
@@ -198,51 +197,33 @@ describe("chatStore", () => {
     expect(second.content).toBe("第二条");
   });
 
-  it("acpx 会话映射按线程存取，clearThread 一并清掉", () => {
-    const store = useChatStore.getState();
-    const thread = store.ensureThread("book-a", "甲书");
-
-    store.setAcpxSession(thread.id, "acp-session-1");
-    expect(useChatStore.getState().acpxSessionByThread[thread.id]).toBe(
-      "acp-session-1",
+  it("load 丢弃旧版 acpx 会话映射等遗留字段", async () => {
+    memory.set(
+      "deer.chat.v1",
+      JSON.stringify({
+        threads: {},
+        messages: {},
+        activeThreadByBook: {},
+        feedback: {},
+        acpxSessionByThread: { t1: "acp-1" },
+        harness: "x",
+      }),
     );
-    // 持久化里也要有，重启后才能拿它恢复 acpx 命名会话
-    expect(
-      JSON.parse(memory.get("deer.chat.v1") ?? "{}").acpxSessionByThread[
-        thread.id
-      ],
-    ).toBe("acp-session-1");
+    await useChatStore.getState().load();
 
-    store.setAcpxSession(thread.id, "acp-session-2");
-    expect(useChatStore.getState().acpxSessionByThread[thread.id]).toBe(
-      "acp-session-2",
-    );
-
-    store.clearThread(thread.id);
-    expect(
-      useChatStore.getState().acpxSessionByThread[thread.id],
-    ).toBeUndefined();
+    const state = useChatStore.getState() as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(state.acpxSessionByThread).toBeUndefined();
+    expect(state.harness).toBeUndefined();
   });
 
-  it("setAcpxSession 传 undefined 清除单个线程映射，不影响其他线程", () => {
-    const store = useChatStore.getState();
-    const a = store.ensureThread("book-a", "甲书");
-    const b = store.ensureThread("book-b", "乙书");
-    store.setAcpxSession(a.id, "acp-a");
-    store.setAcpxSession(b.id, "acp-b");
-
-    store.setAcpxSession(a.id, undefined);
-    const map = useChatStore.getState().acpxSessionByThread;
-    expect(map[a.id]).toBeUndefined();
-    expect(map[b.id]).toBe("acp-b");
-  });
-
-  it("clearAllChat 清空全部线程、消息、反馈与 acpx 映射", () => {
+  it("clearAllChat 清空全部线程、消息与反馈", () => {
     const store = useChatStore.getState();
     const a = store.ensureThread("book-a", "甲书");
     store.appendMessage(a.id, "user", "问题");
     store.setFeedback("msg-x", "up");
-    store.setAcpxSession(a.id, "acp-a");
 
     store.clearAllChat();
 
@@ -251,7 +232,6 @@ describe("chatStore", () => {
     expect(state.messages).toEqual({});
     expect(state.activeThreadByBook).toEqual({});
     expect(state.feedback).toEqual({});
-    expect(state.acpxSessionByThread).toEqual({});
     expect(state.ready).toBe(true);
   });
 });

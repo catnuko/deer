@@ -9,9 +9,6 @@ describe("buildDiagnostics", () => {
       appVersion: "0.1.0",
       runtime: "Tauri 桌面端",
       userAgent: "Mozilla/5.0 Safari",
-      nodeVersion: "v24.20.0",
-      acpxVersion: "0.21.1",
-      acpxReady: true,
       dataDir: "/Users/me/Library/Application Support/com.catnuko.deer",
       copiedAt: fixed,
     });
@@ -20,8 +17,6 @@ describe("buildDiagnostics", () => {
     expect(text).toContain("版本：0.1.0");
     expect(text).toContain("运行环境：Tauri 桌面端");
     expect(text).toContain("WebView：Mozilla/5.0 Safari");
-    expect(text).toContain("Node：v24.20.0");
-    expect(text).toContain("acpx：0.21.1（就绪）");
     expect(text).toContain(
       "数据目录：/Users/me/Library/Application Support/com.catnuko.deer",
     );
@@ -33,17 +28,12 @@ describe("buildDiagnostics", () => {
       appVersion: "",
       runtime: "浏览器预览",
       userAgent: "",
-      nodeVersion: null,
-      acpxVersion: null,
-      acpxReady: null,
       dataDir: null,
       copiedAt: fixed,
     });
 
     expect(text).toContain("版本：unknown");
     expect(text).toContain("WebView：unknown");
-    expect(text).toContain("Node：未检测到");
-    expect(text).toContain("acpx：未检测到");
     expect(text).toContain("数据目录：不可用");
   });
 });

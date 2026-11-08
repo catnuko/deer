@@ -133,7 +133,7 @@ export function DataSection() {
 
       <SettingRow
         title="清空聊天记录"
-        description="只清空本机 Deer 保存的聊天记录，不影响 acpx 自己的会话缓存（~/.acpx）。"
+        description="只清空本机 Deer 保存的聊天记录。"
       >
         <Button
           variant="destructive"
@@ -157,7 +157,7 @@ export function DataSection() {
       <ConfirmDialog
         open={pending === "chat"}
         title="清空聊天记录？"
-        description={`将删除本机保存的 ${summary.chatMessageCount} 条聊天消息（共 ${summary.chatThreadCount} 个会话）。acpx 在 ~/.acpx 下的会话缓存不会被删除。`}
+        description={`将删除本机保存的 ${summary.chatMessageCount} 条聊天消息（共 ${summary.chatThreadCount} 个会话）。此操作不可恢复。`}
         onCancel={() => setPending(null)}
         onConfirm={confirmClear}
       />

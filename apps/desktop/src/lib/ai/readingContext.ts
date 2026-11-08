@@ -48,3 +48,16 @@ export function buildPrompt(
   const context = contextLine({ ...ctx, bookTitle: title });
   return [identity, ...(context ? [context] : []), "", text].join("\n");
 }
+
+/**
+ * 云引擎每轮的 system：身份行 +（可选）上下文行 + 伴读职责约定。
+ * 与 buildPrompt 的框架部分同源；用户输入不再并入，走独立消息。
+ */
+export function buildSystemPrompt(ctx?: ReadingContext | null): string {
+  const title = ctx?.bookTitle.trim();
+  const base = "你是 Deer 电子书阅读器的 AI 伴读助手，帮读者理解与讨论书的内容。回答基于工具取到的真实内容，拿不到就如实说明。";
+  if (!title) return base;
+  const identity = `你现在是《${title}》这本书的伴读助手。`;
+  const context = contextLine({ ...ctx, bookTitle: title });
+  return [base, identity, ...(context ? [context] : [])].join("\n");
+}

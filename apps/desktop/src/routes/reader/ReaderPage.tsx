@@ -10,7 +10,7 @@ import type {
   View as FoliateView,
 } from "@/vendor/foliate-js/view.js";
 import { Overlayer } from "@/vendor/foliate-js/overlayer.js";
-import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle } from "@/components/ai/ChatPanel";
+import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle, type QuickCommands } from "@/components/ai/ChatPanel";
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { AnnotationPanel } from "@/components/reader/AnnotationPanel";
 import { ConceptMapPanel } from "@/components/reader/ConceptMapPanel";
@@ -30,7 +30,12 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import {
   buildChapterSummaryPrompt,
   extractSectionText,
+  truncateChapterText,
 } from "@/lib/ai/chapterSummary";
+import {
+  extractBookTextFromView,
+  PAGE_SUMMARY_CHAR_LIMIT,
+} from "@/lib/ai/bookSummary";
 import { buildPrompt } from "@/lib/ai/readingContext";
 import {
   formatSelectionDraft,
@@ -44,6 +49,7 @@ import {
   makeBookFile,
   readingStyles,
 } from "@/lib/foliate";
+import { setReaderBridge } from "@/lib/ai/readerBridge";
 import { applyPaginatorLayout, paginatorLayoutFor } from "@/lib/pageLayout";
 import { toggleOverlayPair, type OverlayPair } from "./overlayPair";
 import { isTauri } from "@/lib/platform";
@@ -98,6 +104,9 @@ import {
 
 /** 宽窄窗断点（布局重排 v1）：目录/笔记面板 dock ↔ Sheet 切换共用。 */
 const WIDE_MEDIA_QUERY = "(min-width: 768px)";
+
+/** 触屏划选：selectionchange 防抖窗口，选区稳定这么久才弹菜单。 */
+const SELECTION_TOUCH_DEBOUNCE_MS = 400;
 
 /** foliate 的 paginator 实现 setStyles，但 Renderer 接口没有声明它。 */
 type StyleableRenderer = HTMLElement & {
@@ -229,6 +238,11 @@ export function ReaderPage() {
     isDesktop && bookId ? books.find((book) => book.id === bookId) : undefined;
 
   const [realPhase, setRealPhase] = useState<RealBookPhase>({ status: "loading" });
+  // AI 工具桥读取的 phase 镜像：effect 里不取 state，避免闭包过期。
+  const realPhaseRef = useRef<RealBookPhase>({ status: "loading" });
+  useEffect(() => {
+    realPhaseRef.current = realPhase;
+  }, [realPhase]);
   const [scrollProgress, setScrollProgress] = useState(0);
   const viewerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<FoliateView | null>(null);
@@ -308,6 +322,8 @@ export function ReaderPage() {
   // 章节总结用：relocate 时记录当前 spine section（TOC 的章可能跨多个 section，
   // v1 先总结当前 section，跨 section 章只总结当前一小节）。
   const currentSectionRef = useRef(0);
+  // relocate 是否上报了可见区 Range：页级快捷指令（当前页讲了什么）的可用性。
+  const [pageTextAvailable, setPageTextAvailable] = useState(false);
   // 已画到 foliate overlayer 上的 CFI：设置页「清空笔记」后按差集移除，
   // 让当前打开的书也不用刷新就消失。
   const drawnAnnotationCfisRef = useRef<Set<string>>(new Set());
@@ -319,7 +335,8 @@ export function ReaderPage() {
   );
 
   // 读当前 spine section 的可读正文；抽不出（图片书/空章节）返回 null。
-  const readCurrentSectionText = async (): Promise<string | null> => {
+  // 只依赖 ref，恒定引用，供快捷指令/概念地图/AI 工具桥共用。
+  const readCurrentSectionText = useCallback(async (): Promise<string | null> => {
     const view = viewRef.current;
     const section = view?.book.sections[currentSectionRef.current];
     if (!view || !section) return null;
@@ -331,7 +348,7 @@ export function ReaderPage() {
     } catch {
       return null;
     }
-  };
+  }, []);
 
   const askDeer = useCallback((text: string) => {
     const formatted = formatSelectionDraft(text);
@@ -341,6 +358,42 @@ export function ReaderPage() {
     viewRef.current?.deselect();
     setChatOpen(true);
   }, []);
+
+  // 快捷指令（B）：章节/全书走 foliate 抽文本，当前页用 relocate 上报的
+  // 可见区 Range。图片书（CBZ/PDF）没有可读正文：章节与全书置灰；
+  // 可见区暂时拿不到（固定布局未就绪等）时页级置灰。
+  const textCapable =
+    !shelfBook || (shelfBook.format !== "cbz" && shelfBook.format !== "pdf");
+  const quickCommands: QuickCommands = {
+    chapter: {
+      getText: readCurrentSectionText,
+      ...(textCapable
+        ? {}
+        : { available: false, unavailableReason: "该格式不支持" }),
+    },
+    book: {
+      getText: async () => {
+        const result = await extractBookTextFromView(viewRef.current);
+        return result?.text ?? null;
+      },
+      ...(textCapable
+        ? {}
+        : { available: false, unavailableReason: "该格式不支持" }),
+    },
+    ...(pageTextAvailable
+      ? {
+          page: {
+            getText: async () => {
+              const range = viewRef.current?.lastLocation?.range;
+              return range
+                ? truncateChapterText(range.toString(), PAGE_SUMMARY_CHAR_LIMIT)
+                    .text
+                : null;
+            },
+          },
+        }
+      : {}),
+  };
 
   // 复制走系统剪贴板；Tauri webview 是安全上下文，navigator.clipboard 可用。
   const copySelection = useCallback((text: string) => {
@@ -496,6 +549,8 @@ const copyAnnotationText = useCallback((text: string) => {
         .annotations[bookKey]?.find((a) => a.id === id);
       if (!annotation) return;
       useAnnotationStore.getState().remove(id);
+      // AI 笔记没有 CFI，不参与 foliate 高亮，只需移除存储。
+      if (!annotation.cfi) return;
       void viewRef.current
         ?.deleteAnnotation({ value: annotation.cfi })
         .catch(() => undefined);
@@ -573,7 +628,7 @@ const copyAnnotationText = useCallback((text: string) => {
   const updateAnnotationMenu = useCallback(
     (style: AnnotationStyle, color: string) => {
       const annotation = annotationMenu?.annotation;
-      if (!annotation || !bookKey) return;
+      if (!annotation || !bookKey || !annotation.cfi) return;
       useAnnotationStore.getState().setColor(annotation.id, color);
       useAnnotationStore.getState().setStyle(annotation.id, style);
       void viewRef.current
@@ -605,19 +660,12 @@ const copyAnnotationText = useCallback((text: string) => {
     setAnnotationMenu(null);
   }, [annotationMenu, deleteAnnotationById]);
 
-  // 总结当前 spine section：走 N1 的上下文注入，气泡里只显示「总结本章」。
+  // 总结当前 spine section：正文随消息发给云引擎，system 上下文由
+  // ChatPanel 统一组装，气泡里只显示「总结本章」。
   const summarizeCurrentSection = async () => {
     const text = await readCurrentSectionText();
     if (!text) return;
-    const prompt = buildPrompt(buildChapterSummaryPrompt(text).prompt, {
-      bookTitle: shelfBook?.title ?? "",
-      chapterTitle:
-        realPhase.status === "ready"
-          ? (realPhase.toc[realPhase.currentIndex]?.title ?? null)
-          : null,
-      progress: scrollProgress,
-    });
-    panelRef.current?.send(prompt, "总结本章");
+    panelRef.current?.send(buildChapterSummaryPrompt(text).prompt, "总结本章");
     setChatOpen(true);
   };
 
@@ -758,6 +806,7 @@ const copyAnnotationText = useCallback((text: string) => {
         }
       }
       currentSectionRef.current = section.current;
+      setPageTextAvailable(Boolean(detail.range));
       const fraction = clampProgress(detail.fraction as number);
       setScrollProgress(fraction);
       lastPositionRef.current = { progress: fraction, cfi: detail.cfi ?? null };
@@ -848,15 +897,18 @@ const copyAnnotationText = useCallback((text: string) => {
       const view = viewRef.current;
       if (!view) return;
       for (const a of useAnnotationStore.getState().listForBook(shelfBook.id)) {
+        // AI 笔记没有 CFI，画不到 foliate 上。
+        if (!a.cfi) continue;
+        const cfi = a.cfi;
         void view
           .addAnnotation({
-            value: a.cfi,
+            value: cfi,
             color: a.color,
             style: a.style,
             note: a.note,
           })
           .then(() => {
-            drawnAnnotationCfisRef.current.add(a.cfi);
+            drawnAnnotationCfisRef.current.add(cfi);
           })
           .catch(() => undefined);
       }
@@ -938,9 +990,32 @@ const copyAnnotationText = useCallback((text: string) => {
       };
       doc.addEventListener("pointerup", sync);
       doc.addEventListener("keyup", sync);
+      // 触屏划选（长按 / 拖选择手柄）期间 pointerup 在部分平台不触发或不
+      // 可靠，补 selectionchange 防抖一路：选区稳定 400ms 即弹菜单；选区
+      // 清空只取消挂起的防抖（收菜单仍靠 pointerup 即时路径）。桌面划选
+      // 两条路径并存，防抖晚到的 sync 读同一选区，行为不变。
+      let selectionDebounceTimer = 0;
+      const onSelectionChange = () => {
+        if (cancelled) return;
+        if (selectionDebounceTimer) {
+          window.clearTimeout(selectionDebounceTimer);
+          selectionDebounceTimer = 0;
+        }
+        const sel = doc.getSelection();
+        if (!sel || sel.isCollapsed) return;
+        selectionDebounceTimer = window.setTimeout(() => {
+          selectionDebounceTimer = 0;
+          sync();
+        }, SELECTION_TOUCH_DEBOUNCE_MS);
+      };
+      doc.addEventListener("selectionchange", onSelectionChange);
       docCleanups.push(() => {
         doc.removeEventListener("pointerup", sync);
         doc.removeEventListener("keyup", sync);
+        if (selectionDebounceTimer) {
+          window.clearTimeout(selectionDebounceTimer);
+        }
+        doc.removeEventListener("selectionchange", onSelectionChange);
       });
       // 脚注/尾注悬浮预览（仅 EPUB）：与划选菜单互不干扰——mousedown 收
       // 卡片在 foliate 链接跳转前发生，划选链路不经过悬浮状态。
@@ -977,6 +1052,74 @@ const copyAnnotationText = useCallback((text: string) => {
         view.addEventListener("show-annotation", onShowAnnotation);
         element = view;
         viewRef.current = view;
+
+        // AI 工具桥：目录/当前章文本/跳转/书内搜索交给云引擎的工具层，
+        // 换书或离开阅读页时摘除（桥不在时对应工具自行降级）。
+        setReaderBridge({
+          bookId: bookKey,
+          getToc: () => bookToc(view.book),
+          getCurrentChapterTitle: async () => {
+            const phase = realPhaseRef.current;
+            return phase.status === "ready"
+              ? (phase.toc[phase.currentIndex]?.title ?? null)
+              : null;
+          },
+          getCurrentChapterText: readCurrentSectionText,
+          jumpTo: async (cfi) => {
+            try {
+              await viewRef.current?.goTo(cfi);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          jumpToTocIndex: async (index) => {
+            const current = viewRef.current;
+            const item = current ? bookToc(current.book)[index] : undefined;
+            if (!current || !item) return false;
+            try {
+              await current.goTo(item.href);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          searchInBook: async (query) => {
+            const current = viewRef.current;
+            if (!current) return [];
+            const matches: { cfi: string; excerpt: string }[] = [];
+            try {
+              for await (const result of current.search({
+                query,
+                matchCase: false,
+                matchDiacritics: false,
+                matchWholeWords: false,
+                // draw 返回空 <g>：既不画（不污染高亮层），又满足
+                // Overlayer 契约——add 会 append 返回值，remove 会
+                // removeChild，返回 undefined 会让下一次 clearSearch 抛
+                // TypeError，书内搜索从第二次起恒空。
+                draw: () =>
+                  document.createElementNS(
+                    "http://www.w3.org/2000/svg",
+                    "g",
+                  ) as SVGElement,
+              })) {
+                if (typeof result === "string") break; // 'done'
+                if ("cfi" in result && typeof result.cfi === "string") {
+                  matches.push({
+                    cfi: result.cfi,
+                    excerpt: String(result.excerpt ?? ""),
+                  });
+                }
+                // 桥层硬上限（工具层还会再裁剪），防大书全量命中撑爆上下文。
+                if (matches.length >= 50) break;
+              }
+            } catch {
+              // 搜索失败按空结果处理，工具层再向模型说明。
+            }
+            return matches;
+          },
+        });
 
         await view.open(file);
         if (cancelled) return;
@@ -1054,6 +1197,7 @@ const copyAnnotationText = useCallback((text: string) => {
       noteHandles.forEach((handle) => handle.dispose());
       noteHandles.clear();
       noteRuntimeRef.current = null;
+      setReaderBridge(null);
       element?.close();
       element?.remove();
       viewRef.current = null;
@@ -1066,6 +1210,7 @@ const copyAnnotationText = useCallback((text: string) => {
     showNotePeek,
     fadeNotePeek,
     turnPage,
+    readCurrentSectionText,
   ]);
 
   // 阅读设置注入真实 EPUB 正文（demo 模式走 ReaderArticle 的 style）。
@@ -1217,6 +1362,7 @@ const copyAnnotationText = useCallback((text: string) => {
         onToggleConceptMap={toggleConceptMap}
         onCloseConceptMap={closeConceptMap}
         getChapterText={readCurrentSectionText}
+        quickCommands={quickCommands}
         onClosePanel={() => setChatOpen(false)}
       />
     );
@@ -1313,6 +1459,7 @@ type RealReaderProps = {
   onToggleConceptMap: () => void;
   onCloseConceptMap: () => void;
   getChapterText: () => Promise<string | null>;
+  quickCommands: QuickCommands;
   onClosePanel: () => void;
 };
 
@@ -1374,6 +1521,7 @@ function RealReader({
   onToggleConceptMap,
   onCloseConceptMap,
   getChapterText,
+  quickCommands,
   onClosePanel,
 }: RealReaderProps) {
   const tocEntries: ReaderTocEntry[] =
@@ -1494,8 +1642,8 @@ function RealReader({
               ) : null}
               {/* 正文渲染在 foliate 的 iframe 里，点击不会冒泡到父文档，
                   所以边缘翻页靠这两个透明捕获层接住。 */}
-              <div className="absolute inset-y-0 left-0 w-[15%]" aria-hidden="true" />
-              <div className="absolute inset-y-0 right-0 w-[15%]" aria-hidden="true" />
+              <div className="absolute inset-y-0 left-0 w-[15%] max-[819px]:w-[8%]" aria-hidden="true" />
+              <div className="absolute inset-y-0 right-0 w-[15%] max-[819px]:w-[8%]" aria-hidden="true" />
               <QuickSettingsPanel
                 open={quickSettingsOpen}
                 immediate={quickSettingsImmediate}
@@ -1561,6 +1709,7 @@ function RealReader({
                   closing={notePeekClosing}
                   onPointerEnter={onCancelNoteScheduledClose}
                   onPointerLeave={onCloseNotePeek}
+                  onTapClose={onCloseNotePeek}
                 />
               ) : null}
               {annotationMenu ? (
@@ -1616,7 +1765,7 @@ function RealReader({
             </div>
 
             <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
-              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
+              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums max-[819px]:hidden">
                 第 {currentIndex + 1} / {Math.max(tocEntries.length, 1)} 章
                 {phase.status === "ready" && phase.toc[currentIndex]
                   ? ` · ${phase.toc[currentIndex].title}`
@@ -1643,6 +1792,7 @@ function RealReader({
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="max-[819px]:size-11"
                     aria-label="上一页"
                     onClick={() => onPageTurn("prev")}
                   >
@@ -1651,6 +1801,7 @@ function RealReader({
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="max-[819px]:size-11"
                     aria-label="下一页"
                     onClick={() => onPageTurn("next")}
                   >
@@ -1678,6 +1829,7 @@ function RealReader({
         onClose={onClosePanel}
         open={chatOpen}
         onSummarizeChapter={onSummarizeChapter}
+        quickCommands={quickCommands}
         // 与书架页统一为嵌入式停靠：占主区右侧宽度推挤正文，常驻不因点外收起。
       />
     </div>
@@ -1749,6 +1901,16 @@ function DemoReader({
     );
     panelRef.current?.send(prompt, "总结本章");
     onOpenPanel();
+  };
+
+  // 快捷指令（B）：演示书没有 foliate view，章节/全书直接拼段落；
+  // 滚动流没有「当前页」概念，不提供页级指令。
+  const quickCommands: QuickCommands = {
+    chapter: { getText: async () => chapter.paragraphs.join("\n\n") },
+    book: {
+      getText: async () =>
+        book.chapters.map((c) => c.paragraphs.join("\n\n")).join("\n\n"),
+    },
   };
 
   // 换章回到开头：新正文从头读，进度条归零（状态在切换时同步重置，避免 effect 里 setState）。
@@ -1918,7 +2080,7 @@ function DemoReader({
             </div>
 
             <footer className="border-border bg-background flex h-9 shrink-0 items-center gap-3 border-t px-4">
-              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums">
+              <span className="text-muted-foreground max-w-[40%] shrink-0 truncate text-xs tabular-nums max-[819px]:hidden">
                 第 {chapterIndex + 1} / {chapterCount} 章 · {chapter.title}
               </span>
               <div
@@ -1955,6 +2117,7 @@ function DemoReader({
         onClose={onClosePanel}
         open={chatOpen}
         onSummarizeChapter={summarizeChapter}
+        quickCommands={quickCommands}
         // 与书架页统一为嵌入式停靠：占主区右侧宽度推挤正文，常驻不因点外收起。
       />
     </div>

@@ -40,6 +40,9 @@ export function AIPanelLauncher() {
       // 打开后常驻（点面板外/Esc 不收起），只有面板内关闭按钮能收。
       onExited={() => setMounted(false)}
       onClose={() => setOpen(false)}
+      // 书架没有章节/页概念，只露「这本书说了什么？」；书架不打开书文件，
+      // 一期只发问题本身（N1 上下文带书名，桌面端 AI 可借书架 MCP 作答）。
+      quickCommands={{ book: {} }}
     />
   );
 }

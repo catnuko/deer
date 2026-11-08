@@ -8,7 +8,7 @@ vi.stubGlobal("localStorage", {
   removeItem: (key: string) => void memory.delete(key),
 });
 
-const { useAnnotationStore } = await import("./annotationStore");
+const { AI_NOTE_COLOR, useAnnotationStore } = await import("./annotationStore");
 
 function reset() {
   memory.clear();
@@ -179,5 +179,57 @@ describe("划选注解持久化（按书隔离，CFI 定位）", () => {
     await new Promise((r) => setTimeout(r, 0));
     const parsed = JSON.parse(memory.get("deer.annotations.v1") as string);
     expect(parsed.annotations).toEqual({});
+  });
+
+  it("AI 笔记：不带 CFI、带 source=ai，与人工划线同库存放", () => {
+    useAnnotationStore.getState().add({
+      bookId: "book-a",
+      cfi: "epubcfi(/6/4!/4/2)",
+      color: "#FFD60A",
+      excerpt: "人工划线",
+    });
+    useAnnotationStore.getState().add({
+      bookId: "book-a",
+      color: AI_NOTE_COLOR,
+      excerpt: "这个章节讲了什么？",
+      note: "本章总结了……",
+      source: "ai",
+    });
+
+    const list = useAnnotationStore.getState().listForBook("book-a");
+    expect(list).toHaveLength(2);
+    const ai = list[0]!;
+    expect(ai.cfi).toBeUndefined();
+    expect(ai.source).toBe("ai");
+    expect(ai.note).toBe("本章总结了……");
+    expect(list[1]!.source).toBeUndefined();
+    expect(list[1]!.cfi).toBe("epubcfi(/6/4!/4/2)");
+  });
+
+  it("旧数据无 source 字段：load 后按人工划线处理，不迁移", async () => {
+    memory.set(
+      "deer.annotations.v1",
+      JSON.stringify({
+        annotations: {
+          "book-a": [
+            {
+              id: "anno_old",
+              cfi: "epubcfi(/6/4!/4/2)",
+              color: "#FFD60A",
+              note: "旧笔记",
+              createdAt: 1700000000000,
+            },
+          ],
+        },
+        ready: true,
+      }),
+    );
+
+    await useAnnotationStore.getState().load();
+
+    const list = useAnnotationStore.getState().listForBook("book-a");
+    expect(list).toHaveLength(1);
+    expect(list[0]!.source).toBeUndefined();
+    expect(list[0]!.note).toBe("旧笔记");
   });
 });

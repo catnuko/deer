@@ -5,7 +5,9 @@ import { NotePeekCard } from "./NotePeekCard";
 
 afterEach(cleanup);
 
-function renderCard(overrides: { closing?: boolean } = {}) {
+function renderCard(
+  overrides: { closing?: boolean; onTapClose?: () => void } = {},
+) {
   const container = document.createElement("div");
   document.body.append(container);
   const containerRef = { current: container };
@@ -37,5 +39,23 @@ describe("NotePeekCard", () => {
     expect(card.className).toContain("pointer-events-none");
     expect(card.className).not.toContain("deer-pop-in");
     expect(card.className).not.toContain("translate");
+  });
+
+  it("触屏下点卡片自身收起（onTapClose）", () => {
+    const spy = vi
+      .spyOn(window, "matchMedia")
+      .mockReturnValue({ matches: true } as unknown as MediaQueryList);
+    const onTapClose = vi.fn();
+    const card = renderCard({ onTapClose });
+    card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onTapClose).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("桌面点卡片无操作（收起靠悬浮时间窗）", () => {
+    const onTapClose = vi.fn();
+    const card = renderCard({ onTapClose });
+    card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onTapClose).not.toHaveBeenCalled();
   });
 });

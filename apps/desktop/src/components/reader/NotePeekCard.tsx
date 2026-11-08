@@ -41,6 +41,7 @@ export function NotePeekCard({
   closing = false,
   onPointerEnter,
   onPointerLeave,
+  onTapClose,
 }: {
   anchor: AnchorRect;
   text: string;
@@ -50,8 +51,16 @@ export function NotePeekCard({
   closing?: boolean;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
+  /** 触屏下点卡片自身收起（触屏没有「移进卡片」的时间窗）。 */
+  onTapClose?: () => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  // 挂载时判定一次即可：阅读会话中途指针能力不会变。
+  const [touch] = useState(
+    () =>
+      window.matchMedia?.("(hover: none) and (pointer: coarse)")?.matches ??
+      false,
+  );
   const [measured, setMeasured] = useState<{
     width: number;
     height: number;
@@ -108,8 +117,12 @@ export function NotePeekCard({
       }}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
-      // 别让卡片上的点击/滚轮冒泡到正文容器的边缘翻页层。
-      onClick={(event) => event.stopPropagation()}
+      // 别让卡片上的点击/滚轮冒泡到正文容器的边缘翻页层；触屏下点卡片
+      // 自身即收起（桌面点卡片无操作，靠悬浮时间窗维持）。
+      onClick={(event) => {
+        event.stopPropagation();
+        if (touch) onTapClose?.();
+      }}
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >

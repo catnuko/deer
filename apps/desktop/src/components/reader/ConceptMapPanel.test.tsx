@@ -3,13 +3,15 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/ai/claudeBackend", () => ({
-  CLAUDE_CHUNK_EVENT: "claude://chunk",
-  isTauriRuntime: vi.fn(() => false),
-  acpxChat: vi.fn(),
+vi.mock("@/lib/ai/cloudEngine", () => ({
+  runCloudOnce: vi.fn(),
+}));
+vi.mock("@/lib/platform", () => ({
+  isTauri: vi.fn(() => false),
 }));
 
-const { isTauriRuntime, acpxChat } = await import("@/lib/ai/claudeBackend");
+const { isTauri } = await import("@/lib/platform");
+const { runCloudOnce } = await import("@/lib/ai/cloudEngine");
 const { ConceptMapPanel } = await import("./ConceptMapPanel");
 const { useConceptMapStore } = await import("@/store/conceptMapStore");
 
@@ -42,8 +44,8 @@ function resetStore() {
 beforeEach(() => {
   localStorage.clear();
   resetStore();
-  vi.mocked(isTauriRuntime).mockReturnValue(false);
-  vi.mocked(acpxChat).mockReset();
+  vi.mocked(isTauri).mockReturnValue(false);
+  vi.mocked(runCloudOnce).mockReset();
   PROPS.getChapterText.mockClear();
   PROPS.onClose.mockClear();
 });
@@ -125,12 +127,11 @@ describe("ConceptMapPanel", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("桌面端生成：claude 输出解析成功后渲染并落缓存", async () => {
-    vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(acpxChat).mockResolvedValue({
-      text: `好的，这是地图：\n\`\`\`json\n${MODEL_JSON}\n\`\`\``,
-      sessionId: "s1",
-    });
+  it("桌面端生成：模型输出解析成功后渲染并落缓存", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(runCloudOnce).mockResolvedValue(
+      `好的，这是地图：\n\`\`\`json\n${MODEL_JSON}\n\`\`\``,
+    );
     const user = userEvent.setup();
     render(<ConceptMapPanel {...PROPS} />);
     await user.click(screen.getByRole("button", { name: "生成本章概念地图" }));
@@ -138,9 +139,11 @@ describe("ConceptMapPanel", () => {
     await eventually(() =>
       expect(screen.getByTestId("concept-map-svg")).toHaveTextContent("记忆"),
     );
-    expect(acpxChat).toHaveBeenCalledTimes(1);
-    // prompt 带 N1 上下文行和章节全文。
-    const call = vi.mocked(acpxChat).mock.calls[0]![0]!;
+    expect(runCloudOnce).toHaveBeenCalledTimes(1);
+    // system 带书名与章节，prompt 带上下文行和章节全文。
+    const call = vi.mocked(runCloudOnce).mock.calls[0]![0]!;
+    expect(call.system).toContain("《三体》");
+    expect(call.system).toContain("第三章");
     expect(call.prompt).toContain("《三体》");
     expect(call.prompt).toContain("章节全文");
     expect(
@@ -152,7 +155,7 @@ describe("ConceptMapPanel", () => {
   });
 
   it("桌面端兜底：抽不出章节正文时显示错误与重试，不落缓存", async () => {
-    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(isTauri).mockReturnValue(true);
     const user = userEvent.setup();
     render(
       <ConceptMapPanel
@@ -166,19 +169,19 @@ describe("ConceptMapPanel", () => {
       expect(screen.getByText(/没有可读正文/)).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
-    expect(acpxChat).not.toHaveBeenCalled();
+    expect(runCloudOnce).not.toHaveBeenCalled();
     expect(useConceptMapStore.getState().get("book-1", "sec:3")).toBeUndefined();
   });
 
   it.each([
-    ["模型输出解析失败", { text: "模型答非所问", sessionId: "s1" }, /解析失败/],
-    ["claude 调用报错", new Error("连接断了"), /生成失败/],
+    ["模型输出解析失败", "模型答非所问", /解析失败/],
+    ["模型调用报错", new Error("连接断了"), /生成失败/],
   ])("桌面端兜底：%s 时显示错误与重试，不落缓存", async (_name, result, errorText) => {
-    vi.mocked(isTauriRuntime).mockReturnValue(true);
+    vi.mocked(isTauri).mockReturnValue(true);
     if (result instanceof Error) {
-      vi.mocked(acpxChat).mockRejectedValue(result);
+      vi.mocked(runCloudOnce).mockRejectedValue(result);
     } else {
-      vi.mocked(acpxChat).mockResolvedValue(result);
+      vi.mocked(runCloudOnce).mockResolvedValue(result);
     }
     const user = userEvent.setup();
     render(<ConceptMapPanel {...PROPS} />);
@@ -196,11 +199,8 @@ describe("ConceptMapPanel", () => {
       nodes: [{ id: "n1", label: "旧地图" }],
       edges: [],
     });
-    vi.mocked(isTauriRuntime).mockReturnValue(true);
-    vi.mocked(acpxChat).mockResolvedValue({
-      text: "解析不了",
-      sessionId: "s1",
-    });
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(runCloudOnce).mockResolvedValue("解析不了");
     const user = userEvent.setup();
     render(<ConceptMapPanel {...PROPS} />);
     await eventually(() =>

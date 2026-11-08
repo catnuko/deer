@@ -8,8 +8,8 @@ import type { AnnotationStyle } from "@/components/reader/highlightColors";
 
 export type StoredAnnotation = {
   id: string;
-  /** foliate CFI，回显与点击命中的 key。 */
-  cfi: string;
+  /** foliate CFI，回显与点击命中的 key；AI 笔记没有原文定位，缺省。 */
+  cfi?: string;
   /** 高亮色值（highlightColors 的 value）。 */
   color: string;
   /** 划线样式；旧数据无此字段，渲染层按 marker 处理。 */
@@ -17,8 +17,16 @@ export type StoredAnnotation = {
   /** 划选时的文本摘录，编辑菜单与后续引用用。 */
   excerpt?: string;
   note?: string;
+  /** 笔记来源；缺省按人工划线/笔记处理。 */
+  source?: "ai";
   createdAt: number;
 };
+
+/** AI 笔记没有划线颜色，渲染层用这个中性色占位。 */
+export const AI_NOTE_COLOR = "#94A3B8";
+
+/** AI 笔记在列表里的徽标文案。 */
+export const AI_NOTE_LABEL = "AI";
 
 type AnnotationState = {
   /** bookId -> 该书的注解（新加的在前）。 */
@@ -31,11 +39,12 @@ export type AnnotationStore = AnnotationState & {
   listForBook(bookId: string): StoredAnnotation[];
   add(input: {
     bookId: string;
-    cfi: string;
+    cfi?: string;
     color: string;
     style?: AnnotationStyle;
     excerpt?: string;
     note?: string;
+    source?: "ai";
   }): StoredAnnotation;
   setColor(id: string, color: string): void;
   setStyle(id: string, style: AnnotationStyle): void;
@@ -127,14 +136,15 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => {
       return get().annotations[bookId] ?? [];
     },
 
-    add({ bookId, cfi, color, style, excerpt, note }) {
+    add({ bookId, cfi, color, style, excerpt, note, source }) {
       const annotation: StoredAnnotation = {
         id: id(),
-        cfi,
+        ...(cfi ? { cfi } : {}),
         color,
         ...(style ? { style } : {}),
         ...(excerpt ? { excerpt } : {}),
         ...(note ? { note } : {}),
+        ...(source ? { source } : {}),
         createdAt: Date.now(),
       };
       set((s) => ({

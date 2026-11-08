@@ -132,10 +132,17 @@ a[data-papr-note]:hover {
 }
 `
     : "";
+  // 触屏：压掉 iOS 长按弹出的系统级菜单（拷贝/查询），避免与自家的
+  // 划选菜单叠加；只动 touch-callout，不碰 user-select（选择手柄必须保留）。
+  const touchCallout = `
+@media (hover: none) and (pointer: coarse) {
+  body, body * { -webkit-touch-callout: none; }
+}
+`;
   return `
 ${paper}${darkPaper}html { font-size: ${fontSize}px !important; }
 body, p, div, span { line-height: ${lineHeight} !important; }
-${fontFamily}${pageMargin}${footnote}`;
+${fontFamily}${pageMargin}${footnote}${touchCallout}`;
 }
 
 export type ImportedMetadata = {

@@ -60,7 +60,7 @@ describe("SettingsDialog", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "AI 伴读" }));
-    expect(screen.getByText("AI 伴读引擎")).toBeInTheDocument();
+    expect(screen.getByText("AI 云引擎")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "数据" }));
     expect(screen.getByText("存储概况")).toBeInTheDocument();

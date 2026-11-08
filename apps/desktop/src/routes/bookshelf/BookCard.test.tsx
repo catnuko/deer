@@ -97,9 +97,32 @@ describe("BookCard", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "阅读《三体》" }));
+    await user.click(screen.getByRole("button", { name: "打开《三体》详情" }));
     expect(onOpen).toHaveBeenCalledOnce();
     expect(onOpen).toHaveBeenCalledWith(book);
+  });
+
+  it("菜单里点「阅读」优先走 onRead（直达阅读页），点封面仍走 onOpen", async () => {
+    const onOpen = vi.fn();
+    const onRead = vi.fn();
+    const book = makeBook();
+    const user = userEvent.setup();
+    render(
+      <BookCard
+        book={book}
+        shelves={[]}
+        onOpen={onOpen}
+        onRead={onRead}
+        onToggleShelf={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "《三体》更多操作" }));
+    await user.click(await screen.findByText("阅读"));
+    expect(onRead).toHaveBeenCalledOnce();
+    expect(onRead).toHaveBeenCalledWith(book);
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it("阅读进度大于 0 时显示进度条", () => {
