@@ -19,9 +19,15 @@ import {
   buildPageSummaryPrompt,
 } from "@/lib/ai/bookSummary";
 import { buildChapterSummaryPrompt } from "@/lib/ai/chapterSummary";
+import { acpxChat, acpxEnvCheck } from "@/lib/ai/claudeBackend";
+import {
+  localUnavailableError,
+  resolveEngine,
+} from "@/lib/ai/engineRouter";
 import { runCloudChat } from "@/lib/ai/cloudEngine";
 import { isTauri } from "@/lib/platform";
 import { useAppSettings } from "@/store/appSettings";
+import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -346,6 +352,7 @@ function Composer({
   onQuickSend: (kind: keyof QuickCommands) => void;
   quickSendDisabled: boolean;
 }) {
+  const aiEngineMode = useAppSettings((s) => s.aiEngineMode);
   return (
     <ComposerPrimitive.Root className="border-border bg-background border-t p-3">
       {quickCommands ? (
@@ -368,9 +375,13 @@ function Composer({
         </ComposerPrimitive.Send>
       </div>
       <p className="text-muted-foreground mt-2 text-[11px]">
-        {isTauri()
-          ? "回复由云 API 模型生成；是否输出思考过程由所选模型决定。"
-          : "未接入后端（浏览器预览），发送后返回的是本地演示回复。"}
+        {!isTauri()
+          ? "未接入后端（浏览器预览），发送后返回的是本地演示回复。"
+          : aiEngineMode === "cloud"
+            ? "回复由云 API 模型生成；是否输出思考过程由所选模型决定。"
+            : aiEngineMode === "local"
+              ? "回复由你本机的 Claude Code 生成，深度思考常开，仅在本机运行。"
+              : "本机引擎可用时走本地 Claude Code，否则自动改走云 API 模型。"}
       </p>
     </ComposerPrimitive.Root>
   );
@@ -541,6 +552,12 @@ export function ChatPanel({
   // 运行时环境整个会话不会变，取一次即可。
   const [tauri] = useState(() => isTauri());
   const aiModel = useAppSettings((s) => s.aiModel);
+  const aiEngineMode = useAppSettings((s) => s.aiEngineMode);
+  // acpx 环境自检：进入聊天即查，结果决定 auto 模式走向与本地链路的提示；
+  // 失败只提示不拦发送（Rust 侧 acpx_chat 自带同样的检查与指引）。
+  const { status: envStatus } = useAcpxEnvStatus(tauri);
+  // 徽标/说明按当前路由结果展示（auto 下随环境自检结果切换）。
+  const displayEngine = resolveEngine(aiEngineMode, envStatus?.ok ?? null);
 
   useEffect(() => {
     if (!ready) void load();
@@ -596,15 +613,26 @@ export function ChatPanel({
         return;
       }
 
-      // 云引擎（AI SDK agent 循环）：桌面 / Android / iOS 通吃，
-      // 工具由 Deer 原生提供；流式增量与原链路回调同构。
+      // 引擎路由：云引擎（AI SDK agent 循环）桌面/Android/iOS 通吃；
+      // 本地走 acpx 连接层（会话按线程命名，acpx 负责跨进程恢复）。
+      // auto 下自检未完成时现查一次（PATH 探测，毫秒级）再决定。
       const assistant = appendMessage(threadId, "assistant", "");
+      const state = useChatStore.getState();
       try {
-        const result = await runCloudChat({
-          system: buildSystemPrompt(ctxRef.current ?? { bookTitle: book.title }),
-          prompt: claudePrompt,
-          history,
-          callbacks: {
+        const localAvailable =
+          aiEngineMode === "local"
+            ? true
+            : aiEngineMode === "cloud"
+              ? false
+              : (envStatus?.ok ?? (await acpxEnvCheck()).ok);
+        const engine = resolveEngine(aiEngineMode, localAvailable);
+        if (engine === "local") {
+          if (envStatus && !envStatus.ok) throw localUnavailableError(envStatus);
+          const result = await acpxChat({
+            prompt: claudePrompt,
+            messageId: assistant.id,
+            threadId,
+            resumeSessionId: state.acpxSessionByThread[threadId] ?? null,
             onDelta: (delta) => {
               useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
             },
@@ -618,16 +646,42 @@ export function ChatPanel({
                 .getState()
                 .appendToMessageBooks(threadId, assistant.id, books);
             },
-          },
-        });
-        // 以累计正文落库（含持久化）；空回复兜底一句可读提示。
-        useChatStore
-          .getState()
-          .setMessageContent(
-            threadId,
-            assistant.id,
-            result.text || "（模型没有返回内容，请重试。）",
-          );
+          });
+          state.setAcpxSession(threadId, result.sessionId);
+          // 以 Rust 侧累计的完整正文为准落库（含持久化）。
+          useChatStore
+            .getState()
+            .setMessageContent(threadId, assistant.id, result.text);
+        } else {
+          const result = await runCloudChat({
+            system: buildSystemPrompt(ctxRef.current ?? { bookTitle: book.title }),
+            prompt: claudePrompt,
+            history,
+            callbacks: {
+              onDelta: (delta) => {
+                useChatStore.getState().appendToMessage(threadId, assistant.id, delta);
+              },
+              onThoughtDelta: (delta) => {
+                useChatStore
+                  .getState()
+                  .appendToMessageThinking(threadId, assistant.id, delta);
+              },
+              onBooks: (books) => {
+                useChatStore
+                  .getState()
+                  .appendToMessageBooks(threadId, assistant.id, books);
+              },
+            },
+          });
+          // 以累计正文落库（含持久化）；空回复兜底一句可读提示。
+          useChatStore
+            .getState()
+            .setMessageContent(
+              threadId,
+              assistant.id,
+              result.text || "（模型没有返回内容，请重试。）",
+            );
+        }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         useChatStore
@@ -638,7 +692,7 @@ export function ChatPanel({
         setReplying(false);
       }
     },
-    [appendMessage, book.id, book.title, currentThreadId, tauri],
+    [aiEngineMode, appendMessage, book.id, book.title, currentThreadId, envStatus, tauri],
   );
 
   const send = useCallback(
@@ -796,7 +850,11 @@ export function ChatPanel({
           </p>
         </div>
         <Badge variant="secondary" className="mt-1 shrink-0 text-[11px] max-[819px]:hidden">
-          {tauri ? `云引擎 · ${aiModel.trim() || "未配置模型"}` : "未接后端（浏览器预览）"}
+          {!tauri
+            ? "未接后端（浏览器预览）"
+            : displayEngine === "local"
+              ? "acpx · Claude"
+              : `云引擎 · ${aiModel.trim() || "未配置模型"}`}
         </Badge>
         {onSummarizeChapter ? (
           <Button
@@ -830,13 +888,26 @@ export function ChatPanel({
       </header>
 
       <div className="bg-secondary/60 text-secondary-foreground border-border border-b px-4 py-2 text-[11px] leading-relaxed">
-        {tauri ? (
-          <p data-testid="cloud-engine-note" className="text-muted-foreground">
-            {`回复由云 API 模型（${aiModel.trim() || "未配置模型"}）生成，书籍、对话与 API Key 都留在本机。未配置 Key 时发送会提示前往设置填写。`}
-          </p>
-        ) : (
+        {!tauri ? (
           <p className="text-muted-foreground">
             浏览器预览：没有 Tauri 后端，回复是写死的占位文本，不会联网。
+          </p>
+        ) : displayEngine === "local" ? (
+          <p
+            data-testid="acpx-env-note"
+            className={cn(
+              envStatus && !envStatus.ok ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {envStatus
+              ? envStatus.ok
+                ? "acpx 连接层：会话由 acpx 管理，每个会话线程独立命名并跨进程恢复，深度思考常开。"
+                : envStatus.message
+              : "正在检查 acpx 环境…"}
+          </p>
+        ) : (
+          <p data-testid="cloud-engine-note" className="text-muted-foreground">
+            {`回复由云 API 模型（${aiModel.trim() || "未配置模型"}）生成，书籍、对话与 API Key 都留在本机。未配置 Key 时发送会提示前往设置填写。`}
           </p>
         )}
       </div>

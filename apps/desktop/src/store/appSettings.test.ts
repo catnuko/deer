@@ -46,6 +46,8 @@ describe("appSettings store", () => {
     ).toEqual({
       startupView: "bookshelf",
       bookshelfSort: "recent",
+      aiEngine: "claude",
+      aiEngineMode: "auto",
       aiProvider: "openai-compatible",
       aiBaseUrl: DEFAULT_APP_SETTINGS.aiBaseUrl,
       aiModel: DEFAULT_APP_SETTINGS.aiModel,
@@ -53,40 +55,52 @@ describe("appSettings store", () => {
     });
   });
 
-  it("v3 旧数据迁移：丢弃 aiEngine，云引擎字段保留/补默认", () => {
+  it("v4 旧数据迁移：aiEngine/aiEngineMode 补默认，云引擎字段保留", () => {
     const migrate = useAppSettings.persist.getOptions().migrate;
     const migrated = migrate?.(
       {
         startupView: "continue",
         bookshelfSort: "title",
-        aiEngine: "claude",
+        aiProvider: "anthropic",
+        aiApiKey: "k",
+      },
+      4,
+    ) as Record<string, unknown>;
+    expect(migrated.startupView).toBe("continue");
+    expect(migrated.bookshelfSort).toBe("title");
+    expect(migrated.aiEngine).toBe("claude");
+    expect(migrated.aiEngineMode).toBe("auto");
+    expect(migrated.aiProvider).toBe("anthropic");
+    expect(migrated.aiApiKey).toBe("k");
+  });
+
+  it("v3 旧数据迁移：aiEngine 保留、云引擎字段补默认", () => {
+    const migrate = useAppSettings.persist.getOptions().migrate;
+    const migrated = migrate?.(
+      {
+        startupView: "continue",
+        bookshelfSort: "title",
+        aiEngine: "codex",
         aiApiKey: "k",
       },
       3,
     ) as Record<string, unknown>;
     expect(migrated.startupView).toBe("continue");
     expect(migrated.bookshelfSort).toBe("title");
-    expect(migrated.aiEngine).toBeUndefined();
+    expect(migrated.aiEngine).toBe("codex");
+    expect(migrated.aiEngineMode).toBe("auto");
     expect(migrated.aiProvider).toBe("openai-compatible");
     expect(migrated.aiApiKey).toBe("k");
   });
 
-  it("v2 旧数据迁移补上云引擎默认值并丢弃 aiEngine", () => {
+  it("非法 aiEngine/aiEngineMode 回落默认", () => {
     const migrate = useAppSettings.persist.getOptions().migrate;
     const migrated = migrate?.(
-      {
-        startupView: "continue",
-        bookshelfSort: "title",
-        aiEngine: "claude",
-      },
-      2,
+      { aiEngine: "not-an-engine", aiEngineMode: "magic" },
+      5,
     ) as Record<string, unknown>;
-    expect(migrated.startupView).toBe("continue");
-    expect(migrated.bookshelfSort).toBe("title");
-    expect(migrated.aiEngine).toBeUndefined();
-    expect(migrated.aiProvider).toBe("openai-compatible");
-    expect(migrated.aiModel).toBe(DEFAULT_APP_SETTINGS.aiModel);
-    expect(migrated.aiApiKey).toBe("");
+    expect(migrated.aiEngine).toBe("claude");
+    expect(migrated.aiEngineMode).toBe("auto");
   });
 
   it("选项守卫只认预设值", () => {

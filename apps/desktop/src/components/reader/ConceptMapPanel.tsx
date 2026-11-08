@@ -9,8 +9,11 @@ import {
   type ConceptMapData,
 } from "@/lib/ai/conceptMap";
 import { buildPrompt } from "@/lib/ai/readingContext";
+import { acpxChat, acpxEnvCheck } from "@/lib/ai/claudeBackend";
+import { resolveEngine } from "@/lib/ai/engineRouter";
 import { runCloudOnce } from "@/lib/ai/cloudEngine";
 import { isTauri } from "@/lib/platform";
+import { useAppSettings } from "@/store/appSettings";
 import { useConceptMapStore } from "@/store/conceptMapStore";
 import { cn } from "@/lib/utils";
 
@@ -129,13 +132,32 @@ export function ConceptMapPanel({
           chapterTitle,
           progress: null,
         });
-        // 概念地图不走聊天面板：一次性生成（无工具、无历史），
+        // 概念地图不走聊天面板：一次性生成（无历史）。引擎先路由——
+        // 本地经 acpx 开「书 + 章」稳定命名的新会话；云走 runCloudOnce，
         // system 与上下文都压在 prompt 里（沿用 N1 的 buildPrompt）。
-        const text = await runCloudOnce({
-          system: `你是电子书伴读助手，为《${bookTitle}》${chapterTitle ? `的「${chapterTitle}」章节` : ""}生成概念地图。`,
-          prompt,
-        });
-        data = parseConceptMap(text);
+        const mode = useAppSettings.getState().aiEngineMode;
+        const localAvailable =
+          mode === "local"
+            ? true
+            : mode === "cloud"
+              ? false
+              : (await acpxEnvCheck()).ok;
+        if (resolveEngine(mode, localAvailable) === "local") {
+          const result = await acpxChat({
+            prompt,
+            messageId: `conceptmap_${Date.now()}`,
+            threadId: `conceptmap-${bookId}-${chapterKey}`,
+            resumeSessionId: null,
+            onDelta: () => undefined,
+          });
+          data = parseConceptMap(result.text);
+        } else {
+          const text = await runCloudOnce({
+            system: `你是电子书伴读助手，为《${bookTitle}》${chapterTitle ? `的「${chapterTitle}」章节` : ""}生成概念地图。`,
+            prompt,
+          });
+          data = parseConceptMap(text);
+        }
         if (!data) {
           setPhase({
             status: "error",
@@ -360,7 +382,9 @@ export function ConceptMapPanel({
         ) : (
           <p>
             {tauri
-              ? "概念地图由你本机的 Claude Code 按当前章节生成。"
+              ? useAppSettings.getState().aiEngineMode === "cloud"
+                ? "概念地图由云 API 模型按当前章节生成。"
+                : "概念地图由当前 AI 引擎按当前章节生成。"
               : "浏览器预览：没有 Tauri 后端。"}
           </p>
         )}

@@ -197,7 +197,7 @@ describe("chatStore", () => {
     expect(second.content).toBe("第二条");
   });
 
-  it("load 丢弃旧版 acpx 会话映射等遗留字段", async () => {
+  it("load 丢弃直连时代遗留字段，acpx 会话映射保留", async () => {
     memory.set(
       "deer.chat.v1",
       JSON.stringify({
@@ -206,17 +206,38 @@ describe("chatStore", () => {
         activeThreadByBook: {},
         feedback: {},
         acpxSessionByThread: { t1: "acp-1" },
+        claudeSessionByBook: { b1: "s1" },
         harness: "x",
+        deepThinking: false,
       }),
     );
     await useChatStore.getState().load();
 
-    const state = useChatStore.getState() as unknown as Record<
-      string,
-      unknown
-    >;
-    expect(state.acpxSessionByThread).toBeUndefined();
-    expect(state.harness).toBeUndefined();
+    const state = useChatStore.getState();
+    expect(state.acpxSessionByThread).toEqual({ t1: "acp-1" });
+    expect(
+      (state as unknown as Record<string, unknown>).claudeSessionByBook,
+    ).toBeUndefined();
+    expect((state as unknown as Record<string, unknown>).harness).toBeUndefined();
+  });
+
+  it("setAcpxSession 记录会话映射，clearThread 同步清掉", () => {
+    const store = useChatStore.getState();
+    const thread = store.ensureThread("book-a", "甲书");
+
+    store.setAcpxSession(thread.id, "acp-9");
+    expect(useChatStore.getState().acpxSessionByThread[thread.id]).toBe("acp-9");
+
+    store.setAcpxSession(thread.id, undefined);
+    expect(
+      useChatStore.getState().acpxSessionByThread[thread.id],
+    ).toBeUndefined();
+
+    store.setAcpxSession(thread.id, "acp-9");
+    store.clearThread(thread.id);
+    expect(
+      useChatStore.getState().acpxSessionByThread[thread.id],
+    ).toBeUndefined();
   });
 
   it("clearAllChat 清空全部线程、消息与反馈", () => {

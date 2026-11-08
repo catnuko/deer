@@ -133,7 +133,7 @@ export function DataSection() {
 
       <SettingRow
         title="清空聊天记录"
-        description="只清空本机 Deer 保存的聊天记录。"
+        description="只清空本机 Deer 保存的聊天记录，不影响 acpx 自己的会话缓存（~/.acpx）。"
       >
         <Button
           variant="destructive"
