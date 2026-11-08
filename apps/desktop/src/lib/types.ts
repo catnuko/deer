@@ -2,7 +2,11 @@
 export type BookFormat = "epub" | "mobi" | "azw3" | "fb2" | "cbz" | "pdf";
 
 export type Book = {
-  id: string; // 稳定 id（文件哈希或 nanoid，落地时定）
+  id: string; // 本机 id（导入时生成的 UUID，仅设备内有效）
+  /** 文件内容 SHA-256（hex），跨设备身份；旧数据在开启同步时补算。 */
+  contentHash?: string;
+  /** 只存在于云端的书籍行（本机还没有书文件），P2 支持点击下载。 */
+  cloudOnly?: boolean;
   title: string;
   author: string;
   format: BookFormat;

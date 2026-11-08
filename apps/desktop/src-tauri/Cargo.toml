@@ -26,6 +26,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
 tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros"] }
+# WebDAV 传输通道（src/webdav.rs）：stream feature 支持流式上传/下载
+reqwest = { version = "0.12", features = ["stream"] }
+futures-util = "0.3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
