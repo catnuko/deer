@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   BookOpen,
+  Compass,
   Ellipsis,
   List,
   Map,
@@ -41,6 +42,8 @@ type ReaderToolbarProps = {
   onToggleQuickSettings?: () => void;
   conceptMapOpen?: boolean;
   onToggleConceptMap?: () => void;
+  briefingOpen?: boolean;
+  onToggleBriefing?: () => void;
   /** 提供时显示「AI 伴读」入口：只打开面板，不发送任何消息。 */
   onOpenPanel?: () => void;
   panelOpen?: boolean;
@@ -100,6 +103,8 @@ export function ReaderToolbar({
   onToggleQuickSettings,
   conceptMapOpen,
   onToggleConceptMap,
+  briefingOpen,
+  onToggleBriefing,
   onOpenPanel,
   panelOpen,
 }: ReaderToolbarProps) {
@@ -108,9 +113,20 @@ export function ReaderToolbar({
   // 窄窗（<md）概念地图收进「更多」，AI 伴读保持直按（规范 1.6）。
   const isWide = useMediaQuery("(min-width: 768px)");
 
-  const moreEntries = onToggleConceptMap
-    ? [{ label: "概念地图", icon: <Map />, onClick: onToggleConceptMap }]
-    : [];
+  const moreEntries = [
+    ...(onToggleBriefing
+      ? [{ label: "开读简报", icon: <Compass />, onClick: onToggleBriefing }]
+      : []),
+    ...(onToggleConceptMap
+      ? [{ label: "概念地图", icon: <Map />, onClick: onToggleConceptMap }]
+      : []),
+  ];
+
+  // 「更多」区按钮的测试/焦点锚点 id（焦点归还用）。
+  const moreEntryIds: Record<string, string> = {
+    开读简报: "reader-toolbar-briefing",
+    概念地图: "reader-toolbar-concept-map",
+  };
 
   return (
     <TooltipProvider>
@@ -182,15 +198,15 @@ export function ReaderToolbar({
                   {moreEntries.map((entry) => (
                     <ToolbarButton
                       key={entry.label}
-                      id={
-                        entry.label === "概念地图"
-                          ? "reader-toolbar-concept-map"
-                          : undefined
-                      }
+                      id={moreEntryIds[entry.label]}
                       label={entry.label}
                       icon={entry.icon}
                       pressed={
-                        entry.label === "概念地图" ? conceptMapOpen : undefined
+                        entry.label === "概念地图"
+                          ? conceptMapOpen
+                          : entry.label === "开读简报"
+                            ? briefingOpen
+                            : undefined
                       }
                       onClick={entry.onClick}
                     />
