@@ -548,9 +548,9 @@ const copyAnnotationText = useCallback((text: string) => {
         .getState()
         .annotations[bookKey]?.find((a) => a.id === id);
       if (!annotation) return;
-      // AI 笔记没有 CFI，不参与 foliate 高亮。
-      if (!annotation.cfi) return;
       useAnnotationStore.getState().remove(id);
+      // AI 笔记没有 CFI，不参与 foliate 高亮，只需移除存储。
+      if (!annotation.cfi) return;
       void viewRef.current
         ?.deleteAnnotation({ value: annotation.cfi })
         .catch(() => undefined);
@@ -1094,12 +1094,15 @@ const copyAnnotationText = useCallback((text: string) => {
                 matchCase: false,
                 matchDiacritics: false,
                 matchWholeWords: false,
-                // noop draw 压掉默认 outline：搜索不污染高亮层（返回类型
-                // 按 foliate 签名收窄，运行时只要求不画）。
-                draw: (() => {}) as unknown as (
-                  rects: DOMRectList,
-                  options?: Record<string, unknown>,
-                ) => SVGElement,
+                // draw 返回空 <g>：既不画（不污染高亮层），又满足
+                // Overlayer 契约——add 会 append 返回值，remove 会
+                // removeChild，返回 undefined 会让下一次 clearSearch 抛
+                // TypeError，书内搜索从第二次起恒空。
+                draw: () =>
+                  document.createElementNS(
+                    "http://www.w3.org/2000/svg",
+                    "g",
+                  ) as SVGElement,
               })) {
                 if (typeof result === "string") break; // 'done'
                 if ("cfi" in result && typeof result.cfi === "string") {
