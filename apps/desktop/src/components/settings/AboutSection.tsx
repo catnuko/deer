@@ -4,7 +4,6 @@ import packageJson from "../../../package.json";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
 import { copyPlainText } from "@/lib/clipboard";
 import { buildDiagnostics } from "@/lib/diagnostics";
 import { isTauri } from "@/lib/platform";
@@ -28,7 +27,6 @@ const LICENSES = [
   ["lucide-react", "ISC"],
   ["assistant-ui", "MIT"],
   ["shadcn/ui", "MIT"],
-  ["acpx", "MIT"],
 ] as const;
 
 async function resolveVersion(): Promise<string> {
@@ -45,7 +43,6 @@ async function resolveVersion(): Promise<string> {
 
 export function AboutSection() {
   const desktop = isTauri();
-  const { status } = useAcpxEnvStatus(desktop);
   const dataDir = useDataDir();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
@@ -56,9 +53,6 @@ export function AboutSection() {
       appVersion: await resolveVersion(),
       runtime: desktop ? "Tauri 桌面端" : "浏览器预览",
       userAgent: navigator.userAgent,
-      nodeVersion: status?.nodeVersion,
-      acpxVersion: status?.acpxVersion,
-      acpxReady: status?.ok ?? null,
       dataDir,
       copiedAt: new Date(),
     });
@@ -98,7 +92,7 @@ export function AboutSection() {
         <div>
           <p className="text-sm font-medium">诊断信息</p>
           <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
-            复制版本、运行环境、Node 与 acpx 状态、数据目录，方便反馈问题。
+            复制版本、运行环境、数据目录，方便反馈问题。
           </p>
         </div>
         <Button

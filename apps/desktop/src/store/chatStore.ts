@@ -13,8 +13,6 @@ export type ChatStoreState = {
   activeThreadByBook: Record<string, string>;
   /** messageId -> 用户给过的反馈（仅本地）。 */
   feedback: Record<string, ChatFeedback>;
-  /** threadId -> 该线程的 ACP session id（acpx 命名会话恢复用）。 */
-  acpxSessionByThread: Record<string, string>;
   ready: boolean;
 };
 
@@ -36,7 +34,6 @@ export type ChatStore = ChatStoreState & {
   /** 整体替换某条消息的正文（失败提示、空回复兜底用）。 */
   setMessageContent(threadId: string, messageId: string, content: string): void;
   setFeedback(messageId: string, value: ChatFeedback | undefined): void;
-  setAcpxSession(threadId: string, sessionId: string | undefined): void;
   /** 流式追加：给已有消息的思考过程追加一段增量。 */
   appendToMessageThinking(threadId: string, messageId: string, delta: string): void;
   /** 书架工具返回的书单并入消息（按书 id 去重，后到的覆盖先到的）。 */
@@ -58,8 +55,14 @@ const STORE_FILE = "chat.json";
 const STORE_KEY = "chat";
 const LS_KEY = "deer.chat.v1";
 
-/** 旧版落盘字段（直连链路时代）：读入时丢弃，深度思考恒开、无引擎概念。 */
-const LEGACY_KEYS = ["claudeSessionByBook", "harness", "deepThinking"] as const;
+/** 旧版落盘字段：直连链路时代的开关/引擎/会话映射、acpx 会话映射。
+ *  读入时丢弃，无状态可迁。 */
+const LEGACY_KEYS = [
+  "claudeSessionByBook",
+  "harness",
+  "deepThinking",
+  "acpxSessionByThread",
+] as const;
 
 function isTauri(): boolean {
   return (
@@ -72,7 +75,6 @@ const EMPTY: ChatStoreState = {
   messages: {},
   activeThreadByBook: {},
   feedback: {},
-  acpxSessionByThread: {},
   ready: false,
 };
 
@@ -98,7 +100,6 @@ async function writePersisted(state: ChatStoreState): Promise<void> {
     messages: state.messages,
     activeThreadByBook: state.activeThreadByBook,
     feedback: state.feedback,
-    acpxSessionByThread: state.acpxSessionByThread,
     ready: true,
   };
   try {
@@ -152,8 +153,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     async load() {
       const data = await readPersisted();
-      // 旧版落盘字段（直连链路时代的开关/引擎/按书会话映射）读入即丢弃：
-      // 深度思考恒开，acpx 是唯一链路，没有任何状态可迁。
+      // 旧版落盘字段（直连/acpx 链路时代的开关/引擎/会话映射）读入即丢弃。
       if (data) {
         for (const key of LEGACY_KEYS) delete (data as Record<string, unknown>)[key];
       }
@@ -239,16 +239,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     clearThread(threadId) {
-      set((s) => {
-        const next: ChatStoreState = {
-          ...s,
-          messages: { ...s.messages, [threadId]: [] },
-        };
-        // 清空会话 = 重新开新会话：同步清掉 acpx 会话映射。
-        next.acpxSessionByThread = { ...next.acpxSessionByThread };
-        delete next.acpxSessionByThread[threadId];
-        return next;
-      });
+      set((s) => ({
+        messages: { ...s.messages, [threadId]: [] },
+      }));
       touchThread(threadId);
       persist();
     },
@@ -280,16 +273,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
         },
       }));
       touchThread(threadId);
-      persist();
-    },
-
-    setAcpxSession(threadId, sessionId) {
-      set((s) => {
-        const next = { ...s.acpxSessionByThread };
-        if (sessionId === undefined) delete next[threadId];
-        else next[threadId] = sessionId;
-        return { acpxSessionByThread: next };
-      });
       persist();
     },
 

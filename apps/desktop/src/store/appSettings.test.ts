@@ -46,7 +46,6 @@ describe("appSettings store", () => {
     ).toEqual({
       startupView: "bookshelf",
       bookshelfSort: "recent",
-      aiEngine: DEFAULT_APP_SETTINGS.aiEngine,
       aiProvider: "openai-compatible",
       aiBaseUrl: DEFAULT_APP_SETTINGS.aiBaseUrl,
       aiModel: DEFAULT_APP_SETTINGS.aiModel,
@@ -54,7 +53,25 @@ describe("appSettings store", () => {
     });
   });
 
-  it("v2 旧数据迁移补上云引擎默认值，原值保留", () => {
+  it("v3 旧数据迁移：丢弃 aiEngine，云引擎字段保留/补默认", () => {
+    const migrate = useAppSettings.persist.getOptions().migrate;
+    const migrated = migrate?.(
+      {
+        startupView: "continue",
+        bookshelfSort: "title",
+        aiEngine: "claude",
+        aiApiKey: "k",
+      },
+      3,
+    ) as Record<string, unknown>;
+    expect(migrated.startupView).toBe("continue");
+    expect(migrated.bookshelfSort).toBe("title");
+    expect(migrated.aiEngine).toBeUndefined();
+    expect(migrated.aiProvider).toBe("openai-compatible");
+    expect(migrated.aiApiKey).toBe("k");
+  });
+
+  it("v2 旧数据迁移补上云引擎默认值并丢弃 aiEngine", () => {
     const migrate = useAppSettings.persist.getOptions().migrate;
     const migrated = migrate?.(
       {
@@ -66,6 +83,7 @@ describe("appSettings store", () => {
     ) as Record<string, unknown>;
     expect(migrated.startupView).toBe("continue");
     expect(migrated.bookshelfSort).toBe("title");
+    expect(migrated.aiEngine).toBeUndefined();
     expect(migrated.aiProvider).toBe("openai-compatible");
     expect(migrated.aiModel).toBe(DEFAULT_APP_SETTINGS.aiModel);
     expect(migrated.aiApiKey).toBe("");
