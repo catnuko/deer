@@ -23,7 +23,6 @@ function book(overrides: Partial<Book>): Book {
     sizeBytes: 1,
     addedAt: 0,
     progress: 0,
-    shelfIds: [],
     tags: [],
     ...overrides,
   };

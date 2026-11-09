@@ -11,7 +11,6 @@ const book = (overrides: Partial<Book>): Book => ({
   filePath: "/books/book-1.epub",
   sizeBytes: 2048,
   addedAt: 1000,
-  shelfIds: [],
   tags: [],
   progress: 0,
   ...overrides,

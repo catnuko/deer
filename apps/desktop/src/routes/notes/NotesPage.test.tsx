@@ -18,14 +18,13 @@ const book: Book = {
   filePath: "/books/book-1.epub",
   sizeBytes: 2048,
   addedAt: 1000,
-  shelfIds: [],
   tags: [],
   progress: 0,
 };
 
 function seedStores() {
   // load() 会从 localStorage 重读并盖掉 setState，测试里替换成空操作。
-  useBookStore.setState({ books: [book], shelves: [], ready: true, load: async () => {} });
+  useBookStore.setState({ books: [book], folders: [], ready: true, load: async () => {} });
   useAnnotationStore.setState({
     annotations: {
       "book-1": [
@@ -108,7 +107,7 @@ describe("NotesPage", () => {
   });
 
   it("没有任何笔记时显示空态引导", () => {
-    useBookStore.setState({ books: [book], shelves: [], ready: true, load: async () => {} });
+    useBookStore.setState({ books: [book], folders: [], ready: true, load: async () => {} });
     useAnnotationStore.setState({ annotations: {}, ready: true, load: async () => {} });
     renderPage();
 
@@ -117,7 +116,7 @@ describe("NotesPage", () => {
   });
 
   it("AI 笔记带 AI 徽标、点击不跳原文，删除照常", async () => {
-    useBookStore.setState({ books: [book], shelves: [], ready: true, load: async () => {} });
+    useBookStore.setState({ books: [book], folders: [], ready: true, load: async () => {} });
     useAnnotationStore.setState({
       annotations: {
         "book-1": [

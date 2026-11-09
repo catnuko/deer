@@ -11,7 +11,6 @@ function bookOf(overrides: Partial<Book> & Pick<Book, "id">): Book {
     sizeBytes: 1024,
     addedAt: 1000,
     progress: 0,
-    shelfIds: [],
     tags: [],
     ...overrides,
   };

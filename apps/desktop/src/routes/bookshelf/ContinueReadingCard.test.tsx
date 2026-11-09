@@ -18,7 +18,6 @@ const book: Book = {
   lastOpenedAt: 2000,
   progress: 0.42,
   lastLocationCfi: "epubcfi(/6/4)",
-  shelfIds: [],
   tags: [],
 };
 

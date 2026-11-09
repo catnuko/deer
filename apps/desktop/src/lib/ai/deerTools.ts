@@ -66,16 +66,33 @@ export function buildDeerTools(): ToolSet {
 
     get_library: tool({
       description:
-        "获取用户完整书架清单（全部书籍的书卡与书架分组名）。与 search_books 的书卡同构。",
+        "获取用户完整书架清单（全部书籍的书卡与文件夹分组）。书架只有一个，文件夹用于分类。与 search_books 的书卡同构，书卡附带 folderName。",
       inputSchema: jsonSchema<Record<string, never>>({
         type: "object",
         properties: {},
       }),
       execute: async () => {
-        const { books, shelves } = useBookStore.getState();
+        const { books, folders } = useBookStore.getState();
+        const folderNameById = new Map(
+          folders.map((folder) => [folder.id, folder.name]),
+        );
         return {
-          shelves: shelves.map((shelf) => ({ id: shelf.id, name: shelf.name })),
-          books: books.map(bookToRef),
+          folders: folders.map((folder) => ({
+            id: folder.id,
+            name: folder.name,
+            bookCount: books.filter((book) => book.folderId === folder.id).length,
+          })),
+          uncategorizedCount: books.filter(
+            (book) => !book.folderId || !folderNameById.has(book.folderId),
+          ).length,
+          books: books.map((book) => {
+            const folderName = book.folderId
+              ? folderNameById.get(book.folderId)
+              : undefined;
+            return folderName
+              ? { ...bookToRef(book), folderName }
+              : bookToRef(book);
+          }),
         };
       },
     }),

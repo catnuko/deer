@@ -14,9 +14,22 @@ import {
   readImportedMetadata,
 } from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
-import type { Book, BookStoreState, Shelf } from "@/lib/types";
+import type {
+  Book,
+  BookStoreState,
+  Folder,
+  LegacyShelf,
+  MigrationNotice,
+} from "@/lib/types";
+import {
+  LIBRARY_VERSION,
+  assertFolderName,
+  migrateLibrary,
+  sortFolders,
+} from "./libraryMigration";
 
 const LIBRARY_FILE = "library.json";
+const LIBRARY_BACKUP_FILE = "library.json.bak-v1";
 const BOOKS_DIR = "books";
 const COVERS_DIR = "covers";
 
@@ -24,7 +37,6 @@ const COVERS_DIR = "covers";
 export type BookStoreExtras = {
   importing: boolean;
   error: string | null;
-  renameShelf(id: string, name: string): Promise<void>;
   clearError(): void;
 };
 
@@ -58,11 +70,39 @@ async function ensureAppDirs(): Promise<AppDirs> {
   return dirs;
 }
 
-async function persist(books: Book[], shelves: Shelf[]): Promise<void> {
+async function persist(
+  books: Book[],
+  folders: Folder[],
+  migrationNotice: MigrationNotice | null,
+): Promise<void> {
   const store = await getPersistedStore();
   await store.set("books", books);
-  await store.set("shelves", shelves);
+  await store.set("folders", folders);
+  await store.set("libraryVersion", LIBRARY_VERSION);
+  await store.set("migrationNotice", migrationNotice);
+  // 旧模型的键清掉，避免旧字段残留污染下次读取。
+  await store.delete("shelves");
   await store.save();
+}
+
+/**
+ * 迁移前把原始 library.json 拷一份（plugin-store 格式原样），只备份一次。
+ * 首次安装没有旧文件、或备份失败都不阻断迁移。
+ */
+async function backupLibraryOnce(root: string): Promise<void> {
+  const backup = await join(root, LIBRARY_BACKUP_FILE);
+  try {
+    await readFile(backup);
+    return; // 已有备份，不覆盖
+  } catch {
+    // 还没有备份，继续
+  }
+  try {
+    const bytes = await readFile(await join(root, LIBRARY_FILE));
+    await writeFile(backup, bytes);
+  } catch {
+    // 没有旧书库文件（首次安装）：无需备份
+  }
 }
 
 function messageOf(error: unknown): string {
@@ -83,36 +123,15 @@ function titleFromFileName(path: string): string {
   );
 }
 
-/** 去掉已删除书架留下的悬空 shelfIds。 */
-function pruneShelfIds(books: Book[], shelves: Shelf[]): Book[] {
-  const known = new Set(shelves.map((shelf) => shelf.id));
-  return books.map((book) => {
-    const shelfIds = (book.shelfIds ?? []).filter((id) => known.has(id));
-    return shelfIds.length === (book.shelfIds ?? []).length
-      ? book
-      : { ...book, shelfIds };
-  });
-}
-
-function sortShelves(shelves: Shelf[]): Shelf[] {
-  return [...shelves].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
-}
-
-function assertShelfName(name: string, shelves: Shelf[], exceptId?: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("书架名称不能为空");
-  if (trimmed.length > 40) throw new Error("书架名称最多 40 个字符");
-  const duplicated = shelves.some(
-    (shelf) =>
-      shelf.id !== exceptId && shelf.name.toLowerCase() === trimmed.toLowerCase(),
-  );
-  if (duplicated) throw new Error(`已存在同名书架「${trimmed}」`);
-  return trimmed;
+function requireDesktop(action: string): void {
+  if (!isTauri()) throw new Error(`${action}只在桌面应用里可用`);
 }
 
 export const useBookStore = create<BookStore>((set, get) => ({
   books: [],
-  shelves: [],
+  folders: [],
+  libraryVersion: LIBRARY_VERSION,
+  migrationNotice: null,
   ready: false,
   importing: false,
   error: null,
@@ -128,23 +147,46 @@ export const useBookStore = create<BookStore>((set, get) => ({
       return;
     }
     try {
-      await ensureAppDirs();
+      const dirs = await ensureAppDirs();
       const store = await getPersistedStore();
+      const rawVersion = await store.get<number>("libraryVersion");
       const rawBooks = await store.get<Book[]>("books");
-      const rawShelves = await store.get<Shelf[]>("shelves");
-      const shelves = sortShelves(Array.isArray(rawShelves) ? rawShelves : []);
-      const books = pruneShelfIds(
-        Array.isArray(rawBooks) ? rawBooks : [],
-        shelves,
-      );
-      set({ books, shelves, ready: true, error: null });
+      const rawFolders = await store.get<Folder[]>("folders");
+      const rawShelves = await store.get<LegacyShelf[]>("shelves");
+      const rawNotice = await store.get<MigrationNotice | null>("migrationNotice");
+      const version = typeof rawVersion === "number" ? rawVersion : 1;
+
+      // 迁移是单向覆盖写：动磁盘之前先留一份原始文件。
+      if (version < LIBRARY_VERSION) await backupLibraryOnce(dirs.root);
+
+      const result = migrateLibrary({
+        libraryVersion: version,
+        books: Array.isArray(rawBooks) ? rawBooks : [],
+        folders: Array.isArray(rawFolders) ? rawFolders : [],
+        shelves: Array.isArray(rawShelves) ? rawShelves : [],
+        migrationNotice: rawNotice ?? null,
+      });
+
+      set({
+        books: result.books,
+        folders: result.folders,
+        libraryVersion: result.libraryVersion,
+        migrationNotice: result.migrationNotice,
+        ready: true,
+        error: null,
+      });
+
+      // 首次（或旧版）读入后写回 v2，二次启动不会重复迁移。
+      if (result.migrated) {
+        await persist(result.books, result.folders, result.migrationNotice);
+      }
     } catch (error) {
       set({ ready: true, error: `读取书库失败：${messageOf(error)}` });
     }
   },
 
   async importEpub(filePath: string) {
-    if (!isTauri()) throw new Error("导入只在桌面应用里可用");
+    requireDesktop("导入");
     set({ importing: true, error: null });
     try {
       const dirs = await ensureAppDirs();
@@ -203,13 +245,12 @@ export const useBookStore = create<BookStore>((set, get) => ({
         sizeBytes: bytes.byteLength,
         addedAt: Date.now(),
         progress: 0,
-        shelfIds: [],
         tags: [],
       };
 
       const books = [book, ...get().books];
       set({ books, importing: false });
-      await persist(books, get().shelves);
+      await persist(books, get().folders, get().migrationNotice);
       return book;
     } catch (error) {
       set({ importing: false, error: `导入失败：${messageOf(error)}` });
@@ -220,7 +261,7 @@ export const useBookStore = create<BookStore>((set, get) => ({
   async removeBook(id: string) {
     const target = get().books.find((book) => book.id === id);
     if (!target) return;
-    if (!isTauri()) throw new Error("删除书籍只在桌面应用里可用");
+    requireDesktop("删除书籍");
 
     try {
       await remove(target.filePath);
@@ -232,7 +273,7 @@ export const useBookStore = create<BookStore>((set, get) => ({
 
     const books = get().books.filter((book) => book.id !== id);
     set({ books });
-    await persist(books, get().shelves);
+    await persist(books, get().folders, get().migrationNotice);
   },
 
   async updateBook(id: string, patch: Partial<Book>) {
@@ -241,55 +282,73 @@ export const useBookStore = create<BookStore>((set, get) => ({
       book.id === id ? { ...book, ...patch, id: book.id } : book,
     );
     set({ books });
-    await persist(books, get().shelves);
+    await persist(books, get().folders, get().migrationNotice);
   },
 
-  async createShelf(name: string) {
-    const shelves = get().shelves;
-    const trimmed = assertShelfName(name, shelves);
-    if (!isTauri()) throw new Error("书架管理只在桌面应用里可用");
+  async createFolder(name: string) {
+    const folders = get().folders;
+    const trimmed = assertFolderName(name, folders);
+    requireDesktop("文件夹管理");
 
-    const shelf: Shelf = {
+    const folder: Folder = {
       id: crypto.randomUUID(),
       name: trimmed,
-      order: shelves.reduce((max, item) => Math.max(max, item.order), 0) + 1,
+      order: folders.reduce((max, item) => Math.max(max, item.order), 0) + 1,
     };
-    const nextShelves = sortShelves([...shelves, shelf]);
-    set({ shelves: nextShelves });
-    await persist(get().books, nextShelves);
-    return shelf;
+    const nextFolders = sortFolders([...folders, folder]);
+    set({ folders: nextFolders });
+    await persist(get().books, nextFolders, get().migrationNotice);
+    return folder;
   },
 
-  async renameShelf(id: string, name: string) {
-    const shelves = get().shelves;
-    const trimmed = assertShelfName(name, shelves, id);
-    if (!isTauri()) throw new Error("书架管理只在桌面应用里可用");
+  async renameFolder(id: string, name: string) {
+    const folders = get().folders;
+    const trimmed = assertFolderName(name, folders, id);
+    requireDesktop("文件夹管理");
 
-    const nextShelves = shelves.map((shelf) =>
-      shelf.id === id ? { ...shelf, name: trimmed } : shelf,
+    const nextFolders = folders.map((folder) =>
+      folder.id === id ? { ...folder, name: trimmed } : folder,
     );
-    set({ shelves: nextShelves });
-    await persist(get().books, nextShelves);
+    set({ folders: nextFolders });
+    await persist(get().books, nextFolders, get().migrationNotice);
   },
 
-  async deleteShelf(id: string) {
-    if (!isTauri()) throw new Error("书架管理只在桌面应用里可用");
-    const shelves = get().shelves.filter((shelf) => shelf.id !== id);
-    const books = pruneShelfIds(get().books, shelves);
-    set({ shelves, books });
-    await persist(books, shelves);
+  async deleteFolder(id: string) {
+    requireDesktop("文件夹管理");
+    const folders = get().folders.filter((folder) => folder.id !== id);
+    // 书不删：只把归属清空，回到「未分类」。
+    const books = get().books.map((book) =>
+      book.folderId === id
+        ? (() => {
+            const { folderId, ...rest } = book;
+            void folderId;
+            return rest;
+          })()
+        : book,
+    );
+    set({ folders, books });
+    await persist(books, folders, get().migrationNotice);
   },
 
-  async moveBookToShelf(bookId: string, shelfId: string) {
-    if (!isTauri()) throw new Error("书架管理只在桌面应用里可用");
+  async moveBookToFolder(bookId: string, folderId: string | null) {
+    requireDesktop("文件夹管理");
     const books = get().books.map((book) => {
       if (book.id !== bookId) return book;
-      const shelfIds = book.shelfIds.includes(shelfId)
-        ? book.shelfIds.filter((id) => id !== shelfId)
-        : [...book.shelfIds, shelfId];
-      return { ...book, shelfIds };
+      if (!folderId) {
+        const { folderId: current, ...rest } = book;
+        void current;
+        return rest;
+      }
+      return { ...book, folderId };
     });
     set({ books });
-    await persist(books, get().shelves);
+    await persist(books, get().folders, get().migrationNotice);
+  },
+
+  async dismissMigrationNotice() {
+    if (get().migrationNotice === null) return;
+    set({ migrationNotice: null });
+    if (!isTauri()) return;
+    await persist(get().books, get().folders, null);
   },
 }));

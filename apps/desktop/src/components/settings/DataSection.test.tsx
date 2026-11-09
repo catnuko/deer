@@ -17,7 +17,6 @@ function book(id: string, title: string) {
     sizeBytes: 1024,
     addedAt: 1,
     progress: 0,
-    shelfIds: [],
     tags: [],
   };
 }
