@@ -9,7 +9,10 @@ const ENTRY_ROUTES = ["/bookshelf", "/"];
 
 export function AIPanelLauncher() {
   const location = useLocation();
-  const book = useCurrentBook();
+  // 书架详情页把当前书写进 store；没有（停在书架列表）才回落到 URL 参数。
+  const shelfBook = useAIPanelStore((s) => s.book);
+  const urlBook = useCurrentBook();
+  const book = shelfBook ?? urlBook;
   const open = useAIPanelStore((s) => s.open);
   const setOpen = useAIPanelStore((s) => s.setOpen);
   const onEntryRoute = ENTRY_ROUTES.includes(location.pathname);

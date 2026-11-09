@@ -69,6 +69,7 @@ export function BookshelfPage() {
   const [searchParams] = useSearchParams();
   const aiPanelOpen = useAIPanelStore((s) => s.open);
   const setAIPanelOpen = useAIPanelStore((s) => s.setOpen);
+  const setAIPanelBook = useAIPanelStore((s) => s.setBook);
   // 只有浏览器里（没有 Tauri）用 ?preview=1 看界面用，桌面应用不会走到这条分支。
   const preview = !isTauri() && searchParams.get("preview") === "1";
 
@@ -104,14 +105,35 @@ export function BookshelfPage() {
     detailTriggerRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setDetailBook(book);
+    // 详情页的 AI 面板按这本真实书作答（书架没有 ?book= 参数，否则会回落演示书）。
+    setAIPanelBook({ id: book.id, title: book.title });
     requestAnimationFrame(() => setDetailOpen(true));
-  }, []);
+  }, [setAIPanelBook]);
 
   const closeDetail = useCallback(() => {
     setDetailOpen(false);
+    // 面板还开着就保持这本书的会话，别把对话切到演示书；面板关闭时由 store 释放绑定。
+    if (!useAIPanelStore.getState().open) setAIPanelBook(null);
     detailTriggerRef.current?.focus();
     detailTriggerRef.current = null;
-  }, []);
+  }, [setAIPanelBook]);
+
+  /** 详情页「问 AI」：面板按当前书打开；窄屏浮层要收起，但书上下文留给面板。 */
+  const askAIFromDetail = useCallback(() => {
+    if (!detailBook) return;
+    setAIPanelBook({ id: detailBook.id, title: detailBook.title });
+    setAIPanelOpen(true);
+  }, [detailBook, setAIPanelBook, setAIPanelOpen]);
+
+  const askAIFromDetailSheet = useCallback(() => {
+    askAIFromDetail();
+    // 面板已在收起浮层前打开；这里只收浮层、不清书，避免两个全屏层叠。
+    setDetailOpen(false);
+    detailTriggerRef.current = null;
+  }, [askAIFromDetail]);
+
+  // 离开书架（进阅读页等）时清掉详情书绑定，避免下次打开面板按旧书作答。
+  useEffect(() => () => setAIPanelBook(null), [setAIPanelBook]);
 
   useEffect(() => {
     void load();
@@ -614,6 +636,7 @@ export function BookshelfPage() {
               )
             }
             onRemove={() => setBookToDelete(detailBook)}
+            onAskAI={askAIFromDetail}
           />
         </div>
       )}
@@ -642,6 +665,7 @@ export function BookshelfPage() {
                 )
               }
               onRemove={() => setBookToDelete(detailBook)}
+              onAskAI={askAIFromDetailSheet}
             />
           </SheetContent>
         </Sheet>

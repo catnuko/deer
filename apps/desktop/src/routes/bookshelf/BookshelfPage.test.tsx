@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { act } from "react";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { Book } from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useAIPanelStore } from "@/store/aiPanelStore";
 import { BookshelfPage } from "./BookshelfPage";
 
 vi.mock("@/lib/platform", () => ({ isTauri: () => true }));
@@ -38,6 +40,7 @@ beforeEach(() => {
     removeBook: vi.fn().mockResolvedValue(undefined),
   });
   useAnnotationStore.setState({ annotations: {}, ready: true });
+  useAIPanelStore.setState({ open: false, book: null });
 });
 
 afterEach(cleanup);
@@ -91,6 +94,30 @@ describe("BookshelfPage 整页详情", () => {
         screen.getByLabelText("书籍详情页").parentElement,
       ).toHaveAttribute("aria-hidden", "true"),
     );
+  });
+
+  it("详情页「问 AI」：面板绑定真实书打开，关闭面板后解除绑定", async () => {
+    const user = userEvent.setup();
+    renderShelf();
+
+    await openDetail(user);
+    await user.click(screen.getByRole("button", { name: "问 AI" }));
+
+    expect(useAIPanelStore.getState().open).toBe(true);
+    expect(useAIPanelStore.getState().book).toEqual({
+      id: "book-1",
+      title: "三国演义",
+    });
+
+    // 面板还开着时返回书架：会话保持在这本书，不切到演示书。
+    await user.click(screen.getByRole("button", { name: "返回书架" }));
+    expect(useAIPanelStore.getState().book).toEqual({
+      id: "book-1",
+      title: "三国演义",
+    });
+
+    act(() => useAIPanelStore.getState().setOpen(false));
+    expect(useAIPanelStore.getState().book).toBeNull();
   });
 
   it("详情页「从书架移除」走二次确认：取消不删，确认才调用删除", async () => {

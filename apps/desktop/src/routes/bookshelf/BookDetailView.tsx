@@ -32,6 +32,8 @@ type BookDetailViewProps = {
   onLocate(cfi: string): void;
   /** 从书架移除；二次确认弹窗由书架页负责。 */
   onRemove(): void;
+  /** 打开 AI 伴读面板，并让面板按这本书作答。 */
+  onAskAI(): void;
 };
 
 export function BookDetailView({
@@ -41,6 +43,7 @@ export function BookDetailView({
   onContinueRead,
   onLocate,
   onRemove,
+  onAskAI,
 }: BookDetailViewProps) {
   const annotations = useAnnotationStore(
     (state) => state.annotations[book.id] ?? EMPTY_NOTES,
@@ -103,13 +106,17 @@ export function BookDetailView({
           返回书架
         </Button>
         <div className="bg-border h-[22px] w-px" />
-        <BookOpen className="text-muted-foreground size-[18px] shrink-0" />
-        <div className="min-w-0 flex-1 truncate text-base font-bold">
-          {book.title}
-        </div>
-        <span className="text-muted-foreground/60 hidden shrink-0 text-[13px] sm:block">
-          {book.author}
-        </span>
+        {/* 书名与作者由右栏大标题承载，顶栏不再重复。 */}
+        <div className="min-w-0 flex-1" />
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-auto rounded-full"
+          onClick={onAskAI}
+        >
+          <Sparkles className="size-4" />
+          问 AI
+        </Button>
         <Button
           variant="default"
           className="w-auto rounded-full px-5"

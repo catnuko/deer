@@ -70,6 +70,7 @@ function renderDetail(book: Book = makeBook()) {
     onContinueRead: vi.fn(),
     onLocate: vi.fn(),
     onRemove: vi.fn(),
+    onAskAI: vi.fn(),
   };
   render(
     <BookDetailView book={book} variant="page" {...props} />,
@@ -114,6 +115,14 @@ describe("BookDetailView 基本信息与操作", () => {
     expect(props.onBack).toHaveBeenCalledTimes(2);
   });
 
+  it("顶栏「问 AI」触发 onAskAI", async () => {
+    const props = renderDetail();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "问 AI" }));
+    expect(props.onAskAI).toHaveBeenCalledTimes(1);
+  });
+
   it("整页形态进入后焦点落在「返回书架」", async () => {
     renderDetail();
     await waitFor(() =>
@@ -130,6 +139,7 @@ describe("BookDetailView 基本信息与操作", () => {
         onContinueRead={() => {}}
         onLocate={() => {}}
         onRemove={() => {}}
+        onAskAI={() => {}}
       />,
     );
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
@@ -160,6 +170,7 @@ describe("BookDetailView 基本信息与操作", () => {
         onContinueRead={() => {}}
         onLocate={() => {}}
         onRemove={() => {}}
+        onAskAI={() => {}}
       />,
     );
     expect(container.querySelector("img")).toBeNull();
