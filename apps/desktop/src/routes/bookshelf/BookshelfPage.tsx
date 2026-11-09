@@ -19,6 +19,7 @@ import {
   MoreHorizontal,
   NotebookText,
   Pencil,
+  Plus,
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
@@ -529,6 +530,78 @@ export function BookshelfPage() {
           )}
 
           <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {!wide && (
+              <div
+                aria-label="文件夹筛选"
+                className="border-border flex-none border-b"
+              >
+                <div className="flex items-center gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <FolderChip
+                    label="全部"
+                    count={books.length}
+                    active={view === "all"}
+                    onClick={() => setActiveId(null)}
+                  />
+                  <FolderChip
+                    label="未分类"
+                    count={uncategorizedCount}
+                    active={view === "uncategorized"}
+                    onClick={() => setActiveId(UNCATEGORIZED)}
+                  />
+                  {folders.map((folder) => (
+                    <FolderChip
+                      key={folder.id}
+                      label={folder.name}
+                      count={countInFolder(folder.id)}
+                      active={activeFolder?.id === folder.id}
+                      onClick={() => setActiveId(folder.id)}
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    aria-label="新建文件夹"
+                    className="border-border-strong text-foreground inline-flex size-10 shrink-0 items-center justify-center rounded-full border"
+                    onClick={() => setFolderForm({ mode: "create" })}
+                  >
+                    <Plus className="size-4" />
+                  </button>
+                  {activeFolder && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="size-10 shrink-0 rounded-full"
+                            aria-label={`管理文件夹「${activeFolder.name}」`}
+                          />
+                        }
+                      >
+                        <MoreHorizontal />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-40">
+                        <DropdownMenuItem
+                          onClick={() =>
+                            setFolderForm({ mode: "rename", folder: activeFolder })
+                          }
+                        >
+                          <Pencil />
+                          重命名
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setFolderToDelete(activeFolder)}
+                        >
+                          <Trash2 />
+                          删除
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-5 pb-24 max-[819px]:px-3">
               {isReady && continueReading ? (
                 <div className="mb-5 max-w-xl">
@@ -834,6 +907,42 @@ function FolderRailFolder({
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+  );
+}
+
+function FolderChip({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick(): void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      className={cn(
+        "inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] transition-colors duration-fast ease-enter focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
+        active
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-border-strong bg-background text-foreground",
+      )}
+      onClick={onClick}
+    >
+      {label}
+      <span
+        className={cn(
+          "text-xs tabular-nums",
+          active ? "text-primary-foreground/70" : "text-muted-foreground",
+        )}
+      >
+        {count}
+      </span>
+    </button>
   );
 }
 

@@ -213,3 +213,52 @@ describe("BookshelfPage 文件夹分类", () => {
     expect(dismissMigrationNotice).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("BookshelfPage 窄屏 chip 行", () => {
+  it("窄屏用顶部 chip 切换文件夹，选中文件夹露出「管理」入口", async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      useBookStore.setState({
+        books: [
+          makeBook({ id: "b1", title: "三国演义", folderId: "f-fiction" }),
+          makeBook({ id: "b2", title: "算法导论", folderId: "f-tech" }),
+        ],
+        folders: [
+          { id: "f-fiction", name: "小说", order: 1 },
+          { id: "f-tech", name: "技术", order: 2 },
+        ],
+      });
+      const user = userEvent.setup();
+      renderShelf();
+
+      await user.click(screen.getByRole("button", { name: "技术 1" }));
+      expect(
+        screen.getByRole("button", { name: "打开《算法导论》详情" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "打开《三国演义》详情" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "管理文件夹「技术」" }),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "全部 2" }));
+      expect(
+        screen.getByRole("button", { name: "打开《三国演义》详情" }),
+      ).toBeInTheDocument();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+});
