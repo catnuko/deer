@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   BookOpen,
+  Check,
+  ChevronRight,
   Highlighter,
   MessageSquare,
   NotebookText,
@@ -9,10 +11,18 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate, formatBytes } from "@/lib/format";
 import { getCoverUrl } from "@/lib/covers";
-import type { Book } from "@/lib/types";
+import type { Book, Folder } from "@/lib/types";
 import {
   useAnnotationStore,
   type StoredAnnotation,
@@ -26,6 +36,7 @@ type BookDetailViewProps = {
   book: Book;
   /** page：整页覆盖层（Esc 返回、进入即聚焦返回键）；sheet：小屏底部浮层。 */
   variant: "page" | "sheet";
+  folders: Folder[];
   onBack(): void;
   onContinueRead(): void;
   /** 「在书中查看」：带 CFI 跳回阅读页原文位置。 */
@@ -34,16 +45,20 @@ type BookDetailViewProps = {
   onRemove(): void;
   /** 打开 AI 伴读面板，并让面板按这本书作答。 */
   onAskAI(): void;
+  /** folderId 为 null 表示移到「未分类」。 */
+  onMoveToFolder(folderId: string | null): void;
 };
 
 export function BookDetailView({
   book,
   variant,
+  folders,
   onBack,
   onContinueRead,
   onLocate,
   onRemove,
   onAskAI,
+  onMoveToFolder,
 }: BookDetailViewProps) {
   const annotations = useAnnotationStore(
     (state) => state.annotations[book.id] ?? EMPTY_NOTES,
@@ -91,6 +106,8 @@ export function BookDetailView({
   const progressPercent = Math.round(
     Math.min(Math.max(book.progress, 0), 1) * 100,
   );
+  const currentFolder =
+    folders.find((folder) => folder.id === book.folderId) ?? null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" aria-label="书籍详情页">
@@ -195,6 +212,46 @@ export function BookDetailView({
               <div className="border-border flex items-center justify-between border-b py-2.5">
                 <dt className="text-muted-foreground">加入书架</dt>
                 <dd className="font-medium">{formatDate(book.addedAt)}</dd>
+              </div>
+              <div className="border-border flex items-center justify-between border-b py-1">
+                <dt className="text-muted-foreground">所在文件夹</dt>
+                <dd className="font-medium">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="h-auto min-h-7 gap-0.5 px-1 text-[13px] font-medium max-[819px]:min-h-10"
+                          aria-label="移动到文件夹"
+                        />
+                      }
+                    >
+                      {currentFolder?.name ?? "未分类"}
+                      <ChevronRight className="text-muted-foreground size-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-52">
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>移动到文件夹</DropdownMenuLabel>
+                        <DropdownMenuItem onClick={() => onMoveToFolder(null)}>
+                          <span className="flex-1 truncate">未分类</span>
+                          {!currentFolder && <Check className="text-primary" />}
+                        </DropdownMenuItem>
+                        {folders.map((folder) => (
+                          <DropdownMenuItem
+                            key={folder.id}
+                            onClick={() => onMoveToFolder(folder.id)}
+                          >
+                            <span className="flex-1 truncate">{folder.name}</span>
+                            {currentFolder?.id === folder.id && (
+                              <Check className="text-primary" />
+                            )}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </dd>
               </div>
             </dl>
           </aside>

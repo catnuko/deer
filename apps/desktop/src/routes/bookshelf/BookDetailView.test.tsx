@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatDate, formatBytes } from "@/lib/format";
-import type { Book } from "@/lib/types";
+import type { Book, Folder } from "@/lib/types";
 import {
   useAnnotationStore,
   type StoredAnnotation,
@@ -22,7 +22,7 @@ function makeBook(overrides: Partial<Book> = {}): Book {
     addedAt: new Date(2026, 9, 28).getTime(),
     lastOpenedAt: new Date(2026, 10, 4).getTime(),
     progress: 0.1,
-    shelfIds: [],
+    folderId: "folder-1",
     tags: [],
     ...overrides,
   };
@@ -64,13 +64,20 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+const FOLDERS: Folder[] = [
+  { id: "folder-1", name: "小说", order: 1 },
+  { id: "folder-2", name: "技术", order: 2 },
+];
+
 function renderDetail(book: Book = makeBook()) {
   const props = {
+    folders: FOLDERS,
     onBack: vi.fn(),
     onContinueRead: vi.fn(),
     onLocate: vi.fn(),
     onRemove: vi.fn(),
     onAskAI: vi.fn(),
+    onMoveToFolder: vi.fn(),
   };
   render(
     <BookDetailView book={book} variant="page" {...props} />,
@@ -135,11 +142,13 @@ describe("BookDetailView 基本信息与操作", () => {
       <BookDetailView
         book={makeBook()}
         variant="sheet"
+        folders={FOLDERS}
         onBack={() => {}}
         onContinueRead={() => {}}
         onLocate={() => {}}
         onRemove={() => {}}
         onAskAI={() => {}}
+        onMoveToFolder={() => {}}
       />,
     );
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
@@ -166,11 +175,13 @@ describe("BookDetailView 基本信息与操作", () => {
       <BookDetailView
         book={makeBook()}
         variant="page"
+        folders={FOLDERS}
         onBack={() => {}}
         onContinueRead={() => {}}
         onLocate={() => {}}
         onRemove={() => {}}
         onAskAI={() => {}}
+        onMoveToFolder={() => {}}
       />,
     );
     expect(container.querySelector("img")).toBeNull();
@@ -266,5 +277,28 @@ describe("BookDetailView 笔记列表", () => {
 
     await user.click(screen.getByRole("tab", { name: "AI 笔记 0" }));
     expect(screen.getByText("这个分类下还没有笔记。")).toBeInTheDocument();
+  });
+});
+
+describe("BookDetailView 所在文件夹", () => {
+  it("显示当前文件夹名，菜单里点「未分类」触发 onMoveToFolder(null)", async () => {
+    const props = renderDetail();
+    const user = userEvent.setup();
+
+    expect(screen.getByText("所在文件夹")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "移动到文件夹" }));
+    expect(await screen.findByText("技术")).toBeInTheDocument();
+    await user.click(screen.getByText("未分类"));
+    expect(props.onMoveToFolder).toHaveBeenCalledWith(null);
+  });
+
+  it("没有 folderId 时显示「未分类」，选文件夹触发对应 id", async () => {
+    const book = makeBook({ folderId: undefined });
+    const props = renderDetail(book);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "移动到文件夹" }));
+    await user.click(await screen.findByText("技术"));
+    expect(props.onMoveToFolder).toHaveBeenCalledWith("folder-2");
   });
 });

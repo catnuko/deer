@@ -22,7 +22,6 @@ function makeBook(overrides: Partial<Book> = {}): Book {
     sizeBytes: 2_800_000,
     addedAt: new Date(2026, 9, 28).getTime(),
     progress: 0.1,
-    shelfIds: [],
     tags: [],
     ...overrides,
   };
@@ -31,7 +30,8 @@ function makeBook(overrides: Partial<Book> = {}): Book {
 beforeEach(() => {
   useBookStore.setState({
     books: [makeBook()],
-    shelves: [],
+    folders: [],
+    migrationNotice: null,
     ready: true,
     importing: false,
     error: null,
@@ -147,5 +147,69 @@ describe("BookshelfPage 整页详情", () => {
     await user.click(await screen.findByText("阅读"));
     // 非详情路径下不应出现详情顶栏
     expect(screen.queryByRole("button", { name: "返回书架" })).not.toBeInTheDocument();
+  });
+});
+
+describe("BookshelfPage 文件夹分类", () => {
+  it("左栏文件夹筛选书籍，未分类只留没有文件夹的书", async () => {
+    useBookStore.setState({
+      books: [
+        makeBook({ id: "b1", title: "三国演义", folderId: "f-fiction" }),
+        makeBook({ id: "b2", title: "算法导论", folderId: "f-tech" }),
+        makeBook({ id: "b3", title: "无夹书" }),
+      ],
+      folders: [
+        { id: "f-fiction", name: "小说", order: 1 },
+        { id: "f-tech", name: "技术", order: 2 },
+      ],
+    });
+    const user = userEvent.setup();
+    renderShelf();
+
+    await user.click(screen.getByRole("button", { name: "小说 1" }));
+    expect(
+      screen.getByRole("button", { name: "打开《三国演义》详情" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "打开《算法导论》详情" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("1 本")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "未分类 1" }));
+    expect(
+      screen.getByRole("button", { name: "打开《无夹书》详情" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "打开《三国演义》详情" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("新建文件夹：提交名称后调用 createFolder", async () => {
+    const createFolder = vi
+      .fn()
+      .mockResolvedValue({ id: "f-new", name: "旅行", order: 3 });
+    useBookStore.setState({ createFolder });
+    const user = userEvent.setup();
+    renderShelf();
+
+    await user.click(screen.getByRole("button", { name: "新建文件夹" }));
+    await user.type(screen.getByLabelText("文件夹名称"), "旅行");
+    await user.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => expect(createFolder).toHaveBeenCalledWith("旅行"));
+  });
+
+  it("迁移横幅只在标记存在时显示，「知道了」调用 dismissMigrationNotice", async () => {
+    const dismissMigrationNotice = vi.fn().mockResolvedValue(undefined);
+    useBookStore.setState({
+      migrationNotice: "shelf-to-folder",
+      dismissMigrationNotice,
+    });
+    const user = userEvent.setup();
+    renderShelf();
+
+    expect(screen.getByText(/书架已升级为文件夹/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "知道了" }));
+    expect(dismissMigrationNotice).toHaveBeenCalledTimes(1);
   });
 });

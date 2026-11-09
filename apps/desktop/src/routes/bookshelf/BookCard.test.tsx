@@ -3,12 +3,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatBytes, formatDate } from "@/lib/format";
-import type { Book, Shelf } from "@/lib/types";
+import type { Book, Folder } from "@/lib/types";
 import { BookCard } from "./BookCard";
 
-const SHELVES: Shelf[] = [
-  { id: "shelf-1", name: "科幻", order: 0 },
-  { id: "shelf-2", name: "在读", order: 1 },
+const FOLDERS: Folder[] = [
+  { id: "folder-1", name: "科幻", order: 1 },
+  { id: "folder-2", name: "在读", order: 2 },
 ];
 
 function makeBook(overrides: Partial<Book> = {}): Book {
@@ -21,7 +21,7 @@ function makeBook(overrides: Partial<Book> = {}): Book {
     sizeBytes: 1_500_000,
     addedAt: new Date("2026-01-15T08:00:00Z").getTime(),
     progress: 0,
-    shelfIds: ["shelf-1"],
+    folderId: "folder-1",
     tags: [],
     ...overrides,
   };
@@ -35,9 +35,9 @@ describe("BookCard", () => {
     render(
       <BookCard
         book={book}
-        shelves={SHELVES}
+        folders={FOLDERS}
         onOpen={() => {}}
-        onToggleShelf={() => {}}
+        onMoveToFolder={() => {}}
         onDelete={() => {}}
       />,
     );
@@ -55,9 +55,9 @@ describe("BookCard", () => {
     render(
       <BookCard
         book={makeBook()}
-        shelves={SHELVES}
+        folders={FOLDERS}
         onOpen={() => {}}
-        onToggleShelf={() => {}}
+        onMoveToFolder={() => {}}
         onDelete={() => {}}
       />,
     );
@@ -72,9 +72,9 @@ describe("BookCard", () => {
     render(
       <BookCard
         book={makeBook()}
-        shelves={[]}
+        folders={[]}
         onOpen={() => {}}
-        onToggleShelf={() => {}}
+        onMoveToFolder={() => {}}
         onDelete={() => {}}
       />,
     );
@@ -90,9 +90,9 @@ describe("BookCard", () => {
     render(
       <BookCard
         book={book}
-        shelves={[]}
+        folders={[]}
         onOpen={onOpen}
-        onToggleShelf={() => {}}
+        onMoveToFolder={() => {}}
         onDelete={() => {}}
       />,
     );
@@ -110,10 +110,10 @@ describe("BookCard", () => {
     render(
       <BookCard
         book={book}
-        shelves={[]}
+        folders={[]}
         onOpen={onOpen}
         onRead={onRead}
-        onToggleShelf={() => {}}
+        onMoveToFolder={() => {}}
         onDelete={() => {}}
       />,
     );
@@ -129,9 +129,9 @@ describe("BookCard", () => {
     const { container } = render(
       <BookCard
         book={makeBook({ progress: 0.5 })}
-        shelves={[]}
+        folders={[]}
         onOpen={() => {}}
-        onToggleShelf={() => {}}
+        onMoveToFolder={() => {}}
         onDelete={() => {}}
       />,
     );
@@ -141,23 +141,42 @@ describe("BookCard", () => {
     expect(bar?.style.width).toBe("50%");
   });
 
-  it("菜单里展示书架归属：在架的打勾，点另一个书架触发 onToggleShelf", async () => {
-    const onToggleShelf = vi.fn();
-    const book = makeBook(); // shelfIds 含 shelf-1
+  it("菜单里的「移动到文件夹」单选：当前项打勾，点别的文件夹触发 onMoveToFolder", async () => {
+    const onMoveToFolder = vi.fn();
+    const book = makeBook(); // folderId = folder-1
     const user = userEvent.setup();
     render(
       <BookCard
         book={book}
-        shelves={SHELVES}
+        folders={FOLDERS}
         onOpen={() => {}}
-        onToggleShelf={onToggleShelf}
+        onMoveToFolder={onMoveToFolder}
         onDelete={() => {}}
       />,
     );
 
     await user.click(screen.getByRole("button", { name: "《三体》更多操作" }));
+    expect(await screen.findByText("移动到文件夹")).toBeInTheDocument();
     await user.click(await screen.findByText("在读"));
-    expect(onToggleShelf).toHaveBeenCalledWith(book, SHELVES[1]);
+    expect(onMoveToFolder).toHaveBeenCalledWith(book, "folder-2");
+  });
+
+  it("菜单里的「未分类」把书移出文件夹", async () => {
+    const onMoveToFolder = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <BookCard
+        book={makeBook()}
+        folders={FOLDERS}
+        onOpen={() => {}}
+        onMoveToFolder={onMoveToFolder}
+        onDelete={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "《三体》更多操作" }));
+    await user.click(await screen.findByText("未分类"));
+    expect(onMoveToFolder).toHaveBeenCalledWith(makeBook(), null);
   });
 
   it("菜单里点「删除书籍」触发 onDelete", async () => {
@@ -167,9 +186,9 @@ describe("BookCard", () => {
     render(
       <BookCard
         book={book}
-        shelves={[]}
+        folders={[]}
         onOpen={() => {}}
-        onToggleShelf={() => {}}
+        onMoveToFolder={() => {}}
         onDelete={onDelete}
       />,
     );
@@ -179,19 +198,19 @@ describe("BookCard", () => {
     expect(onDelete).toHaveBeenCalledWith(book);
   });
 
-  it("shelves 为空时菜单显示「还没有书架」占位", async () => {
+  it("没有文件夹时「移动到文件夹」仍保留「未分类」一项", async () => {
     const user = userEvent.setup();
     render(
       <BookCard
         book={makeBook()}
-        shelves={[]}
+        folders={[]}
         onOpen={() => {}}
-        onToggleShelf={() => {}}
+        onMoveToFolder={() => {}}
         onDelete={() => {}}
       />,
     );
 
     await user.click(screen.getByRole("button", { name: "《三体》更多操作" }));
-    expect(await screen.findByText("还没有书架")).toBeInTheDocument();
+    expect(await screen.findByText("未分类")).toBeInTheDocument();
   });
 });
