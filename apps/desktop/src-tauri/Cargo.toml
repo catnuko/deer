@@ -29,6 +29,10 @@ tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macr
 # WebDAV 传输通道（src/webdav.rs）：stream feature 支持流式上传/下载
 reqwest = { version = "0.12", features = ["stream"] }
 futures-util = "0.3"
+# 备份归档（src/backup.rs）：内容哈希去重 + zip 打包
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

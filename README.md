@@ -39,6 +39,12 @@ Deer doesn't read for you. It helps you read better, think further, and enjoy th
 - Chapter summaries, passage explanations, open-ended Q&A, and an idea map that shows how concepts connect
 - The model can query your shelf through a built-in MCP server (`search_books`, `get_reading_state`, `get_library`) and return book cards you can open directly
 
+### Backup & restore
+
+- Export your whole library — book files, covers, highlights & notes, chat history, concept maps, and settings — as a single `.deer-backup` archive (Settings → Backup & restore)
+- Restore from an archive with **merge semantics**: books you already have (matched by content hash) are skipped, notes are merged by position, nothing is overwritten
+- Everything is local-first: no cloud account, the archive file is yours to copy anywhere
+
 ## Requirements
 
 - Node **22.13+** (local AI engines run through acpx on Node; cloud engines need no local runtime)

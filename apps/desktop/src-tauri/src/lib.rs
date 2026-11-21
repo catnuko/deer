@@ -1,4 +1,5 @@
 mod acpx;
+mod backup;
 mod claude_acp;
 mod claude_cli;
 mod deer_log;
@@ -17,6 +18,8 @@ pub fn run() {
             acpx::acpx_env_check,
             acpx::ai_engine_status,
             acpx::ai_engine_install,
+            backup::export_backup,
+            backup::import_backup,
             deer_log::diag_log,
             webdav::webdav_request,
             webdav::webdav_upload_file,
