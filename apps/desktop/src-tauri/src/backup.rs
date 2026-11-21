@@ -78,12 +78,17 @@ pub struct BookRecord {
     pub author: String,
     pub format: String,
     pub file_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cover_path: Option<String>,
     pub size_bytes: u64,
     pub added_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_opened_at: Option<i64>,
     pub progress: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_location_cfi: Option<String>,
+    /// 单书架+文件夹模型的书归属；旧多书架数据在 extra 里原样保留。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub folder_id: Option<String>,
     pub tags: Vec<String>,
     #[serde(flatten)]
