@@ -1,8 +1,26 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { ChatPanel } from "@/components/ai/ChatPanel";
 import { useCurrentBook } from "@/lib/ai/currentBook";
 import { useAIPanelStore } from "@/store/aiPanelStore";
+
+// ChatPanel 背后是 assistant-ui + AI SDK 的重依赖链：懒加载，
+// 书架首屏不拉聊天面板代码，点开 AI 入口时才加载。
+const ChatPanel = lazy(() =>
+  import("@/components/ai/ChatPanel").then((m) => ({ default: m.ChatPanel })),
+);
+
+/** 面板加载中的占位：与面板同宽的空态，避免闪烁。 */
+function PanelFallback() {
+  return (
+    <div
+      role="status"
+      aria-label="加载中"
+      className="bg-panel border-border text-muted-foreground flex h-full w-full items-center justify-center border-l text-sm"
+    >
+      加载中…
+    </div>
+  );
+}
 
 /** 只在书架页露出入口，避免和阅读页（泳道 B）右侧的 AI 栏抢位置。 */
 const ENTRY_ROUTES = ["/bookshelf", "/"];
@@ -36,16 +54,18 @@ export function AIPanelLauncher() {
   if (!onEntryRoute || !mounted) return null;
 
   return (
-    <ChatPanel
-      book={book}
-      open={open}
-      // 书架与阅读页同一形态：面板嵌入式停靠在主区右侧、推挤主区，
-      // 打开后常驻（点面板外/Esc 不收起），只有面板内关闭按钮能收。
-      onExited={() => setMounted(false)}
-      onClose={() => setOpen(false)}
-      // 书架没有章节/页概念，只露「这本书说了什么？」；书架不打开书文件，
-      // 一期只发问题本身（N1 上下文带书名，桌面端 AI 可借书架 MCP 作答）。
-      quickCommands={{ book: {} }}
-    />
+    <Suspense fallback={<PanelFallback />}>
+      <ChatPanel
+        book={book}
+        open={open}
+        // 书架与阅读页同一形态：面板嵌入式停靠在主区右侧、推挤主区，
+        // 打开后常驻（点面板外/Esc 不收起），只有面板内关闭按钮能收。
+        onExited={() => setMounted(false)}
+        onClose={() => setOpen(false)}
+        // 书架没有章节/页概念，只露「这本书说了什么？」；书架不打开书文件，
+        // 一期只发问题本身（N1 上下文带书名，桌面端 AI 可借书架 MCP 作答）。
+        quickCommands={{ book: {} }}
+      />
+    </Suspense>
   );
 }

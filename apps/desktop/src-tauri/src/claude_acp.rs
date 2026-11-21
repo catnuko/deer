@@ -51,7 +51,11 @@ pub(crate) fn parse_rpc_response(line: &str) -> Option<Result<Value, String>> {
     }
     if let Some(err) = v.get("error") {
         return Some(Err(match err.get("message") {
-            Some(m) => format!("{}: {}", m.as_str().unwrap_or("unknown"), err.get("data").map(|d| d.to_string()).unwrap_or_default()),
+            Some(m) => format!(
+                "{}: {}",
+                m.as_str().unwrap_or("unknown"),
+                err.get("data").map(|d| d.to_string()).unwrap_or_default()
+            ),
             None => err.to_string(),
         }));
     }
@@ -78,7 +82,10 @@ fn chunk_text(params: &Value, session_update: &str) -> Option<String> {
     if content.get("type")?.as_str()? != "text" {
         return None;
     }
-    content.get("text").and_then(Value::as_str).map(String::from)
+    content
+        .get("text")
+        .and_then(Value::as_str)
+        .map(String::from)
 }
 
 /* ------------------------------------------------------------------ */
@@ -95,7 +102,10 @@ pub(crate) fn find_node() -> PathBuf {
     }
     candidates.push(PathBuf::from("/opt/homebrew/bin/node"));
     candidates.push(PathBuf::from("/usr/local/bin/node"));
-    candidates.into_iter().find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("node"))
+    candidates
+        .into_iter()
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from("node"))
 }
 
 /* ------------------------------------------------------------------ */
@@ -118,7 +128,10 @@ mod tests {
             Some("收到")
         );
         // 思考块不算正文，不得混进正文
-        assert_eq!(text_delta(&update_params("agent_thought_chunk", "先想想")), None);
+        assert_eq!(
+            text_delta(&update_params("agent_thought_chunk", "先想想")),
+            None
+        );
         // 非文本内容不产出增量
         let image: Value = serde_json::from_str(
             r#"{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"..."}}}"#,
@@ -133,7 +146,10 @@ mod tests {
             thought_delta(&update_params("agent_thought_chunk", "先想想")).as_deref(),
             Some("先想想")
         );
-        assert_eq!(thought_delta(&update_params("agent_message_chunk", "收到")), None);
+        assert_eq!(
+            thought_delta(&update_params("agent_message_chunk", "收到")),
+            None
+        );
     }
 
     #[test]
@@ -145,10 +161,15 @@ mod tests {
 
         // 思考块不算正文；响应/坏行都不产出增量
         assert_eq!(
-            delta_from_line(r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hmm"}}}}"#),
+            delta_from_line(
+                r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hmm"}}}}"#
+            ),
             None
         );
-        assert_eq!(delta_from_line(r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}"#), None);
+        assert_eq!(
+            delta_from_line(r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}"#),
+            None
+        );
         assert_eq!(delta_from_line("not json"), None);
     }
 
@@ -176,11 +197,16 @@ mod tests {
 
     #[test]
     fn parse_rpc_response_skips_requests_and_notifications() {
-        assert!(parse_rpc_response(r#"{"jsonrpc":"2.0","method":"session/update","params":{}}"#).is_none());
-        assert!(parse_rpc_response(
-            r#"{"jsonrpc":"2.0","id":9,"method":"session/request_permission","params":{}}"#
-        )
-        .is_none());
+        assert!(
+            parse_rpc_response(r#"{"jsonrpc":"2.0","method":"session/update","params":{}}"#)
+                .is_none()
+        );
+        assert!(
+            parse_rpc_response(
+                r#"{"jsonrpc":"2.0","id":9,"method":"session/request_permission","params":{}}"#
+            )
+            .is_none()
+        );
         assert!(parse_rpc_response("not json").is_none());
     }
 }

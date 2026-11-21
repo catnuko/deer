@@ -82,7 +82,9 @@ fn maybe_rotate(path: &std::path::Path) {
     if !n.is_multiple_of(200) {
         return;
     }
-    let over = fs::metadata(path).map(|m| m.len() > MAX_BYTES).unwrap_or(false);
+    let over = fs::metadata(path)
+        .map(|m| m.len() > MAX_BYTES)
+        .unwrap_or(false);
     if over {
         let _ = fs::rename(path, path.with_extension("log.1"));
     }
@@ -189,12 +191,18 @@ mod tests {
         assert_eq!(format_local(0, 0), "1970-01-01 00:00:00.000");
         assert_eq!(format_local(0, 8 * 3600), "1970-01-01 08:00:00.000");
         // 2024-02-29 00:00:00 UTC（闰日）
-        assert_eq!(format_local(1_709_164_800_000, 0), "2024-02-29 00:00:00.000");
+        assert_eq!(
+            format_local(1_709_164_800_000, 0),
+            "2024-02-29 00:00:00.000"
+        );
         // 毫秒保留（1,000,000 秒 = 11 天 13:46:40）
         assert_eq!(format_local(1_000_000_123, 0), "1970-01-12 13:46:40.123");
         assert_eq!(format_local(1_000_000, 0), "1970-01-01 00:16:40.000");
         // 东八区跨日
-        assert_eq!(format_local(1_709_164_800_000, 8 * 3600), "2024-02-29 08:00:00.000");
+        assert_eq!(
+            format_local(1_709_164_800_000, 8 * 3600),
+            "2024-02-29 08:00:00.000"
+        );
     }
 
     #[test]
