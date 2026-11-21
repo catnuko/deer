@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, MoreHorizontal, Trash2 } from "lucide-react";
+import { BookOpen, Check, MoreHorizontal, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -12,26 +12,27 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { MinimalCard } from "@/components/ui/minimal-card";
 import { getCoverUrl } from "@/lib/covers";
-import type { Book, Shelf } from "@/lib/types";
+import type { Book, Folder } from "@/lib/types";
 
 type BookCardProps = {
   book: Book;
-  shelves: Shelf[];
+  folders: Folder[];
   /** 点卡片：打开整页详情。 */
   onOpen(book: Book): void;
   /** 菜单里的「阅读」：直达阅读页；缺省跟随 onOpen。 */
   onRead?(book: Book): void;
-  onToggleShelf(book: Book, shelf: Shelf): void;
+  /** folderId 为 null 表示移动到「未分类」。 */
+  onMoveToFolder(book: Book, folderId: string | null): void;
   onDelete(book: Book): void;
   actionsDisabled?: boolean;
 };
 
 export function BookCard({
   book,
-  shelves,
+  folders,
   onOpen,
   onRead,
-  onToggleShelf,
+  onMoveToFolder,
   onDelete,
   actionsDisabled = false,
 }: BookCardProps) {
@@ -106,28 +107,29 @@ export function BookCard({
           >
             <MoreHorizontal />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuContent align="end" className="w-52">
             <DropdownMenuItem onClick={() => (onRead ?? onOpen)(book)}>
+              <BookOpen />
               阅读
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuLabel>书架</DropdownMenuLabel>
-              {shelves.length === 0 && (
-                <DropdownMenuItem disabled>还没有书架</DropdownMenuItem>
-              )}
-              {shelves.map((shelf) => {
-                const inShelf = book.shelfIds.includes(shelf.id);
-                return (
-                  <DropdownMenuItem
-                    key={shelf.id}
-                    onClick={() => onToggleShelf(book, shelf)}
-                  >
-                    <span className="flex-1 truncate">{shelf.name}</span>
-                    {inShelf && <Check className="text-primary" />}
-                  </DropdownMenuItem>
-                );
-              })}
+              <DropdownMenuLabel>移动到文件夹</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => onMoveToFolder(book, null)}>
+                <span className="flex-1 truncate">未分类</span>
+                {!book.folderId && <Check className="text-primary" />}
+              </DropdownMenuItem>
+              {folders.map((folder) => (
+                <DropdownMenuItem
+                  key={folder.id}
+                  onClick={() => onMoveToFolder(book, folder.id)}
+                >
+                  <span className="flex-1 truncate">{folder.name}</span>
+                  {book.folderId === folder.id && (
+                    <Check className="text-primary" />
+                  )}
+                </DropdownMenuItem>
+              ))}
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem

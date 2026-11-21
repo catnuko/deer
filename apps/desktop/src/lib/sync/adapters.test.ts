@@ -20,14 +20,14 @@ const book: Book = {
   addedAt: 100,
   progress: 0.42,
   lastLocationCfi: "epubcfi(/6/4!/2)",
-  shelfIds: ["shelf-1"],
+  folderId: "folder-1",
   tags: ["童话"],
 };
 
 beforeEach(() => {
   useBookStore.setState({
-    books: [{ ...book, shelfIds: ["shelf-1"] }],
-    shelves: [{ id: "shelf-1", name: "想读", order: 1 }],
+    books: [{ ...book, folderId: "folder-1" }],
+    folders: [{ id: "folder-1", name: "想读", order: 1 }],
     ready: true,
     importing: false,
     error: null,
@@ -58,7 +58,7 @@ describe("书籍适配器", () => {
     expect(bookEntry).toBeDefined();
     expect(JSON.stringify(bookEntry?.data)).not.toContain("/data/books");
     expect(entries.map((entry) => entry.key)).toEqual(
-      expect.arrayContaining(["bk:hash-1", "bs:hash-1:shelf-1", "sh:shelf-1"]),
+      expect.arrayContaining(["bk:hash-1", "bs:hash-1:folder-1", "sh:folder-1"]),
     );
   });
 
@@ -94,17 +94,45 @@ describe("书籍适配器", () => {
     ).toBe(false);
   });
 
-  it("远端书架归属按哈希挂到已有书上", () => {
+  it("远端文件夹归属按哈希挂到已有书上，删除时回到「未分类」", () => {
     bookAdapter.apply({
       kind: "bookShelf",
-      key: "bs:hash-1:shelf-1",
+      key: "bs:hash-1:folder-1",
       hlc,
       deleted: true,
     });
-    expect(useBookStore.getState().books[0].shelfIds).toEqual([]);
+    expect(useBookStore.getState().books[0].folderId).toBeUndefined();
 
-    bookAdapter.apply({ kind: "bookShelf", key: "bs:hash-1:shelf-1", hlc, data: {} });
-    expect(useBookStore.getState().books[0].shelfIds).toEqual(["shelf-1"]);
+    bookAdapter.apply({ kind: "bookShelf", key: "bs:hash-1:folder-1", hlc, data: {} });
+    expect(useBookStore.getState().books[0].folderId).toBe("folder-1");
+  });
+
+  it("文件夹记录未落地时归属不挂，远端新建文件夹后可挂上", () => {
+    bookAdapter.apply({
+      kind: "bookShelf",
+      key: "bs:hash-1:folder-new",
+      hlc,
+      data: {},
+    });
+    expect(useBookStore.getState().books[0].folderId).toBe("folder-1");
+
+    bookAdapter.apply({
+      kind: "shelf",
+      key: "sh:folder-new",
+      hlc,
+      data: { name: "新夹", order: 2 },
+    });
+    expect(useBookStore.getState().folders.map((f) => f.id)).toEqual(
+      expect.arrayContaining(["folder-1", "folder-new"]),
+    );
+
+    bookAdapter.apply({
+      kind: "bookShelf",
+      key: "bs:hash-1:folder-new",
+      hlc: { ...hlc, counter: 1 },
+      data: {},
+    });
+    expect(useBookStore.getState().books[0].folderId).toBe("folder-new");
   });
 });
 

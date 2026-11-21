@@ -35,17 +35,17 @@ Deer 不替你读书；它帮你读得更好、想得更远，也享受这段旅
 ### AI 伴读
 
 - 书架与阅读页都有**停靠式聊天面板**：点开是空面板，想问了再发
-- 经 acpx 接入**27 个引擎**：Claude Code、Codex、Kimi、Qwen、Gemini、Cursor 等，在设置里选用；acpx 官方适配器一键安装，厂商 CLI 若已安装会自动识别
+- **双链路 + 引擎路由**：本地引擎经 acpx 接入 **27 个**（Claude Code、Codex、Kimi、Qwen、Gemini、Cursor 等；acpx 官方适配器一键安装，厂商 CLI 若已安装会自动识别），云引擎在 webview 内经 Vercel AI SDK 走你自己的服务商端点（OpenAI 兼容 / Anthropic）。设置里三档路由：**自动**（本地可用走本地，否则回落云）、**仅本地**、**仅云**
 - 章节总结、段落解读、开放式问答，以及展示概念关联的**概念地图**
 - 模型可通过内置 MCP 服务查询你的书架（`search_books`、`get_reading_state`、`get_library`），返回的书单以书卡形式呈现，点击直接打开
 
 ## 环境要求
 
-- Node **22.13+**（AI 面板经 acpx 跑在 Node 上）
+- Node **22.13+**（本地引擎经 acpx 跑在 Node 上；云引擎无需本地运行时）
 - pnpm **12.3.4**（`packageManager` 已锁定）
 - Rust 工具链，以及 Tauri v2 所需的系统依赖
-- AI 功能需要 `acpx@0.21.1`：`npm install -g acpx@0.21.1`
-- 至少安装一个你想用的引擎 CLI（设置 → AI 伴读 会逐行显示安装状态）
+- 本地引擎需要 `acpx@0.21.1`：`npm install -g acpx@0.21.1`
+- 本地引擎至少装一个你想用的 CLI（设置 → AI 伴读 会逐行显示安装状态）；云引擎只需在设置里填自己的 API key 与端点
 
 ## 截图
 
@@ -69,7 +69,7 @@ Deer 不替你读书；它帮你读得更好、想得更远，也享受这段旅
 
 - **平台：** 仅 Apple Silicon（aarch64）
 - **系统：** macOS 11（Big Sur）及以上
-- 书籍、笔记和设置都保存在本机；AI 功能另外需要 Node 22.13+、acpx 和一个引擎 CLI，见[环境要求](#环境要求)
+- 书籍、笔记和设置都保存在本机；本地 AI 引擎另外需要 Node 22.13+、acpx 和一个引擎 CLI，见[环境要求](#环境要求)
 
 ## 快速开始（从源码构建）
 

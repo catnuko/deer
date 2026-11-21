@@ -5,8 +5,8 @@ import type { Book, ChatMessage, ChatThread } from "@/lib/types";
 import type {
   AnnotationSyncData,
   BookSyncData,
+  FolderSyncData,
   MessageSyncData,
-  ShelfSyncData,
   SyncKind,
   SyncRecord,
   ThreadSyncData,
@@ -47,7 +47,7 @@ function bookIdToHash(books: Book[]): Map<string, string> {
 }
 
 /* ------------------------------------------------------------------ */
-/* 书库：书籍、书架、书架归属                                             */
+/* 书库：书籍、文件夹、文件夹归属                                        */
 /* ------------------------------------------------------------------ */
 
 function bookPayload(book: Book): BookSyncData {
@@ -70,7 +70,7 @@ export const bookAdapter: SyncAdapter = {
   name: "library",
 
   snapshot() {
-    const { books, shelves } = useBookStore.getState();
+    const { books, folders } = useBookStore.getState();
     const entries: LocalEntry[] = [];
 
     for (const book of books) {
@@ -80,20 +80,22 @@ export const bookAdapter: SyncAdapter = {
         key: `bk:${book.contentHash}`,
         data: bookPayload(book),
       });
-      for (const shelfId of book.shelfIds ?? []) {
+      // 归属记录沿用 shelf 时代的 bookShelf kind 与 { bookHash, shelfId }
+      // 载荷名（块格式兼容）；值是 folderId，Folder 模型一本书至多一条。
+      if (book.folderId) {
         entries.push({
           kind: "bookShelf",
-          key: `bs:${book.contentHash}:${shelfId}`,
-          data: { bookHash: book.contentHash, shelfId },
+          key: `bs:${book.contentHash}:${book.folderId}`,
+          data: { bookHash: book.contentHash, shelfId: book.folderId },
         });
       }
     }
 
-    for (const shelf of shelves) {
+    for (const folder of folders) {
       entries.push({
         kind: "shelf",
-        key: `sh:${shelf.id}`,
-        data: { name: shelf.name, order: shelf.order } satisfies ShelfSyncData,
+        key: `sh:${folder.id}`,
+        data: { name: folder.name, order: folder.order } satisfies FolderSyncData,
       });
     }
 
@@ -110,15 +112,15 @@ export const bookAdapter: SyncAdapter = {
         );
         return;
       case "shelf":
-        store.applyRemoteShelf(
+        store.applyRemoteFolder(
           record.key.slice(3),
-          record.deleted ? null : (record.data as ShelfSyncData),
+          record.deleted ? null : (record.data as FolderSyncData),
         );
         return;
       case "bookShelf": {
-        const [, bookHash, shelfId] = record.key.split(":");
-        if (bookHash && shelfId) {
-          store.applyRemoteShelfMembership(bookHash, shelfId, !record.deleted);
+        const [, bookHash, folderId] = record.key.split(":");
+        if (bookHash && folderId) {
+          store.applyRemoteFolderMembership(bookHash, folderId, !record.deleted);
         }
         return;
       }

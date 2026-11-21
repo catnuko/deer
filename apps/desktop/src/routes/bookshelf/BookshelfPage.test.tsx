@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { act } from "react";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { Book } from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useAIPanelStore } from "@/store/aiPanelStore";
 import { BookshelfPage } from "./BookshelfPage";
 
 vi.mock("@/lib/platform", () => ({ isTauri: () => true }));
@@ -20,7 +22,6 @@ function makeBook(overrides: Partial<Book> = {}): Book {
     sizeBytes: 2_800_000,
     addedAt: new Date(2026, 9, 28).getTime(),
     progress: 0.1,
-    shelfIds: [],
     tags: [],
     ...overrides,
   };
@@ -29,7 +30,8 @@ function makeBook(overrides: Partial<Book> = {}): Book {
 beforeEach(() => {
   useBookStore.setState({
     books: [makeBook()],
-    shelves: [],
+    folders: [],
+    migrationNotice: null,
     ready: true,
     importing: false,
     error: null,
@@ -38,6 +40,7 @@ beforeEach(() => {
     removeBook: vi.fn().mockResolvedValue(undefined),
   });
   useAnnotationStore.setState({ annotations: {}, ready: true });
+  useAIPanelStore.setState({ open: false, book: null });
 });
 
 afterEach(cleanup);
@@ -93,6 +96,30 @@ describe("BookshelfPage 整页详情", () => {
     );
   });
 
+  it("详情页「问 AI」：面板绑定真实书打开，关闭面板后解除绑定", async () => {
+    const user = userEvent.setup();
+    renderShelf();
+
+    await openDetail(user);
+    await user.click(screen.getByRole("button", { name: "问 AI" }));
+
+    expect(useAIPanelStore.getState().open).toBe(true);
+    expect(useAIPanelStore.getState().book).toEqual({
+      id: "book-1",
+      title: "三国演义",
+    });
+
+    // 面板还开着时返回书架：会话保持在这本书，不切到演示书。
+    await user.click(screen.getByRole("button", { name: "返回书架" }));
+    expect(useAIPanelStore.getState().book).toEqual({
+      id: "book-1",
+      title: "三国演义",
+    });
+
+    act(() => useAIPanelStore.getState().setOpen(false));
+    expect(useAIPanelStore.getState().book).toBeNull();
+  });
+
   it("详情页「从书架移除」走二次确认：取消不删，确认才调用删除", async () => {
     const user = userEvent.setup();
     const removeBook = useBookStore.getState().removeBook as ReturnType<typeof vi.fn>;
@@ -120,5 +147,118 @@ describe("BookshelfPage 整页详情", () => {
     await user.click(await screen.findByText("阅读"));
     // 非详情路径下不应出现详情顶栏
     expect(screen.queryByRole("button", { name: "返回书架" })).not.toBeInTheDocument();
+  });
+});
+
+describe("BookshelfPage 文件夹分类", () => {
+  it("左栏文件夹筛选书籍，未分类只留没有文件夹的书", async () => {
+    useBookStore.setState({
+      books: [
+        makeBook({ id: "b1", title: "三国演义", folderId: "f-fiction" }),
+        makeBook({ id: "b2", title: "算法导论", folderId: "f-tech" }),
+        makeBook({ id: "b3", title: "无夹书" }),
+      ],
+      folders: [
+        { id: "f-fiction", name: "小说", order: 1 },
+        { id: "f-tech", name: "技术", order: 2 },
+      ],
+    });
+    const user = userEvent.setup();
+    renderShelf();
+
+    await user.click(screen.getByRole("button", { name: "小说 1" }));
+    expect(
+      screen.getByRole("button", { name: "打开《三国演义》详情" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "打开《算法导论》详情" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("1 本")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "未分类 1" }));
+    expect(
+      screen.getByRole("button", { name: "打开《无夹书》详情" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "打开《三国演义》详情" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("新建文件夹：提交名称后调用 createFolder", async () => {
+    const createFolder = vi
+      .fn()
+      .mockResolvedValue({ id: "f-new", name: "旅行", order: 3 });
+    useBookStore.setState({ createFolder });
+    const user = userEvent.setup();
+    renderShelf();
+
+    await user.click(screen.getByRole("button", { name: "新建文件夹" }));
+    await user.type(screen.getByLabelText("文件夹名称"), "旅行");
+    await user.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => expect(createFolder).toHaveBeenCalledWith("旅行"));
+  });
+
+  it("迁移横幅只在标记存在时显示，「知道了」调用 dismissMigrationNotice", async () => {
+    const dismissMigrationNotice = vi.fn().mockResolvedValue(undefined);
+    useBookStore.setState({
+      migrationNotice: "shelf-to-folder",
+      dismissMigrationNotice,
+    });
+    const user = userEvent.setup();
+    renderShelf();
+
+    expect(screen.getByText(/书架已升级为文件夹/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "知道了" }));
+    expect(dismissMigrationNotice).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("BookshelfPage 窄屏 chip 行", () => {
+  it("窄屏用顶部 chip 切换文件夹，选中文件夹露出「管理」入口", async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      useBookStore.setState({
+        books: [
+          makeBook({ id: "b1", title: "三国演义", folderId: "f-fiction" }),
+          makeBook({ id: "b2", title: "算法导论", folderId: "f-tech" }),
+        ],
+        folders: [
+          { id: "f-fiction", name: "小说", order: 1 },
+          { id: "f-tech", name: "技术", order: 2 },
+        ],
+      });
+      const user = userEvent.setup();
+      renderShelf();
+
+      await user.click(screen.getByRole("button", { name: "技术 1" }));
+      expect(
+        screen.getByRole("button", { name: "打开《算法导论》详情" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "打开《三国演义》详情" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "管理文件夹「技术」" }),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "全部 2" }));
+      expect(
+        screen.getByRole("button", { name: "打开《三国演义》详情" }),
+      ).toBeInTheDocument();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 });

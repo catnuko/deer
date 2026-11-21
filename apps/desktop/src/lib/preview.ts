@@ -1,12 +1,12 @@
-import type { Book, Shelf } from "@/lib/types";
+import type { Book, Folder } from "@/lib/types";
 
 /**
  * 浏览器预览数据（只在 `?preview=1` 且非 Tauri 环境下使用）。
  * 桌面应用里永远读 appDataDir 的真实书库，这里不会被加载。
  */
-export const PREVIEW_SHELVES: Shelf[] = [
-  { id: "preview-shelf-fiction", name: "小说", order: 1 },
-  { id: "preview-shelf-tech", name: "技术", order: 2 },
+export const PREVIEW_FOLDERS: Folder[] = [
+  { id: "preview-folder-fiction", name: "小说", order: 1 },
+  { id: "preview-folder-tech", name: "技术", order: 2 },
 ];
 
 export const PREVIEW_BOOKS: Book[] = [
@@ -19,7 +19,7 @@ export const PREVIEW_BOOKS: Book[] = [
     sizeBytes: 1_842_311,
     addedAt: Date.UTC(2026, 9, 21),
     progress: 0.34,
-    shelfIds: ["preview-shelf-fiction"],
+    folderId: "preview-folder-fiction",
     tags: [],
   },
   {
@@ -31,7 +31,7 @@ export const PREVIEW_BOOKS: Book[] = [
     sizeBytes: 12_508_144,
     addedAt: Date.UTC(2026, 9, 24),
     progress: 0.08,
-    shelfIds: ["preview-shelf-tech"],
+    folderId: "preview-folder-tech",
     tags: [],
   },
   {
@@ -43,7 +43,7 @@ export const PREVIEW_BOOKS: Book[] = [
     sizeBytes: 4_210_998,
     addedAt: Date.UTC(2026, 9, 26),
     progress: 0,
-    shelfIds: ["preview-shelf-fiction", "preview-shelf-tech"],
+    folderId: "preview-folder-fiction",
     tags: [],
   },
 ];

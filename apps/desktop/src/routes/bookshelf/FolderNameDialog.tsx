@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
-type ShelfNameDialogProps = {
+type FolderNameDialogProps = {
   open: boolean;
   title: string;
   description: string;
@@ -20,8 +20,8 @@ type ShelfNameDialogProps = {
   onSubmit(name: string): Promise<void>;
 };
 
-/** 新建/重命名书架共用的单输入弹窗。 */
-export function ShelfNameDialog({
+/** 新建/重命名文件夹共用的单输入弹窗。 */
+export function FolderNameDialog({
   open,
   title,
   description,
@@ -29,7 +29,7 @@ export function ShelfNameDialog({
   initialValue = "",
   onOpenChange,
   onSubmit,
-}: ShelfNameDialogProps) {
+}: FolderNameDialogProps) {
   // 由调用方以 key 控制挂载：每次打开都是新实例，不需要 effect 重置。
   const [name, setName] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
@@ -61,18 +61,23 @@ export function ShelfNameDialog({
           </DialogHeader>
 
           <div className="grid gap-2">
-            <label htmlFor="shelf-name" className="text-sm font-medium">
-              书架名称
+            <label htmlFor="folder-name" className="text-sm font-medium">
+              文件夹名称
             </label>
             <Input
-              id="shelf-name"
+              id="folder-name"
               value={name}
               autoFocus
               maxLength={40}
               placeholder="例如：想读、技术、小说"
+              aria-invalid={error ? true : undefined}
               onChange={(event) => setName(event.target.value)}
             />
-            {error && <p className="text-destructive text-xs">{error}</p>}
+            {error ? (
+              <p className="text-destructive text-xs">{error}</p>
+            ) : (
+              <p className="text-muted-foreground text-xs">最多 40 个字符</p>
+            )}
           </div>
 
           <DialogFooter>

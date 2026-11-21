@@ -17,23 +17,38 @@ export type Book = {
   lastOpenedAt?: number;
   progress: number; // 0..1
   lastLocationCfi?: string; // 上次读到的位置，打开书时恢复
-  shelfIds: string[];
+  /** 所属文件夹；缺省 = 未分类。一本书只属于一个文件夹。 */
+  folderId?: string;
   tags: string[];
 };
 
-export type Shelf = { id: string; name: string; order: number };
+/** 书库唯一书架下的一层分类。 */
+export type Folder = { id: string; name: string; order: number };
+
+/** 旧版多书架模型的残留字段，只在迁移时读入。 */
+export type LegacyShelf = { id: string; name: string; order: number };
+
+export type LibraryVersion = 2;
+
+/** 迁移后的一次性提示标记，书架页首次进入显示横幅。 */
+export type MigrationNotice = "shelf-to-folder";
 
 export type BookStoreState = {
   books: Book[];
-  shelves: Shelf[];
+  folders: Folder[];
+  libraryVersion: number;
+  migrationNotice: MigrationNotice | null;
   ready: boolean; // 是否已从磁盘加载完成
   load(): Promise<void>;
   importEpub(filePath: string): Promise<Book>; // 泳道 A 实现
   removeBook(id: string): Promise<void>; // 泳道 A 实现
   updateBook(id: string, patch: Partial<Book>): Promise<void>;
-  createShelf(name: string): Promise<Shelf>;
-  deleteShelf(id: string): Promise<void>;
-  moveBookToShelf(bookId: string, shelfId: string): Promise<void>;
+  createFolder(name: string): Promise<Folder>;
+  renameFolder(id: string, name: string): Promise<void>;
+  deleteFolder(id: string): Promise<void>;
+  /** folderId 为 null 表示移回「未分类」。 */
+  moveBookToFolder(bookId: string, folderId: string | null): Promise<void>;
+  dismissMigrationNotice(): Promise<void>;
 };
 
 /** 聊天书卡：MCP 书架工具结果里抽出的书籍引用，点击打开阅读。 */
@@ -44,6 +59,8 @@ export type ChatBookRef = {
   format: string;
   progress: number; // 0..1
   coverPath?: string;
+  /** get_library 结果里附带的文件夹名，未分类时缺省。 */
+  folderName?: string;
 };
 
 export type ChatMessage = {

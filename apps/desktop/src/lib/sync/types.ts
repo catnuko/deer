@@ -49,7 +49,12 @@ export type BookSyncData = {
   lastLocationCfi?: string;
 };
 
-export type ShelfSyncData = { name: string; order: number };
+/**
+ * 文件夹的同步载荷。书库已是 Folder 模型（一本书只属一个文件夹）；
+ * 同步块格式沿用 P1 的 shelf 记录（kind "shelf"/"bookShelf"、key 前缀
+ * `sh:`/`bs:`），字段与 Folder 同构，落地时映射到文件夹。
+ */
+export type FolderSyncData = { name: string; order: number };
 
 export type AnnotationSyncData = {
   bookHash: string;
