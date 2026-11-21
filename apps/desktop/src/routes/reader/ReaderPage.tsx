@@ -14,6 +14,7 @@ import { ChatPanel, type ChatPanelDraft, type ChatPanelHandle, type QuickCommand
 import { ReaderArticle } from "@/components/reader/ReaderArticle";
 import { AnnotationPanel } from "@/components/reader/AnnotationPanel";
 import { ConceptMapPanel } from "@/components/reader/ConceptMapPanel";
+import { BookBriefingPanel } from "@/components/reader/BookBriefingPanel";
 import { QuickSettingsPanel } from "@/components/reader/QuickSettingsPanel";
 import { ReaderToc, type ReaderTocEntry } from "@/components/reader/ReaderToc";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
@@ -333,6 +334,8 @@ export function ReaderPage() {
   const [conceptMapChapterKey, setConceptMapChapterKey] = useState<string | null>(
     null,
   );
+  // 开读简报：整本书一张卡，缓存 key 就是 bookId，无需额外记 section。
+  const [briefingOpen, setBriefingOpen] = useState(false);
 
   // 读当前 spine section 的可读正文；抽不出（图片书/空章节）返回 null。
   // 只依赖 ref，恒定引用，供快捷指令/概念地图/AI 工具桥共用。
@@ -348,6 +351,12 @@ export function ReaderPage() {
     } catch {
       return null;
     }
+  }, []);
+
+  // 读全书可读正文（按 spine 遍历、总量截断），开读简报的取材入口。
+  const readBookText = useCallback(async (): Promise<string | null> => {
+    const result = await extractBookTextFromView(viewRef.current);
+    return result?.text ?? null;
   }, []);
 
   const askDeer = useCallback((text: string) => {
@@ -448,16 +457,18 @@ export function ReaderPage() {
   // 与 open 在同一次更新里落地，壳渲染时读到的就是这次关闭的理由。
   const [quickSettingsImmediate, setQuickSettingsImmediate] = useState(false);
   const [conceptMapImmediate, setConceptMapImmediate] = useState(false);
+  const [briefingImmediate, setBriefingImmediate] = useState(false);
 
-  // 浮层互斥（规范 1.3）：显示设置与概念地图同时只开一个。打开一方时另一方
-  // 立即摘除，不播 150ms 退场——否则两层并存，旧面板还在拦点击（G8）。
+  // 浮层互斥（规范 1.3）：显示设置、概念地图与开读简报同时只开一个。打开一方时
+  // 其余各方立即摘除，不播 150ms 退场——否则两层并存，旧面板还在拦点击（G8）。
   const applyOverlayPair = (
-    slot: "quickSettings" | "conceptMap",
+    slot: "quickSettings" | "conceptMap" | "briefing",
   ): OverlayPair => {
     const next = toggleOverlayPair(
       {
         quickSettings: { open: quickSettingsOpen, immediate: quickSettingsImmediate },
         conceptMap: { open: conceptMapOpen, immediate: conceptMapImmediate },
+        briefing: { open: briefingOpen, immediate: briefingImmediate },
       },
       slot,
     );
@@ -465,6 +476,8 @@ export function ReaderPage() {
     setQuickSettingsImmediate(next.quickSettings.immediate);
     setConceptMapOpen(next.conceptMap.open);
     setConceptMapImmediate(next.conceptMap.immediate);
+    setBriefingOpen(next.briefing.open);
+    setBriefingImmediate(next.briefing.immediate);
     return next;
   };
   const toggleQuickSettings = () => {
@@ -493,13 +506,27 @@ export function ReaderPage() {
     setConceptMapOpen(false);
     focusToolbarButton("reader-toolbar-concept-map");
   }, []);
+  const toggleBriefing = () => {
+    const willOpen = !briefingOpen;
+    applyOverlayPair("briefing");
+    if (!willOpen) {
+      focusToolbarButton("reader-toolbar-briefing");
+    }
+  };
+  const closeBriefing = useCallback(() => {
+    setBriefingImmediate(false);
+    setBriefingOpen(false);
+    focusToolbarButton("reader-toolbar-briefing");
+  }, []);
   // L2（目录 / 笔记窄窗）打开时强制关闭所有 L1（motion.md §2）；目录开合会
   // 让正文重排，划选工具条与脚注卡的锚点也随之失效。
   const closeLevel1Overlays = () => {
     setQuickSettingsImmediate(false);
     setConceptMapImmediate(false);
+    setBriefingImmediate(false);
     setQuickSettingsOpen(false);
     setConceptMapOpen(false);
+    setBriefingOpen(false);
     setSelection(null);
     setAnnotationMenu(null);
     closeNotePeek();
@@ -681,6 +708,7 @@ const copyAnnotationText = useCallback((text: string) => {
     setNotePeekClosing(false);
     setConceptMapOpen(false);
     setConceptMapChapterKey(null);
+    setBriefingOpen(false);
   }
 
   // 翻页请求收口（M1b）：滑动档约 300ms 串行锁、关闭档 100ms 保护间隔，
@@ -787,8 +815,10 @@ const copyAnnotationText = useCallback((text: string) => {
       // navigation 关闭：不播 150ms 退场（会盖在翻页动画上）。
       setQuickSettingsImmediate(true);
       setConceptMapImmediate(true);
+      setBriefingImmediate(true);
       setQuickSettingsOpen(false);
       setConceptMapOpen(false);
+      setBriefingOpen(false);
       closeNotePeek();
       // 翻页动效：只有「淡入」档在 relocate 时对容器做 150ms 淡入，
       // 不移动分页锚点，也不改变 foliate 自己的排版；滑动档由分页器
@@ -1362,6 +1392,11 @@ const copyAnnotationText = useCallback((text: string) => {
         onToggleConceptMap={toggleConceptMap}
         onCloseConceptMap={closeConceptMap}
         getChapterText={readCurrentSectionText}
+        briefingOpen={briefingOpen}
+        briefingImmediate={briefingImmediate}
+        onToggleBriefing={toggleBriefing}
+        onCloseBriefing={closeBriefing}
+        getBookText={readBookText}
         quickCommands={quickCommands}
         onClosePanel={() => setChatOpen(false)}
       />
@@ -1459,6 +1494,12 @@ type RealReaderProps = {
   onToggleConceptMap: () => void;
   onCloseConceptMap: () => void;
   getChapterText: () => Promise<string | null>;
+  briefingOpen: boolean;
+  briefingImmediate: boolean;
+  onToggleBriefing: () => void;
+  onCloseBriefing: () => void;
+  /** 抽全书可读正文（开读简报取材）；抽不出返回 null。 */
+  getBookText: () => Promise<string | null>;
   quickCommands: QuickCommands;
   onClosePanel: () => void;
 };
@@ -1521,6 +1562,11 @@ function RealReader({
   onToggleConceptMap,
   onCloseConceptMap,
   getChapterText,
+  briefingOpen,
+  briefingImmediate,
+  onToggleBriefing,
+  onCloseBriefing,
+  getBookText,
   quickCommands,
   onClosePanel,
 }: RealReaderProps) {
@@ -1559,6 +1605,8 @@ function RealReader({
           onToggleQuickSettings={onToggleQuickSettings}
           conceptMapOpen={conceptMapOpen}
           onToggleConceptMap={onToggleConceptMap}
+          briefingOpen={briefingOpen}
+          onToggleBriefing={onToggleBriefing}
           onOpenPanel={onOpenPanel}
           panelOpen={chatOpen}
         />
@@ -1697,6 +1745,22 @@ function RealReader({
                   }
                   getChapterText={getChapterText}
                   onClose={onCloseConceptMap}
+                />
+              ) : null}
+              {briefingOpen ? (
+                <BookBriefingPanel
+                  open={briefingOpen}
+                  immediate={briefingImmediate}
+                  bookId={bookId}
+                  bookTitle={title}
+                  // 章节地图的参照系：展平后的目录标题，按书的实际顺序。
+                  chapterTitles={
+                    phase.status === "ready"
+                      ? phase.toc.map((item) => item.title)
+                      : []
+                  }
+                  getBookText={getBookText}
+                  onClose={onCloseBriefing}
                 />
               ) : null}
               {notePeek ? (
@@ -1892,6 +1956,8 @@ function DemoReader({
 
   // 概念地图（R2）：演示书按章节序号做缓存 key，正文就是段落列表。
   const [conceptMapOpen, setConceptMapOpen] = useState(false);
+  // 开读简报：演示书整本一张卡，正文拼全书段落。
+  const [briefingOpen, setBriefingOpen] = useState(false);
 
   // 总结本章（N3）：演示书章节就是段落列表，走 N1 上下文注入发送。
   const summarizeChapter = () => {
@@ -1920,6 +1986,7 @@ function DemoReader({
     setScrollProgress(0);
     setSelection(null);
     setConceptMapOpen(false);
+    setBriefingOpen(false);
   };
 
   // 划选问 Deer（N2）：演示书正文就在宿主文档里，直接读 window selection。
@@ -1995,6 +2062,8 @@ function DemoReader({
           onToggleToc={() => setTocOpen((open) => !open)}
           conceptMapOpen={conceptMapOpen}
           onToggleConceptMap={() => setConceptMapOpen((open) => !open)}
+          briefingOpen={briefingOpen}
+          onToggleBriefing={() => setBriefingOpen((open) => !open)}
           onOpenPanel={onOpenPanel}
           panelOpen={chatOpen}
         />
@@ -2075,6 +2144,19 @@ function DemoReader({
                 onClose={() => {
                   setConceptMapOpen(false);
                   focusToolbarButton("reader-toolbar-concept-map");
+                }}
+              />
+              <BookBriefingPanel
+                open={briefingOpen}
+                bookId={bookId ?? book.id}
+                bookTitle={book.title}
+                chapterTitles={book.chapters.map((c) => c.title)}
+                getBookText={async () =>
+                  book.chapters.map((c) => c.paragraphs.join("\n\n")).join("\n\n")
+                }
+                onClose={() => {
+                  setBriefingOpen(false);
+                  focusToolbarButton("reader-toolbar-briefing");
                 }}
               />
             </div>
