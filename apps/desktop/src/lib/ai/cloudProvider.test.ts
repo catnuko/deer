@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cloudErrorMessage,
-  createCloudModel,
   isCloudConfigReady,
   normalizeCloudConfig,
-  testCloudConnection,
-} from "@/lib/ai/cloudProvider";
+} from "@/lib/ai/providerConfig";
+import { createCloudModel, testCloudConnection } from "@/lib/ai/cloudProvider";
 
 const BASE_CONFIG = {
   provider: "openai-compatible",
