@@ -60,7 +60,8 @@ describe("SettingsDialog", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "AI 伴读" }));
-    expect(screen.getByText("AI 引擎")).toBeInTheDocument();
+    // AiSection 是懒加载分组：等 lazy 解析后再断言内容。
+    expect(await screen.findByText("AI 引擎")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "数据" }));
     expect(screen.getByText("存储概况")).toBeInTheDocument();

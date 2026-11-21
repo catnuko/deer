@@ -22,20 +22,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::claude_acp::{
-    delta_from_line, find_node, parse_rpc_response, CHAT_GATE, EVENT_CHUNK,
-    IDLE_BEFORE_FIRST_CHUNK, IDLE_BETWEEN_CHUNKS, PROMPT_TIMEOUT,
+    CHAT_GATE, EVENT_CHUNK, IDLE_BEFORE_FIRST_CHUNK, IDLE_BETWEEN_CHUNKS, PROMPT_TIMEOUT,
+    delta_from_line, find_node, parse_rpc_response,
 };
 use crate::claude_cli::{
     known_bin_dirs, parse_node_version, probe_shell_path, read_oauth_token, split_path_env,
 };
-use crate::deer_log::{log, LOG_HINT};
+use crate::deer_log::{LOG_HINT, log};
 
 /// 锁定的 acpx 版本线（spike 锁 0.21.1；pre-1.0 CLI 面可能破坏，升级走显式变更）。
 const ACPX_VERSION_PREFIX: &str = "0.21.";
@@ -131,7 +131,7 @@ pub(crate) fn node_satisfies(version: &[u64]) -> bool {
             major > MIN_NODE.0 || (major == MIN_NODE.0 && minor >= MIN_NODE.1)
         }
         // 只有大版本号（如 "v22"）时按该大版本达标处理
-        (Some(&major), None) => major > MIN_NODE.0 || major == MIN_NODE.0,
+        (Some(&major), None) => major >= MIN_NODE.0,
         _ => false,
     }
 }
@@ -161,7 +161,10 @@ pub(crate) fn session_id_from_value(v: &Value) -> Option<String> {
 pub(crate) fn error_summary(v: &Value) -> Option<String> {
     let err = v.get("error")?;
     let code = err.get("code").map(|c| c.to_string()).unwrap_or_default();
-    let message = err.get("message").and_then(Value::as_str).unwrap_or("unknown");
+    let message = err
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     Some(format!("{code} {message}"))
 }
 
@@ -242,12 +245,11 @@ pub(crate) fn book_cards_from_update(params: &Value) -> Option<Vec<Value>> {
         let Ok(payload) = serde_json::from_str::<Value>(text) else {
             continue;
         };
-        if payload.get("deer").and_then(Value::as_str) == Some("books") {
-            if let Some(books) = payload.get("books").and_then(Value::as_array) {
-                if !books.is_empty() {
-                    return Some(books.clone());
-                }
-            }
+        if payload.get("deer").and_then(Value::as_str) == Some("books")
+            && let Some(books) = payload.get("books").and_then(Value::as_array)
+            && !books.is_empty()
+        {
+            return Some(books.clone());
         }
     }
     None
@@ -279,9 +281,7 @@ async fn search_dirs() -> Vec<PathBuf> {
 }
 
 fn candidates_in(dirs: &[PathBuf], bin: &str) -> Vec<PathBuf> {
-    dirs.iter()
-        .map(|dir| dir.join(bin))
-        .collect()
+    dirs.iter().map(|dir| dir.join(bin)).collect()
 }
 
 async fn find_acpx() -> Result<PathBuf, String> {
@@ -290,9 +290,7 @@ async fn find_acpx() -> Result<PathBuf, String> {
             return Ok(candidate);
         }
     }
-    Err(format!(
-        "未找到 acpx（已探测 ~/.local/bin、~/.npm-global/bin、nvm、homebrew 与 PATH）。请在终端执行 npm install -g acpx@0.21.1 安装后重启应用。"
-    ))
+    Err("未找到 acpx（已探测 ~/.local/bin、~/.npm-global/bin、nvm、homebrew 与 PATH）。请在终端执行 npm install -g acpx@0.21.1 安装后重启应用。".into())
 }
 
 /// 单个引擎的本机状态：厂商 CLI 可执行文件在任一探测目录里即视为已安装。
@@ -345,10 +343,7 @@ pub async fn acpx_env_check() -> AcpxEnvStatus {
         Ok(path) => acpx_version(path).await,
         Err(_) => None,
     };
-    let version_ok = acpx_version
-        .as_deref()
-        .map(version_locked)
-        .unwrap_or(false);
+    let version_ok = acpx_version.as_deref().map(version_locked).unwrap_or(false);
 
     let mut messages: Vec<String> = Vec::new();
     if !node_ok {
@@ -360,9 +355,7 @@ pub async fn acpx_env_check() -> AcpxEnvStatus {
         ));
     }
     if acpx_version.is_none() {
-        messages.push(
-            "未找到 acpx，请在终端执行 npm install -g acpx@0.21.1。".to_string(),
-        );
+        messages.push("未找到 acpx，请在终端执行 npm install -g acpx@0.21.1。".to_string());
     } else if !version_ok {
         messages.push(format!(
             "acpx 版本 {} 不在锁定线（{}x）内，请执行 npm install -g acpx@0.21.1。",
@@ -444,7 +437,10 @@ pub async fn ai_engine_install(app: AppHandle, engine_id: String) -> Result<(), 
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动 npm 失败（{}）：{e}", npm.display()))?;
-    log("install", &format!("npm install -g {spec} pid={:?}", child.id()));
+    log(
+        "install",
+        &format!("npm install -g {spec} pid={:?}", child.id()),
+    );
     let emit_line = {
         let app = app.clone();
         let engine_id = engine_id.clone();
@@ -471,7 +467,10 @@ pub async fn ai_engine_install(app: AppHandle, engine_id: String) -> Result<(), 
         }
     });
     let _ = tokio::join!(out_task, err_task);
-    let status = child.wait().await.map_err(|e| format!("npm 进程异常：{e}"))?;
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("npm 进程异常：{e}"))?;
     let success = status.success();
     log("install", &format!("npm install -g {spec} exit={status:?}"));
     let _ = app.emit(
@@ -481,7 +480,9 @@ pub async fn ai_engine_install(app: AppHandle, engine_id: String) -> Result<(), 
     if success {
         Ok(())
     } else {
-        Err(format!("安装 {spec} 失败（npm 退出码 {status}），详见安装日志。"))
+        Err(format!(
+            "安装 {spec} 失败（npm 退出码 {status}），详见安装日志。"
+        ))
     }
 }
 
@@ -493,8 +494,7 @@ async fn verify_env() -> Result<PathBuf, String> {
     let nv = node_version(&node)
         .await
         .ok_or_else(|| "无法取得 node 版本。请确认 Node ≥22.13 已安装。".to_string())?;
-    let parts = parse_node_version(&nv)
-        .ok_or_else(|| format!("无法解析 node 版本（{nv}）。"))?;
+    let parts = parse_node_version(&nv).ok_or_else(|| format!("无法解析 node 版本（{nv}）。"))?;
     if !node_satisfies(&parts) {
         return Err(format!(
             "acpx 需要 Node ≥ {}.{}，当前 {nv}。请升级后重试。",
@@ -533,10 +533,10 @@ fn spawn_cmd(acpx: &Path, args: &[String], home: &Path, engine: &str) -> Command
     }
     // 可选 OAuth 令牌（用户自管的 ~/.config/deer/claude-oauth-token）：
     // 只有 claude 链路的适配器吃这个环境变量，其他引擎不注入。
-    if engine == "claude" {
-        if let Some(token) = read_oauth_token() {
-            cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
-        }
+    if engine == "claude"
+        && let Some(token) = read_oauth_token()
+    {
+        cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
     }
     cmd
 }
@@ -568,7 +568,11 @@ impl Tail {
         if buf.is_empty() {
             return String::new();
         }
-        let joined = buf.iter().map(String::as_str).collect::<Vec<_>>().join(" | ");
+        let joined = buf
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" | ");
         format!("stderr 尾部：{joined}")
     }
 }
@@ -610,7 +614,10 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
         log("spawn", &msg);
         msg
     })?;
-    log("spawn", &format!("acpx pid={:?} record={record}", child.id()));
+    log(
+        "spawn",
+        &format!("acpx pid={:?} record={record}", child.id()),
+    );
 
     let mut stdin = child.stdin.take().ok_or("acpx stdin 不可用")?;
     let stdout = child.stdout.take().ok_or("acpx stdout 不可用")?;
@@ -623,15 +630,10 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
     let (tx, mut rx) = mpsc::channel::<ReaderMsg>(128);
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
-        loop {
-            match lines.next_line().await {
-                Ok(Some(line)) => {
-                    log("recv", &line);
-                    if tx.send(ReaderMsg::Line(line)).await.is_err() {
-                        break;
-                    }
-                }
-                _ => break,
+        while let Ok(Some(line)) = lines.next_line().await {
+            log("recv", &line);
+            if tx.send(ReaderMsg::Line(line)).await.is_err() {
+                break;
             }
         }
         let _ = tx.send(ReaderMsg::Eof).await;
@@ -687,23 +689,26 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
                 }
                 let v = serde_json::from_str::<Value>(&line).ok();
                 // 思考增量：delta_from_line 只取正文，思考块从 params 里单独拿
-                if let Some(v) = &v {
-                    if v.get("method").and_then(Value::as_str) == Some("session/update") {
-                        saw_output = true;
-                        if let Some(delta) = crate::claude_acp::thought_delta(v.get("params").unwrap_or(&Value::Null)) {
-                            on_chunk(message_id, "thought", delta);
-                        }
-                        // 书架 MCP 工具结果里的书单：抽成 books 事件推给前端渲染书卡
-                        if let Some(books) = book_cards_from_update(v.get("params").unwrap_or(&Value::Null)) {
-                            if let Ok(delta) = serde_json::to_string(&books) {
-                                on_chunk(message_id, "books", delta);
-                            }
-                        }
-                        if session_id.is_none() {
-                            session_id = session_id_from_value(v);
-                        }
-                        continue;
+                if let Some(v) = &v
+                    && v.get("method").and_then(Value::as_str) == Some("session/update")
+                {
+                    saw_output = true;
+                    if let Some(delta) =
+                        crate::claude_acp::thought_delta(v.get("params").unwrap_or(&Value::Null))
+                    {
+                        on_chunk(message_id, "thought", delta);
                     }
+                    // 书架 MCP 工具结果里的书单：抽成 books 事件推给前端渲染书卡
+                    if let Some(books) =
+                        book_cards_from_update(v.get("params").unwrap_or(&Value::Null))
+                        && let Ok(delta) = serde_json::to_string(&books)
+                    {
+                        on_chunk(message_id, "books", delta);
+                    }
+                    if session_id.is_none() {
+                        session_id = session_id_from_value(v);
+                    }
+                    continue;
                 }
                 if let Some(v) = &v {
                     if session_id.is_none() {
@@ -747,10 +752,10 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
         }
         return Err(detail);
     }
-    if let Some(reason) = &stop_reason {
-        if reason == "refusal" {
-            return Err("模型拒绝了这次请求。".to_string());
-        }
+    if let Some(reason) = &stop_reason
+        && reason == "refusal"
+    {
+        return Err("模型拒绝了这次请求。".to_string());
     }
     Ok(PromptOutcome {
         text: accumulated,
@@ -800,7 +805,10 @@ async fn ensure_session(
             .await;
         match output {
             Ok(out) if out.status.success() => {
-                log("acpx", &format!("sessions new 成功 record={record} resume={resume:?}"));
+                log(
+                    "acpx",
+                    &format!("sessions new 成功 record={record} resume={resume:?}"),
+                );
                 return Ok(());
             }
             Ok(out) => {
@@ -809,11 +817,17 @@ async fn ensure_session(
                     String::from_utf8_lossy(&out.stderr),
                     String::from_utf8_lossy(&out.stdout)
                 );
-                log("acpx", &format!("sessions new 失败（第 {attempt} 次）：{combined}"));
+                log(
+                    "acpx",
+                    &format!("sessions new 失败（第 {attempt} 次）：{combined}"),
+                );
                 last_err = combined;
             }
             Err(e) => {
-                log("acpx", &format!("sessions new spawn 失败（第 {attempt} 次）：{e}"));
+                log(
+                    "acpx",
+                    &format!("sessions new spawn 失败（第 {attempt} 次）：{e}"),
+                );
                 last_err = e.to_string();
             }
         }
@@ -847,7 +861,8 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
             "engine={engine} {}",
             match &mcp_config {
                 Some(path) => format!("书架 MCP server 已挂载（{}）", path.display()),
-                None => "书架 MCP server 不可用（无法定位自身可执行文件），本轮无书架工具".to_string(),
+                None =>
+                    "书架 MCP server 不可用（无法定位自身可执行文件），本轮无书架工具".to_string(),
             }
         ),
     );
@@ -861,28 +876,38 @@ async fn run_acpx_chat<F: FnMut(&str, &'static str, String) + Send>(
         on_chunk,
     )
     .await;
-    if let Err(err) = &outcome {
-        if is_no_session_error(err) || is_transient_spawn_error(err) {
-            log("acpx", &format!("prompt 失败（{}），ensure 后重试一次", if is_no_session_error(err) { "NO_SESSION" } else { "瞬时" }));
-            ensure_session(
-                acpx.as_path(),
-                engine,
-                record,
-                resume_session_id,
-                mcp_config.as_deref(),
-            )
-            .await?;
-            outcome = run_prompt(
-                acpx.as_path(),
-                engine,
-                record,
-                prompt,
-                message_id,
-                mcp_config.as_deref(),
-                on_chunk,
-            )
-            .await;
-        }
+    if let Err(err) = &outcome
+        && (is_no_session_error(err) || is_transient_spawn_error(err))
+    {
+        log(
+            "acpx",
+            &format!(
+                "prompt 失败（{}），ensure 后重试一次",
+                if is_no_session_error(err) {
+                    "NO_SESSION"
+                } else {
+                    "瞬时"
+                }
+            ),
+        );
+        ensure_session(
+            acpx.as_path(),
+            engine,
+            record,
+            resume_session_id,
+            mcp_config.as_deref(),
+        )
+        .await?;
+        outcome = run_prompt(
+            acpx.as_path(),
+            engine,
+            record,
+            prompt,
+            message_id,
+            mcp_config.as_deref(),
+            on_chunk,
+        )
+        .await;
     }
     let outcome = outcome?;
     let session_id = outcome
@@ -976,9 +1001,15 @@ mod tests {
             record_name("claude", "thread_abc123"),
             "deer-claude-thread_abc123"
         );
-        assert_eq!(record_name("codex", "thread_abc123"), "deer-codex-thread_abc123");
+        assert_eq!(
+            record_name("codex", "thread_abc123"),
+            "deer-codex-thread_abc123"
+        );
         // 线程 id 里的非法字符（冒号/空格/斜杠）替换成连字符，不能带出会话名语法
-        assert_eq!(record_name("claude", "thread:x y"), "deer-claude-thread-x-y");
+        assert_eq!(
+            record_name("claude", "thread:x y"),
+            "deer-claude-thread-x-y"
+        );
         assert_eq!(record_name("claude", "../etc"), "deer-claude----etc");
     }
 
@@ -1022,9 +1053,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(session_id_from_value(&update).as_deref(), Some("ff61f842"));
-        let resp: Value = serde_json::from_str(r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"1c7e1d53"}}"#).unwrap();
+        let resp: Value =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"1c7e1d53"}}"#)
+                .unwrap();
         assert_eq!(session_id_from_value(&resp).as_deref(), Some("1c7e1d53"));
-        let no_id: Value = serde_json::from_str(r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}"#).unwrap();
+        let no_id: Value =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}"#)
+                .unwrap();
         assert_eq!(session_id_from_value(&no_id), None);
     }
 
@@ -1044,7 +1079,9 @@ mod tests {
     #[test]
     fn classifies_no_session_and_transient_errors() {
         // spike 实测：冷环境直接 prompt 报 -32002 NO_SESSION
-        assert!(is_no_session_error(r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32002,"message":"NO_SESSION"}}"#));
+        assert!(is_no_session_error(
+            r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32002,"message":"NO_SESSION"}}"#
+        ));
         assert!(is_no_session_error("Error: NO_SESSION for cwd"));
         assert!(!is_no_session_error("all good"));
 
@@ -1088,7 +1125,9 @@ mod tests {
         let joined = args.join(" ");
         let claude_pos = joined.find("claude").unwrap();
         // 顶层 --mcp-config 与 --allowed-tools 同样必须在 claude 之前
-        let mcp_pos = joined.find("--mcp-config /tmp/deer-mcp-server.json").unwrap();
+        let mcp_pos = joined
+            .find("--mcp-config /tmp/deer-mcp-server.json")
+            .unwrap();
         assert!(mcp_pos < claude_pos);
         assert!(joined.contains("mcp__deer__search_books"));
         assert!(joined.contains("mcp__deer__get_reading_state"));
