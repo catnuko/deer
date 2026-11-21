@@ -61,13 +61,10 @@ fn client() -> Result<reqwest::Client, String> {
 
 /// 只允许 http/https：防 file:// 之类的 scheme 被前端传进来。
 fn check_url(url: &str) -> Result<(), String> {
-    let parsed =
-        reqwest::Url::parse(url).map_err(|_| format!("无效的 URL：{url}"))?;
+    let parsed = reqwest::Url::parse(url).map_err(|_| format!("无效的 URL：{url}"))?;
     match parsed.scheme() {
         "http" | "https" => Ok(()),
-        other => Err(format!(
-            "不支持的 URL 协议「{other}」，只允许 http/https。"
-        )),
+        other => Err(format!("不支持的 URL 协议「{other}」，只允许 http/https。")),
     }
 }
 
@@ -120,18 +117,17 @@ async fn request_text(
         .headers()
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map_or(false, |ct| {
-            ct.contains("text") || ct.contains("xml") || ct.contains("json")
-        });
+        .is_some_and(|ct| ct.contains("text") || ct.contains("xml") || ct.contains("json"));
     // Content-Length 已经超限的直接不取；chunked 的边读边限
-    let over_limit = resp.content_length().map_or(false, |n| n > MAX_TEXT_BODY as u64);
+    let over_limit = resp
+        .content_length()
+        .is_some_and(|n| n > MAX_TEXT_BODY as u64);
     let resp_body = if is_text && !over_limit {
         let mut buf: Vec<u8> = Vec::new();
         let mut overflow = false;
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|e| format!("读取响应失败（{url}）：{e}"))?;
+            let chunk = chunk.map_err(|e| format!("读取响应失败（{url}）：{e}"))?;
             if buf.len() + chunk.len() > MAX_TEXT_BODY {
                 overflow = true;
                 break;
@@ -241,8 +237,7 @@ async fn download(
     let mut transferred: u64 = 0;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| format!("下载失败（接收数据时出错，{url}）：{e}"))?;
+        let chunk = chunk.map_err(|e| format!("下载失败（接收数据时出错，{url}）：{e}"))?;
         file.write_all(&chunk)
             .await
             .map_err(|e| format!("写入本地文件失败（{local_path}）：{e}"))?;
