@@ -1,9 +1,10 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AIPanelLauncher } from "@/components/ai/AIPanelLauncher";
 import { AppShell } from "@/components/layout/AppShell";
 import { BookshelfPage } from "@/routes/bookshelf/BookshelfPage";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
+import { startSyncRuntime } from "@/lib/sync/runtime";
 
 // 阅读页/笔记页与书架首屏无关：React.lazy 拆 chunk，书架首屏只加载书架所需代码。
 // Tauri 以相对路径从 tauri://localhost 加载产物，默认 base "./" 下动态 import 可用。
@@ -30,6 +31,12 @@ function RouteFallback() {
 export default function App() {
   // 首页重定向要带上查询串，否则 `?preview=1`、`?ai=1` 这类参数在跳转时丢失。
   const { search } = useLocation();
+
+  // 按当前设置启动同步运行时；StrictMode 下会跑两次，
+  // startSyncRuntime 自身会先停旧实例，不需要 cleanup。
+  useEffect(() => {
+    void startSyncRuntime();
+  }, []);
 
   return (
     <>
