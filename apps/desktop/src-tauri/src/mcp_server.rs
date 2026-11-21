@@ -15,7 +15,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::deer_log::log;
 
@@ -54,18 +54,12 @@ impl Default for BookRecord {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShelfRecord {
     pub id: String,
     pub name: String,
     pub order: i64,
-}
-
-impl Default for ShelfRecord {
-    fn default() -> Self {
-        Self { id: String::new(), name: String::new(), order: 0 }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -109,8 +103,7 @@ pub fn default_data_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from(home)
-            .join("Library/Application Support/com.catnuko.deer")
+        PathBuf::from(home).join("Library/Application Support/com.catnuko.deer")
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -239,7 +232,11 @@ fn tool_error(message: &str) -> Value {
 }
 
 /// 处理一条 JSON-RPC 请求（有 id 的）；通知（无 id）返回 None。
-pub(crate) fn handle_request(library: &Library, method: &str, params: &Value) -> Option<Result<Value, (i64, String)>> {
+pub(crate) fn handle_request(
+    library: &Library,
+    method: &str,
+    params: &Value,
+) -> Option<Result<Value, (i64, String)>> {
     match method {
         "initialize" => {
             // 协议版本回显客户端请求的版本；缺省用 2025-06-18。
@@ -263,10 +260,7 @@ pub(crate) fn handle_request(library: &Library, method: &str, params: &Value) ->
             let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
             let payload = match name {
                 "search_books" => {
-                    let query = arguments
-                        .get("query")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
+                    let query = arguments.get("query").and_then(Value::as_str).unwrap_or("");
                     search_books(library, query)
                 }
                 "get_reading_state" => reading_state(library),
@@ -276,10 +270,7 @@ pub(crate) fn handle_request(library: &Library, method: &str, params: &Value) ->
         }
         // MCP 生命周期通知与其它通知都静默接受
         "notifications/initialized" | "notifications/cancelled" => None,
-        _ => Some(Err((
-            -32601,
-            format!("method not found: {method}"),
-        ))),
+        _ => Some(Err((-32601, format!("method not found: {method}")))),
     }
 }
 
@@ -317,7 +308,7 @@ pub fn run_stdio<R: BufRead, W: Write>(library: &Library, input: R, output: &mut
             continue;
         }
         log("mcp", &format!("req {line}"));
-        if let Some(response) = handle_line(&library, &line) {
+        if let Some(response) = handle_line(library, &line) {
             log("mcp", &format!("resp {response}"));
             if writeln!(output, "{response}").is_err() || output.flush().is_err() {
                 break;
@@ -370,7 +361,11 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            shelves: vec![ShelfRecord { id: "s1".into(), name: "科幻".into(), order: 1 }],
+            shelves: vec![ShelfRecord {
+                id: "s1".into(),
+                name: "科幻".into(),
+                order: 1,
+            }],
         }
     }
 
@@ -389,7 +384,13 @@ mod tests {
         assert_eq!(by_author["books"][0]["id"], "b2");
 
         // 空关键词 = 全书架
-        assert_eq!(search_books(&library, "")["books"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            search_books(&library, "")["books"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -470,7 +471,13 @@ mod tests {
     #[test]
     fn notifications_get_no_response() {
         let library = fixture_library();
-        assert!(handle_line(&library, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+        assert!(
+            handle_line(
+                &library,
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
+            )
+            .is_none()
+        );
         assert!(handle_line(&library, "not json").is_none());
         assert!(handle_line(&library, "").is_none());
     }
@@ -479,17 +486,17 @@ mod tests {
     fn stdio_round_trip_answers_each_request_line() {
         let library = fixture_library();
         let input = concat!(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
             "\n",
-            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, "\n",
-            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_reading_state","arguments":{}}}"#, "\n",
+            "\n",
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_reading_state","arguments":{}}}"#,
+            "\n",
         );
         let mut output: Vec<u8> = Vec::new();
         run_stdio(&library, BufReader::new(input.as_bytes()), &mut output);
-        let lines: Vec<&str> = std::str::from_utf8(&output)
-            .unwrap()
-            .lines()
-            .collect();
+        let lines: Vec<&str> = std::str::from_utf8(&output).unwrap().lines().collect();
         assert_eq!(lines.len(), 2, "通知与空行不应有响应");
 
         let first: Value = serde_json::from_str(lines[0]).unwrap();
