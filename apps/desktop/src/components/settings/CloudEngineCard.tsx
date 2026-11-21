@@ -1,11 +1,7 @@
 import { useState } from "react";
 import { Check, Eye, EyeOff, LoaderCircle, X } from "lucide-react";
 import { useAppSettings } from "@/store/appSettings";
-import {
-  AI_PROVIDER_KINDS,
-  testCloudConnection,
-  type AiProviderKind,
-} from "@/lib/ai/cloudProvider";
+import { AI_PROVIDER_KINDS, type AiProviderKind } from "@/lib/ai/providerConfig";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -43,6 +39,8 @@ export function CloudEngineCard() {
 
   const runTest = async () => {
     setTest({ kind: "testing" });
+    // 连接测试才拉起 AI SDK（cloudProvider 依赖 @ai-sdk + "ai"），按需加载不进首屏。
+    const { testCloudConnection } = await import("@/lib/ai/cloudProvider");
     const result = await testCloudConnection({
       provider: aiProvider,
       baseUrl: aiBaseUrl,
