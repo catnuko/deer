@@ -10,7 +10,7 @@ import {
   DEFAULT_AI_PROVIDER,
   isAiProviderKind,
   type AiProviderKind,
-} from "@/lib/ai/cloudProvider";
+} from "@/lib/ai/providerConfig";
 import { DEFAULT_AI_ENGINE, isAiEngineId } from "@/lib/ai/engines";
 
 export const AI_ENGINE_MODES = ["auto", "local", "cloud"] as const;
