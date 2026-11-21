@@ -14,6 +14,8 @@ import {
   readImportedMetadata,
 } from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
+import { sha256Hex } from "@/lib/sync/hash";
+import type { BookSyncData, ShelfSyncData } from "@/lib/sync/types";
 import type { Book, BookStoreState, Shelf } from "@/lib/types";
 
 const LIBRARY_FILE = "library.json";
@@ -26,6 +28,20 @@ export type BookStoreExtras = {
   error: string | null;
   renameShelf(id: string, name: string): Promise<void>;
   clearError(): void;
+  /** 为缺少 contentHash 的旧书补算哈希（开启同步时跑一次）。 */
+  backfillContentHashes(
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<void>;
+  /** 应用远端书籍记录；data 为 null 表示删除（只移出书架，不动本机文件）。 */
+  applyRemoteBook(contentHash: string, data: BookSyncData | null): void;
+  /** 应用远端书架记录；data 为 null 表示删除。 */
+  applyRemoteShelf(shelfId: string, data: ShelfSyncData | null): void;
+  /** 应用远端书架归属变更。 */
+  applyRemoteShelfMembership(
+    contentHash: string,
+    shelfId: string,
+    present: boolean,
+  ): void;
 };
 
 export type BookStore = BookStoreState & BookStoreExtras;
@@ -155,6 +171,8 @@ export const useBookStore = create<BookStore>((set, get) => ({
         );
       }
       const bytes = await readFile(filePath);
+      // 内容哈希是跨设备同步的身份：同一文件在任何设备算出同一个值。
+      const contentHash = await sha256Hex(bytes);
 
       // 元数据解析失败不阻断导入：降级为「文件名 + 未知作者 + 无封面」。
       let meta: {
@@ -195,6 +213,7 @@ export const useBookStore = create<BookStore>((set, get) => ({
       const fileName = fileNameOf(filePath);
       const book: Book = {
         id,
+        contentHash,
         title: metaTitle && metaTitle !== fileName ? metaTitle : titleFromFileName(filePath),
         author: meta?.author?.trim() || "未知作者",
         format,
@@ -291,5 +310,130 @@ export const useBookStore = create<BookStore>((set, get) => ({
     });
     set({ books });
     await persist(books, get().shelves);
+  },
+
+  /* ---------------------------------------------------------------- */
+  /* 同步：旧数据补哈希 + 远端记录落地                                  */
+  /* ---------------------------------------------------------------- */
+
+  async backfillContentHashes(onProgress) {
+    if (!isTauri()) return;
+    const pending = get().books.filter(
+      (book) => !book.contentHash && book.filePath,
+    );
+    let done = 0;
+    for (const target of pending) {
+      try {
+        const bytes = await readFile(target.filePath);
+        const contentHash = await sha256Hex(bytes);
+        set((s) => ({
+          books: s.books.map((book) =>
+            book.id === target.id ? { ...book, contentHash } : book,
+          ),
+        }));
+      } catch {
+        // 文件缺失（外部删过）：保持未就绪，不进入同步。
+      }
+      done += 1;
+      onProgress?.(done, pending.length);
+    }
+    if (pending.length) await persist(get().books, get().shelves);
+  },
+
+  applyRemoteBook(contentHash, data) {
+    const books = get().books;
+    const existing = books.find((book) => book.contentHash === contentHash);
+
+    if (!data) {
+      if (!existing) return;
+      const next = books.filter((book) => book.contentHash !== contentHash);
+      set({ books: next });
+      if (isTauri()) void persist(next, get().shelves);
+      return;
+    }
+
+    if (existing) {
+      const merged: Book = {
+        ...existing,
+        title: data.title,
+        author: data.author,
+        format: data.format,
+        sizeBytes: data.sizeBytes,
+        tags: [...data.tags],
+        addedAt: data.addedAt,
+        progress: data.progress,
+      };
+      if (data.lastOpenedAt !== undefined) merged.lastOpenedAt = data.lastOpenedAt;
+      else delete merged.lastOpenedAt;
+      if (data.lastLocationCfi) merged.lastLocationCfi = data.lastLocationCfi;
+      else delete merged.lastLocationCfi;
+      set({ books: books.map((book) => (book.id === existing.id ? merged : book)) });
+    } else {
+      // 本机还没有这本书：先落一行「云端书籍」，本机文件名/封面走 P2 的按需下载。
+      const cloudBook: Book = {
+        id: crypto.randomUUID(),
+        contentHash,
+        cloudOnly: true,
+        title: data.title,
+        author: data.author,
+        format: data.format,
+        filePath: "",
+        sizeBytes: data.sizeBytes,
+        addedAt: data.addedAt,
+        progress: data.progress,
+        shelfIds: [],
+        tags: [...data.tags],
+      };
+      if (data.lastOpenedAt !== undefined) cloudBook.lastOpenedAt = data.lastOpenedAt;
+      if (data.lastLocationCfi) cloudBook.lastLocationCfi = data.lastLocationCfi;
+      set({ books: [cloudBook, ...books] });
+    }
+    if (isTauri()) void persist(get().books, get().shelves);
+  },
+
+  applyRemoteShelf(shelfId, data) {
+    const shelves = get().shelves;
+    const existing = shelves.find((shelf) => shelf.id === shelfId);
+
+    if (!data) {
+      if (!existing) return;
+      const next = shelves.filter((shelf) => shelf.id !== shelfId);
+      const books = pruneShelfIds(get().books, next);
+      set({ shelves: sortShelves(next), books });
+      if (isTauri()) void persist(books, sortShelves(next));
+      return;
+    }
+
+    const next = existing
+      ? shelves.map((shelf) =>
+          shelf.id === shelfId
+            ? { ...shelf, name: data.name, order: data.order }
+            : shelf,
+        )
+      : [...shelves, { id: shelfId, name: data.name, order: data.order }];
+    set({ shelves: sortShelves(next) });
+    if (isTauri()) void persist(get().books, sortShelves(next));
+  },
+
+  applyRemoteShelfMembership(contentHash, shelfId, present) {
+    // 书架记录还没落地时先不挂归属：等下一次同步按 HLC 顺序补齐。
+    if (present && !get().shelves.some((shelf) => shelf.id === shelfId)) return;
+
+    let changed = false;
+    const books = get().books.map((book) => {
+      if (book.contentHash !== contentHash) return book;
+      const has = book.shelfIds.includes(shelfId);
+      if (has === present) return book;
+      changed = true;
+      return {
+        ...book,
+        shelfIds: present
+          ? [...book.shelfIds, shelfId]
+          : book.shelfIds.filter((id) => id !== shelfId),
+      };
+    });
+    if (!changed) return;
+    set({ books });
+    if (isTauri()) void persist(books, get().shelves);
   },
 }));

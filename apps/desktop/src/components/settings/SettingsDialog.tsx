@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import {
   BookOpenText,
+  Cloud,
   Database,
   Info,
   Keyboard,
@@ -26,6 +27,7 @@ import { DataSection } from "./DataSection";
 import { GeneralSection } from "./GeneralSection";
 import { ReadingSection } from "./ReadingSection";
 import { ShortcutsSection } from "./ShortcutsSection";
+import { SyncSection } from "./SyncSection";
 
 type SettingsSection =
   | "general"
@@ -33,6 +35,7 @@ type SettingsSection =
   | "reading"
   | "ai"
   | "data"
+  | "sync"
   | "shortcuts"
   | "about";
 
@@ -46,6 +49,7 @@ const SECTIONS: Array<{
   { id: "reading", label: "阅读", icon: BookOpenText },
   { id: "ai", label: "AI 伴读", icon: Sparkles },
   { id: "data", label: "数据", icon: Database },
+  { id: "sync", label: "同步", icon: Cloud },
   { id: "shortcuts", label: "快捷键", icon: Keyboard },
   { id: "about", label: "关于", icon: Info },
 ];
@@ -150,6 +154,7 @@ export function SettingsDialog() {
               {section === "reading" ? <ReadingSection /> : null}
               {section === "ai" ? <AiSection /> : null}
               {section === "data" ? <DataSection /> : null}
+              {section === "sync" ? <SyncSection /> : null}
               {section === "shortcuts" ? <ShortcutsSection /> : null}
               {section === "about" ? <AboutSection /> : null}
             </div>

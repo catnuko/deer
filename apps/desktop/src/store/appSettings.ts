@@ -42,6 +42,16 @@ export type AppSettings = {
   aiModel: string;
   /** 云引擎 API Key，仅存本机持久化，绝不进代码/git。 */
   aiApiKey: string;
+  /** 是否开启 WebDAV 同步。 */
+  syncEnabled: boolean;
+  /** WebDAV 根目录地址（用户自己在网盘里建的 deer-sync 文件夹）。 */
+  syncUrl: string;
+  /** WebDAV 账号（坚果云填邮箱）。 */
+  syncUsername: string;
+  /** WebDAV 应用密码；仅存本机，与 AI Key 同等对待。 */
+  syncPassword: string;
+  /** 是否把书籍本体与封面上传/下载到网盘。 */
+  syncBooks: boolean;
 };
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -53,6 +63,11 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   aiBaseUrl: DEFAULT_AI_BASE_URL,
   aiModel: DEFAULT_AI_MODEL,
   aiApiKey: "",
+  syncEnabled: false,
+  syncUrl: "",
+  syncUsername: "",
+  syncPassword: "",
+  syncBooks: true,
 };
 
 export function isStartupView(value: string): value is StartupView {
@@ -72,6 +87,11 @@ type AppSettingsStore = AppSettings & {
   setAiBaseUrl(aiBaseUrl: string): void;
   setAiModel(aiModel: string): void;
   setAiApiKey(aiApiKey: string): void;
+  setSyncEnabled(syncEnabled: boolean): void;
+  setSyncUrl(syncUrl: string): void;
+  setSyncUsername(syncUsername: string): void;
+  setSyncPassword(syncPassword: string): void;
+  setSyncBooks(syncBooks: boolean): void;
   reset(): void;
 };
 
@@ -93,11 +113,16 @@ export const useAppSettings = create<AppSettingsStore>()(
       setAiBaseUrl: (aiBaseUrl) => set({ aiBaseUrl }),
       setAiModel: (aiModel) => set({ aiModel }),
       setAiApiKey: (aiApiKey) => set({ aiApiKey }),
+      setSyncEnabled: (syncEnabled) => set({ syncEnabled }),
+      setSyncUrl: (syncUrl) => set({ syncUrl }),
+      setSyncUsername: (syncUsername) => set({ syncUsername }),
+      setSyncPassword: (syncPassword) => set({ syncPassword }),
+      setSyncBooks: (syncBooks) => set({ syncBooks }),
       reset: () => set({ ...DEFAULT_APP_SETTINGS }),
     }),
     {
       name: "deer-app-settings",
-      version: 5,
+      version: 6,
       storage: createJSONStorage(() =>
         typeof window === "undefined" ? memoryStorage : window.localStorage,
       ),
@@ -110,6 +135,11 @@ export const useAppSettings = create<AppSettingsStore>()(
         aiBaseUrl,
         aiModel,
         aiApiKey,
+        syncEnabled,
+        syncUrl,
+        syncUsername,
+        syncPassword,
+        syncBooks,
       }) => ({
         startupView,
         bookshelfSort,
@@ -119,6 +149,11 @@ export const useAppSettings = create<AppSettingsStore>()(
         aiBaseUrl,
         aiModel,
         aiApiKey,
+        syncEnabled,
+        syncUrl,
+        syncUsername,
+        syncPassword,
+        syncBooks,
       }),
       migrate: (persisted) => {
         const state = (persisted ?? {}) as Record<string, unknown>;
@@ -156,6 +191,27 @@ export const useAppSettings = create<AppSettingsStore>()(
             typeof state.aiApiKey === "string"
               ? state.aiApiKey
               : DEFAULT_APP_SETTINGS.aiApiKey,
+          // v6 新增同步设置：旧版本没有这些字段，一律取默认值。
+          syncEnabled:
+            typeof state.syncEnabled === "boolean"
+              ? state.syncEnabled
+              : DEFAULT_APP_SETTINGS.syncEnabled,
+          syncUrl:
+            typeof state.syncUrl === "string"
+              ? state.syncUrl
+              : DEFAULT_APP_SETTINGS.syncUrl,
+          syncUsername:
+            typeof state.syncUsername === "string"
+              ? state.syncUsername
+              : DEFAULT_APP_SETTINGS.syncUsername,
+          syncPassword:
+            typeof state.syncPassword === "string"
+              ? state.syncPassword
+              : DEFAULT_APP_SETTINGS.syncPassword,
+          syncBooks:
+            typeof state.syncBooks === "boolean"
+              ? state.syncBooks
+              : DEFAULT_APP_SETTINGS.syncBooks,
         };
       },
     },
