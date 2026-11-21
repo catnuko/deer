@@ -37,7 +37,13 @@ Deer doesn't read for you. It helps you read better, think further, and enjoy th
 - Docked chat panel on both the bookshelf and the reader — open it without sending anything, ask when you're ready
 - **Dual AI links with engine routing**: local engines run through acpx — 27 of them (Claude Code, Codex, Kimi, Qwen, Gemini, Cursor and more; official acpx adapters install with one click, vendor CLIs are detected if already installed) — while cloud engines run in the webview over the Vercel AI SDK against your own provider endpoints (OpenAI-compatible / Anthropic). Settings offers three routing modes: **auto** (local when available, falls back to cloud), **local-only** and **cloud-only**
 - Chapter summaries, passage explanations, open-ended Q&A, and an idea map that shows how concepts connect
+- **Pre-reading briefing**: before diving into a thick book, ask for a whole-book skeleton card — the author's mental model, a chapter map, and the recurring core concepts
 - The model can query your shelf through a built-in MCP server (`search_books`, `get_reading_state`, `get_library`) and return book cards you can open directly
+
+### Sync (WebDAV)
+
+- Keep **reading progress, highlights and notes** in step across your devices through your own WebDAV drive (e.g. Jianguoyun) — no middleman server, the credentials stay on your machine
+- Optionally upload **book files and covers** too; turn that off to sync metadata only
 
 ### Backup & restore
 
@@ -63,9 +69,20 @@ Deer doesn't read for you. It helps you read better, think further, and enjoy th
 ![AI companion](docs/screenshots/ai-panel.png)
 *The AI companion docked beside the page*
 
+## What's new in v0.3.0
+
+Highlights since v0.2.0:
+
+- **Dual-link AI with engine routing** — local engines run through acpx, cloud engines talk to your own provider endpoints, with auto / local-only / cloud-only routing
+- **WebDAV sync** — reading progress, highlights & notes follow you across devices via your own WebDAV drive
+- **Pre-reading briefing** — a whole-book skeleton card (mental model / chapter map / core concepts) before you start a thick book
+- **Backup & restore** — the whole library exports as a single `.deer-backup` archive and restores with merge semantics
+- **Security baseline** — production CSP and least-privilege Tauri capabilities
+- **Lighter, faster frontend** — route- and feature-level code splitting trims the first-paint bundle
+
 ## Installation
 
-Download the latest disk image from [Releases](https://github.com/catnuko/deer/releases) — the asset is named like `Deer_0.2.0_aarch64.dmg`. The `.dmg` is built and uploaded automatically by CI whenever a release is tagged (unsigned, no notarization).
+Download the latest disk image from [Releases](https://github.com/catnuko/deer/releases) — for this release, [v0.3.0](https://github.com/catnuko/deer/releases/tag/v0.3.0), the asset is named like `Deer_0.3.0_aarch64.dmg`. The `.dmg` is built and uploaded automatically by CI whenever a release is tagged (unsigned, no notarization).
 
 1. Open the `.dmg` and drag **Deer** into `Applications`.
 2. First launch: because the build is **unsigned** (no Apple Developer certificate yet), macOS Gatekeeper blocks apps it can't verify. Right-click **Deer.app → Open**, then confirm; or clear the quarantine flag:
@@ -103,6 +120,10 @@ Root scripts delegate to `apps/desktop`.
 ## Status
 
 Early development. The app UI is currently Simplified Chinese only; macOS is the primary target. Books, annotations and settings are stored locally — nothing is uploaded except the prompts you send to the engine you selected.
+
+## Feedback
+
+Found a bug, or something reads awkwardly? Please [open an issue](https://github.com/catnuko/deer/issues/new) — first-hand feedback from real reading sessions is exactly what shapes Deer's roadmap.
 
 ## License
 
