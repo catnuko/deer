@@ -44,6 +44,10 @@ import {
   type SelectionPlacement,
 } from "@/lib/ai/selectionDraft";
 import {
+  buildSelectionPrompt,
+  type SelectionPreset,
+} from "@/lib/ai/selectionPrompts";
+import {
   bookToc,
   ebookFormatOf,
   makeBookFile,
@@ -358,6 +362,21 @@ export function ReaderPage() {
     viewRef.current?.deselect();
     setChatOpen(true);
   }, []);
+
+  // 划词即问（N4）：预设快捷问题一键直发（复用章节总结的 send 通道），
+  // prompt 已含选区引用，气泡只显示「标签「预览」」；收口与问 Deer 一致。
+  const quickAskSelection = useCallback(
+    (preset: SelectionPreset, text: string) => {
+      const built = buildSelectionPrompt(preset, text);
+      if (!built) return;
+      panelRef.current?.send(built.prompt, built.displayText);
+      setSelection(null);
+      setAnnotationMenu(null);
+      viewRef.current?.deselect();
+      setChatOpen(true);
+    },
+    [],
+  );
 
   // 快捷指令（B）：章节/全书走 foliate 抽文本，当前页用 relocate 上报的
   // 可见区 Range。图片书（CBZ/PDF）没有可读正文：章节与全书置灰；
@@ -1350,6 +1369,7 @@ const copyAnnotationText = useCallback((text: string) => {
         draft={draft}
         panelRef={panelRef}
         onAskSelection={askDeer}
+        onQuickAskSelection={quickAskSelection}
         onCopySelection={copySelection}
         onCopyAnnotation={copyAnnotationText}
         onHighlightSelection={highlightSelection}
@@ -1441,6 +1461,8 @@ type RealReaderProps = {
   draft: ChatPanelDraft | null;
   panelRef: React.RefObject<ChatPanelHandle | null>;
   onAskSelection: (text: string) => void;
+  /** 划词即问（N4）：预设快捷问题直发给 AI 面板。 */
+  onQuickAskSelection: (preset: SelectionPreset, text: string) => void;
   onCopySelection: (text: string) => void;
   /** 编辑已有高亮菜单里的「复制」：复制摘录并收口菜单。 */
   onCopyAnnotation: (text: string) => void;
@@ -1509,6 +1531,7 @@ function RealReader({
   draft,
   panelRef,
   onAskSelection,
+  onQuickAskSelection,
   onCopySelection,
   onCopyAnnotation,
   onHighlightSelection,
@@ -1739,6 +1762,15 @@ function RealReader({
                       ? () => onAskSelection(annotationMenu.annotation.excerpt ?? "")
                       : undefined
                   }
+                  onQuickAsk={
+                    annotationMenu.annotation.excerpt
+                      ? (preset) =>
+                          onQuickAskSelection(
+                            preset,
+                            annotationMenu.annotation.excerpt ?? "",
+                          )
+                      : undefined
+                  }
                   onHighlight={onChangeAnnotationStyle}
                   onNote={onEditAnnotationNote}
                   onDelete={onDeleteAnnotation}
@@ -1760,6 +1792,7 @@ function RealReader({
                     onNoteSelection(note, selection.cfi, selection.text)
                   }
                   onAsk={() => onAskSelection(selection.text)}
+                  onQuickAsk={(preset) => onQuickAskSelection(preset, selection.text)}
                 />
               ) : null}
             </div>
@@ -1953,6 +1986,16 @@ function DemoReader({
     window.getSelection()?.removeAllRanges();
   };
 
+  // 划词即问（N4）：演示书走本地 panelRef 直发，收口同 askDeer。
+  const quickAsk = (preset: SelectionPreset, text: string) => {
+    const built = buildSelectionPrompt(preset, text);
+    if (!built) return;
+    panelRef.current?.send(built.prompt, built.displayText);
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+    onOpenPanel();
+  };
+
   // 演示书没有 foliate view，高亮/笔记没有 CFI 可存，菜单收口即关闭。
   const closeSelection = () => {
     setSelection(null);
@@ -2063,6 +2106,7 @@ function DemoReader({
                   onHighlight={() => closeSelection()}
                   onNote={() => closeSelection()}
                   onAsk={() => askDeer(selection.text)}
+                  onQuickAsk={(preset) => quickAsk(preset, selection.text)}
                 />
               ) : null}
               <ConceptMapPanel
