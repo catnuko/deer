@@ -59,7 +59,7 @@ Deer 不替你读书；它帮你读得更好、想得更远，也享受这段旅
 
 ## 安装
 
-从 [Releases](https://github.com/catnuko/deer/releases) 下载最新的镜像文件，资产名形如 `Deer_0.2.0_aarch64.dmg`：
+从 [Releases](https://github.com/catnuko/deer/releases) 下载最新的镜像文件，资产名形如 `Deer_0.2.0_aarch64.dmg`。`.dmg` 由 CI 在发版打 tag 时自动构建并上传（未签名、未公证）：
 
 1. 打开 `.dmg`，把 **Deer** 拖进「应用程序」。
 2. 首次启动：构建目前**未签名**（还没有 Apple 开发者证书），macOS Gatekeeper 会拦下无法验证的应用。右键 **Deer.app → 打开**并确认；或直接清除隔离标记：
