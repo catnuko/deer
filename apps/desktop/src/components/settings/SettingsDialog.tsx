@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import {
+  ArchiveRestore,
   BookOpenText,
   Cloud,
   Database,
@@ -23,6 +24,7 @@ import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 import { AboutSection } from "./AboutSection";
 import { AiSection } from "./AiSection";
 import { AppearanceSection } from "./AppearanceSection";
+import { BackupSection } from "./BackupSection";
 import { DataSection } from "./DataSection";
 import { GeneralSection } from "./GeneralSection";
 import { ReadingSection } from "./ReadingSection";
@@ -34,6 +36,7 @@ type SettingsSection =
   | "appearance"
   | "reading"
   | "ai"
+  | "backup"
   | "data"
   | "sync"
   | "shortcuts"
@@ -48,6 +51,7 @@ const SECTIONS: Array<{
   { id: "appearance", label: "外观", icon: Palette },
   { id: "reading", label: "阅读", icon: BookOpenText },
   { id: "ai", label: "AI 伴读", icon: Sparkles },
+  { id: "backup", label: "备份与恢复", icon: ArchiveRestore },
   { id: "data", label: "数据", icon: Database },
   { id: "sync", label: "同步", icon: Cloud },
   { id: "shortcuts", label: "快捷键", icon: Keyboard },
@@ -153,6 +157,7 @@ export function SettingsDialog() {
               {section === "appearance" ? <AppearanceSection /> : null}
               {section === "reading" ? <ReadingSection /> : null}
               {section === "ai" ? <AiSection /> : null}
+              {section === "backup" ? <BackupSection /> : null}
               {section === "data" ? <DataSection /> : null}
               {section === "sync" ? <SyncSection /> : null}
               {section === "shortcuts" ? <ShortcutsSection /> : null}
