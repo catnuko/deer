@@ -4,6 +4,12 @@
 //! 核心逻辑不依赖 Tauri AppHandle，直接对目录路径操作，方便 `cargo test`
 //! 做导出→清空→导入的真实往返用例；Tauri command 只负责解析数据目录、
 //! 转发进度事件。
+//!
+//! 各 store 落盘形状（plugin-store 的 JSON map，包裹深度不一致）：
+//! - `library.json`：键在文件顶层（`books` / `folders` / `libraryVersion`…），
+//!   书记录的 `filePath` / `coverPath` 是**绝对路径**（bookStore.ts join 出来的）
+//! - `annotations.json`：双层包裹 `{"annotations": {"annotations": {bookId: [...]}, "ready": true}}`
+//! - `chat.json` / `conceptmaps.json`：单层包裹 `{"chat": {...}}` / `{"conceptmaps": {...}}`
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -32,6 +38,11 @@ const COVERS_DIR: &str = "covers";
 
 /// 导出归档内的 store JSON 文件（存在才打包）。
 const STORE_FILES: [&str; 4] = [LIBRARY_NAME, ANNOTATIONS_NAME, CHAT_NAME, CONCEPTMAPS_NAME];
+
+/// 书文件扩展名白名单（与 types.ts 的 BookFormat 对齐）。
+const BOOK_EXTENSIONS: [&str; 6] = ["epub", "mobi", "azw3", "fb2", "cbz", "pdf"];
+/// 封面扩展名白名单。
+const COVER_EXTENSIONS: [&str; 5] = ["jpg", "jpeg", "png", "webp", "gif"];
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -174,23 +185,69 @@ fn list_regular_files(dir: &Path) -> Vec<String> {
     names
 }
 
+fn file_extension_of(name: &str) -> &str {
+    name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("")
+}
+
+fn file_base_name(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+/// 从 annotations.json 的文件值里剥出 bookId → 注解列表。
+/// 真实形状是双层包裹 `{"annotations": {"annotations": {...}, "ready": true}}`；
+/// 对单层形状（bookId → 数组）也做容错识别。
+fn annotations_map_of(file_value: &Value) -> Option<Map<String, Value>> {
+    let top = file_value.get("annotations")?.as_object()?;
+    if let Some(map) = top.get("annotations").and_then(Value::as_object) {
+        return Some(map.clone());
+    }
+    // 容错：单层形状（每个值都是 bookId 的注解数组）
+    if !top.is_empty() && top.values().all(Value::is_array) {
+        return Some(top.clone());
+    }
+    None
+}
+
 /// 统计 annotations.json 里的注解总数（文件缺失按 0）。
 fn count_annotations(data_dir: &Path) -> u32 {
     read_json(&data_dir.join(ANNOTATIONS_NAME))
         .ok()
         .flatten()
         .and_then(|value| {
-            value
-                .get("annotations")
-                .and_then(Value::as_object)
-                .map(|map| {
-                    map.values()
-                        .filter_map(Value::as_array)
-                        .map(|list| list.len() as u32)
-                        .sum::<u32>()
-                })
+            annotations_map_of(&value).map(|map| {
+                map.values()
+                    .filter_map(Value::as_array)
+                    .map(|list| list.len() as u32)
+                    .sum::<u32>()
+            })
         })
         .unwrap_or(0)
+}
+
+/// 导出前把书记录的 filePath / coverPath 归一化成归档内相对名，
+/// 归档自包含且不泄露本机绝对路径；导入侧再按文件名比对。
+fn normalized_library_value(data_dir: &Path) -> Option<Value> {
+    let mut value = read_json(&data_dir.join(LIBRARY_NAME)).ok()??;
+    let Some(books) = value.get_mut("books").and_then(Value::as_array_mut) else {
+        return Some(value);
+    };
+    for book in books.iter_mut() {
+        let Some(object) = book.as_object_mut() else {
+            continue;
+        };
+        for (key, prefix) in [("filePath", BOOKS_DIR), ("coverPath", COVERS_DIR)] {
+            if let Some(Value::String(path)) = object.get(key) {
+                let base = file_base_name(path);
+                if !base.is_empty() {
+                    object.insert(
+                        key.to_string(),
+                        Value::String(format!("{}/{}", prefix, base)),
+                    );
+                }
+            }
+        }
+    }
+    Some(value)
 }
 
 fn write_text_entry(
@@ -266,9 +323,17 @@ pub fn export_backup_to_dir(
     }
 
     for name in STORE_FILES {
-        let bytes = match fs::read(data_dir.join(name)) {
-            Ok(bytes) => bytes,
-            Err(_) => continue, // 没用到的 store 文件不打包
+        // library.json 归一化路径后打包；其余 store 原样打包
+        let bytes = if name == LIBRARY_NAME {
+            match normalized_library_value(data_dir) {
+                Some(value) => serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?,
+                None => continue,
+            }
+        } else {
+            match fs::read(data_dir.join(name)) {
+                Ok(bytes) => bytes,
+                Err(_) => continue, // 没用到的 store 文件不打包
+            }
         };
         write_text_entry(&mut zip, &options, name, &bytes)?;
         done += 1;
@@ -309,34 +374,58 @@ fn read_manifest(archive: &mut ZipArchive<BufReader<File>>) -> Result<BackupMani
     Ok(manifest)
 }
 
-type LocalLibrary = Result<(Map<String, Value>, Vec<BookRecord>, Vec<FolderRecord>), String>;
+/// 本地 library.json 的解析结果：原始 books/folders 数组 + 对齐的解析记录。
+/// 解析失败的条目保留原始 Value，写回时原样保留不丢数据。
+struct LocalLibrary {
+    map: Map<String, Value>,
+    raw_books: Vec<Value>,
+    parsed_books: Vec<Option<BookRecord>>,
+    raw_folders: Vec<Value>,
+    parsed_folders: Vec<Option<FolderRecord>>,
+}
 
 /// 读取本地 library.json（plugin-store 的 JSON map），抽出 books 与 folders。
-fn read_local_library(data_dir: &Path) -> LocalLibrary {
+fn read_local_library(data_dir: &Path) -> Result<LocalLibrary, String> {
     let raw = read_json(&data_dir.join(LIBRARY_NAME))?.unwrap_or_else(|| Value::Object(Map::new()));
     let map = raw
         .as_object()
         .cloned()
         .ok_or_else(|| format!("{} 不是合法的存储文件", LIBRARY_NAME))?;
-    let books = map
-        .get("books")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .filter_map(|entry| serde_json::from_value::<BookRecord>(entry.clone()).ok())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let folders = map
-        .get("folders")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .filter_map(|entry| serde_json::from_value::<FolderRecord>(entry.clone()).ok())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Ok((map, books, folders))
+    let parse_list = |key: &str| -> (Vec<Value>, Vec<Option<BookRecord>>) {
+        map.get(key)
+            .and_then(Value::as_array)
+            .map(|list| {
+                (
+                    list.clone(),
+                    list.iter()
+                        .map(|entry| serde_json::from_value::<BookRecord>(entry.clone()).ok())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap_or_default()
+    };
+    let (raw_books, parsed_books) = parse_list("books");
+    let parse_folders = || -> (Vec<Value>, Vec<Option<FolderRecord>>) {
+        map.get("folders")
+            .and_then(Value::as_array)
+            .map(|list| {
+                (
+                    list.clone(),
+                    list.iter()
+                        .map(|entry| serde_json::from_value::<FolderRecord>(entry.clone()).ok())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap_or_default()
+    };
+    let (raw_folders, parsed_folders) = parse_folders();
+    Ok(LocalLibrary {
+        map,
+        raw_books,
+        parsed_books,
+        raw_folders,
+        parsed_folders,
+    })
 }
 
 /// 注解去重键：有 CFI 按 CFI（同位置同一条），没有 CFI 的按摘录+笔记+时间。
@@ -425,6 +514,30 @@ fn merge_store_json(local: &mut Map<String, Value>, archived: &Map<String, Value
     }
 }
 
+/// 书/封面 id 只允许安全字符，防止归档记录里的恶意 id 把文件写到数据目录外。
+fn is_safe_file_stem(stem: &str) -> bool {
+    !stem.is_empty()
+        && stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// 归档里缺记录的孤立书文件：标题取文件名，id 用内容哈希前缀保持幂等。
+fn orphan_record(file_name: &str, hash: &str) -> BookRecord {
+    let extension = file_extension_of(file_name);
+    BookRecord {
+        id: format!("bk-{}", &hash[..12.min(hash.len())]),
+        title: file_name
+            .strip_suffix(&format!(".{}", extension))
+            .unwrap_or(file_name)
+            .to_string(),
+        author: "未知作者".to_string(),
+        format: extension.to_string(),
+        added_at: now_ms(),
+        ..Default::default()
+    }
+}
+
 /// 导入归档到 data_dir（合并式恢复）。先校验 zip 魔数与 manifest，
 /// 书按内容哈希跳过重复，注解按 CFI 合并，文件夹按 id 合并（同名加后缀）。
 pub fn import_backup_from_dir(
@@ -453,9 +566,20 @@ pub fn import_backup_from_dir(
         Err(_) => BTreeMap::new(),
     };
 
-    let (mut library_map, mut books, mut folders) = read_local_library(data_dir)?;
+    let local = read_local_library(data_dir)?;
+    let LocalLibrary {
+        map: mut library_map,
+        raw_books,
+        parsed_books,
+        raw_folders,
+        parsed_folders,
+    } = local;
+    // 本地解析成功的书（哈希去重与 id 占用都以它们为准）；解析失败的条目原样保留
+    let mut local_books: Vec<BookRecord> = parsed_books.iter().flatten().cloned().collect();
+    let initial_local_count = local_books.len();
 
-    // 归档 library.json：filePath → 归档书记录
+    // 归档 library.json：按 filePath 的文件名（含完整路径兜底）→ 归档书记录。
+    // 真实数据里 filePath 是绝对路径，归档侧已归一化为 books/<名>，两种都要能命中。
     let mut archived_books: Map<String, Value> = Map::new();
     let mut archived_folders: Vec<FolderRecord> = Vec::new();
     if let Ok(mut file) = archive.by_name(LIBRARY_NAME) {
@@ -467,9 +591,11 @@ pub fn import_backup_from_dir(
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
-                if !path.is_empty() {
-                    archived_books.insert(path, entry.clone());
+                if path.is_empty() {
+                    continue;
                 }
+                archived_books.insert(path.clone(), entry.clone());
+                archived_books.insert(file_base_name(&path).to_string(), entry.clone());
             }
         }
         archived_folders = value
@@ -490,7 +616,7 @@ pub fn import_backup_from_dir(
 
     // 本地每本书的内容哈希（按文件算，文件缺失的书不参与去重）
     let mut local_hash_to_id: Map<String, Value> = Map::new();
-    for book in &books {
+    for book in &local_books {
         if let Ok(hash) = file_sha256(&data_dir.join(book.file_path.as_str())) {
             local_hash_to_id.insert(hash, Value::String(book.id.clone()));
         }
@@ -509,7 +635,7 @@ pub fn import_backup_from_dir(
     let mut books_added = 0u32;
     let mut books_skipped = 0u32;
     let mut covers_added = 0u32;
-    let mut used_ids: HashSet<String> = books.iter().map(|book| book.id.clone()).collect();
+    let mut used_ids: HashSet<String> = local_books.iter().map(|book| book.id.clone()).collect();
     // 归档 bookId → 本地最终 bookId（哈希命中已有书时指向本地那条）
     let mut book_id_map: Map<String, Value> = Map::new();
     // 归档 bookId → 归档书原始记录（新书的归属要在文件夹合并后映射）
@@ -536,13 +662,22 @@ pub fn import_backup_from_dir(
         // 归档里有文件但没有（或损坏的）记录：按文件名与内容哈希恢复成孤儿书，
         // id 用哈希前缀保证重复导入时幂等。
         let file_name = name.rsplit('/').next().unwrap_or(&name).to_string();
-        let (record, record_value) = match archived_books.get(&name) {
+        let (record, record_value) = match archived_books
+            .get(&name)
+            .or_else(|| archived_books.get(&file_name))
+        {
             Some(value) => match serde_json::from_value::<BookRecord>(value.clone()) {
                 Ok(record) => (record, value.clone()),
                 Err(_) => (orphan_record(&file_name, &hash), Value::Null),
             },
             None => (orphan_record(&file_name, &hash), Value::Null),
         };
+
+        let extension = file_extension_of(&file_name);
+        if !BOOK_EXTENSIONS.contains(&extension) {
+            // 非书籍扩展名（或扩展名缺失）：不落地，防止任意文件写入
+            continue;
+        }
 
         // 内容与本地已有书重复：跳过文件，只做注解/归属映射
         if let Some(local_id) = local_hash_to_id.get(&hash).and_then(Value::as_str) {
@@ -553,18 +688,16 @@ pub fn import_backup_from_dir(
             continue;
         }
 
-        // 书 id 冲突（不同内容同 id，跨机极小概率）：换新 id
-        let final_id = if used_ids.contains(&record.id) {
+        // 记录 id 非安全字符（潜在路径遍历）：退回内容哈希 id，书照样恢复但落到安全文件名
+        let final_id = if is_safe_file_stem(&record.id) && !used_ids.contains(&record.id) {
+            record.id.clone()
+        } else if used_ids.contains(&record.id) {
             Uuid::new_v4().to_string()
         } else {
-            record.id.clone()
+            format!("bk-{}", &hash[..12.min(hash.len())])
         };
         used_ids.insert(final_id.clone());
 
-        let extension = file_name
-            .rsplit_once('.')
-            .map(|(_, ext)| ext.to_string())
-            .unwrap_or_else(|| record.format.clone());
         let dest_file = books_dir.join(format!("{}.{}", final_id, extension));
         {
             let mut entry = archive
@@ -575,23 +708,25 @@ pub fn import_backup_from_dir(
             std::io::copy(&mut entry, &mut output).map_err(|e| e.to_string())?;
         }
 
-        // 封面：归档记录里的 coverPath（covers/<名>），存在才恢复
+        // 封面：归档记录里的 coverPath（covers/<名>），存在且扩展名在白名单才恢复
         let mut final_cover_path: Option<String> = None;
         if let Some(archived_cover) = &record.cover_path {
-            let cover_name = archived_cover.rsplit('/').next().unwrap_or_default();
-            let cover_entry_name = format!("{}/{}", COVERS_DIR, cover_name);
-            if !cover_name.is_empty() && archive.by_name(&cover_entry_name).is_ok() {
-                let cover_dest =
-                    covers_dir.join(format!("{}.{}", final_id, file_extension_of(cover_name)));
-                if !cover_dest.exists() {
-                    let mut entry = archive
-                        .by_name(&cover_entry_name)
-                        .map_err(|e| e.to_string())?;
-                    let mut output = File::create(&cover_dest).map_err(|e| e.to_string())?;
-                    std::io::copy(&mut entry, &mut output).map_err(|e| e.to_string())?;
-                    covers_added += 1;
+            let cover_name = file_base_name(archived_cover);
+            let cover_extension = file_extension_of(cover_name);
+            if COVER_EXTENSIONS.contains(&cover_extension) {
+                let cover_entry_name = format!("{}/{}", COVERS_DIR, cover_name);
+                if archive.by_name(&cover_entry_name).is_ok() {
+                    let cover_dest = covers_dir.join(format!("{}.{}", final_id, cover_extension));
+                    if !cover_dest.exists() {
+                        let mut entry = archive
+                            .by_name(&cover_entry_name)
+                            .map_err(|e| e.to_string())?;
+                        let mut output = File::create(&cover_dest).map_err(|e| e.to_string())?;
+                        std::io::copy(&mut entry, &mut output).map_err(|e| e.to_string())?;
+                        covers_added += 1;
+                    }
+                    final_cover_path = Some(cover_dest.to_string_lossy().into_owned());
                 }
-                final_cover_path = Some(cover_dest.to_string_lossy().into_owned());
             }
         }
 
@@ -602,7 +737,7 @@ pub fn import_backup_from_dir(
         imported.cover_path = final_cover_path;
         imported.folder_id = None; // 归属在文件夹合并后统一映射
         imported.size_bytes = size_bytes;
-        books.push(imported);
+        local_books.push(imported);
         book_id_map.insert(record.id.clone(), Value::String(final_id));
         archived_record_by_id.insert(record.id.clone(), record_value.clone());
         books_added += 1;
@@ -613,11 +748,23 @@ pub fn import_backup_from_dir(
     // 文件夹合并：按 id 去重（同 id 保持本地名字）；新 id 但重名 → 加「（备份）」后缀
     let mut folders_added = 0u32;
     let mut folder_id_map: Map<String, Value> = Map::new();
-    let local_folder_names: HashSet<String> =
-        folders.iter().map(|folder| folder.name.clone()).collect();
-    let mut next_order = folders.iter().map(|folder| folder.order).max().unwrap_or(0);
+    let parsed_folder_list: Vec<FolderRecord> = parsed_folders.iter().flatten().cloned().collect();
+    let local_folder_names: HashSet<String> = parsed_folder_list
+        .iter()
+        .map(|folder| folder.name.clone())
+        .collect();
+    let mut next_order = parsed_folder_list
+        .iter()
+        .map(|folder| folder.order)
+        .max()
+        .unwrap_or(0);
+    let mut imported_folders: Vec<FolderRecord> = Vec::new();
     for archived in &archived_folders {
-        if folders.iter().any(|folder| folder.id == archived.id) {
+        let exists_locally = parsed_folder_list
+            .iter()
+            .chain(imported_folders.iter())
+            .any(|folder| folder.id == archived.id);
+        if exists_locally {
             folder_id_map.insert(archived.id.clone(), Value::String(archived.id.clone()));
             continue;
         }
@@ -627,7 +774,7 @@ pub fn import_backup_from_dir(
         }
         next_order += 1;
         folder_id_map.insert(archived.id.clone(), Value::String(archived.id.clone()));
-        folders.push(FolderRecord {
+        imported_folders.push(FolderRecord {
             id: archived.id.clone(),
             name,
             order: next_order,
@@ -637,7 +784,7 @@ pub fn import_backup_from_dir(
     }
 
     // 新书的归属映射：归档 folderId → 合并后的 folderId
-    for book in books.iter_mut() {
+    for book in local_books.iter_mut() {
         if book.folder_id.is_some() {
             continue;
         }
@@ -665,32 +812,66 @@ pub fn import_backup_from_dir(
         }
     }
 
-    // 写回 library.json（保留其余键）
-    library_map.insert(
-        "books".to_string(),
-        serde_json::to_value(&books).map_err(|e| e.to_string())?,
+    // 写回 library.json：解析成功的条目写更新值，解析失败的条目原样保留，
+    // 新恢复的书追加在后（其余顶层键不动）
+    let mut final_books: Vec<Value> =
+        Vec::with_capacity(raw_books.len() + (local_books.len() - initial_local_count));
+    for (raw, parsed) in raw_books.into_iter().zip(parsed_books) {
+        final_books.push(match parsed {
+            Some(record) => serde_json::to_value(record).map_err(|e| e.to_string())?,
+            None => raw,
+        });
+    }
+    // 新恢复的书在归属映射之后再序列化（local_books 尾部是导入的书）
+    final_books.extend(
+        local_books[initial_local_count..]
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?,
     );
-    library_map.insert(
-        "folders".to_string(),
-        serde_json::to_value(&folders).map_err(|e| e.to_string())?,
+    library_map.insert("books".to_string(), Value::Array(final_books));
+
+    let mut final_folders: Vec<Value> =
+        Vec::with_capacity(raw_folders.len() + imported_folders.len());
+    for (raw, parsed) in raw_folders.into_iter().zip(parsed_folders) {
+        final_folders.push(match parsed {
+            Some(record) => serde_json::to_value(record).map_err(|e| e.to_string())?,
+            None => raw,
+        });
+    }
+    final_folders.extend(
+        imported_folders
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?,
     );
+    library_map.insert("folders".to_string(), Value::Array(final_folders));
+
     if !library_map.contains_key("libraryVersion") {
         library_map.insert("libraryVersion".to_string(), Value::from(2));
     }
     write_json(&data_dir.join(LIBRARY_NAME), &Value::Object(library_map))?;
 
-    // 注解合并：归档 bookId → 本地最终 bookId
+    // 注解合并：归档 bookId → 本地最终 bookId。
+    // annotations.json 是双层包裹，读本地、读归档都要剥两层；写回保留原包裹。
     let mut annotations_added = 0u32;
-    let archived_annotations: Option<Map<String, Value>> = {
-        let mut file = archive
-            .by_name(ANNOTATIONS_NAME)
-            .map_err(|_| "归档缺少 annotations.json".to_string())?;
-        let value: Value = serde_json::from_reader(&mut file).unwrap_or(Value::Null);
-        value.get("annotations").and_then(Value::as_object).cloned()
+    let archived_annotations: Option<Map<String, Value>> = match archive.by_name(ANNOTATIONS_NAME) {
+        Ok(mut file) => {
+            let value: Value = serde_json::from_reader(&mut file).unwrap_or(Value::Null);
+            annotations_map_of(&value)
+        }
+        Err(_) => None, // 归档没有注解文件（如全新安装的备份）：跳过注解合并
     };
     if let Some(map) = archived_annotations {
-        let mut local_annotations = read_json(&data_dir.join(ANNOTATIONS_NAME))?
-            .and_then(|value| value.get("annotations").and_then(Value::as_object).cloned())
+        let annotations_file = read_json(&data_dir.join(ANNOTATIONS_NAME))?
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut local_annotations = annotations_file
+            .get("annotations")
+            .cloned()
+            .and_then(|state| annotations_map_of(&state))
             .unwrap_or_default();
         for (archived_book_id, list) in &map {
             let Some(list) = list.as_array() else {
@@ -701,16 +882,25 @@ pub fn import_backup_from_dir(
             };
             annotations_added += merge_annotations(&mut local_annotations, final_id, list);
         }
-        let mut annotations_file = Map::new();
-        annotations_file.insert("annotations".to_string(), Value::Object(local_annotations));
-        annotations_file.insert("ready".to_string(), Value::Bool(true));
+        // 把合并结果放回原包裹（保留文件里其他顶层键）
+        let mut annotations_file = annotations_file;
+        let state = annotations_file
+            .entry("annotations".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !state.is_object() {
+            *state = Value::Object(Map::new());
+        }
+        if let Some(state_object) = state.as_object_mut() {
+            state_object.insert("annotations".to_string(), Value::Object(local_annotations));
+            state_object.insert("ready".to_string(), Value::Bool(true));
+        }
         write_json(
             &data_dir.join(ANNOTATIONS_NAME),
             &Value::Object(annotations_file),
         )?;
     }
 
-    // 聊天与概念图：保守合并
+    // 聊天与概念图：文件级保守合并（双方同构 `{"chat": {...}}` 信封）
     for store_name in [CHAT_NAME, CONCEPTMAPS_NAME] {
         let archived_value = match archive.by_name(store_name) {
             Ok(mut file) => {
@@ -739,26 +929,6 @@ pub fn import_backup_from_dir(
         manifest,
         settings,
     })
-}
-
-fn file_extension_of(name: &str) -> &str {
-    name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("")
-}
-
-/// 归档里缺记录的孤立书文件：标题取文件名，id 用内容哈希前缀保持幂等。
-fn orphan_record(file_name: &str, hash: &str) -> BookRecord {
-    let title = file_extension_of(file_name);
-    BookRecord {
-        id: format!("bk-{}", &hash[..12.min(hash.len())]),
-        title: file_name
-            .strip_suffix(&format!(".{}", title))
-            .unwrap_or(file_name)
-            .to_string(),
-        author: "未知作者".to_string(),
-        format: title.to_string(),
-        added_at: now_ms(),
-        ..Default::default()
-    }
 }
 
 /// Tauri command：导出备份。settings 为前端收集的 localStorage 设置原文。
@@ -839,20 +1009,35 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
-    fn book_json(id: &str, title: &str, folder_id: Option<&str>, cfi: Option<&str>) -> Value {
-        serde_json::json!({
+    /// 真实形状的书记录：filePath / coverPath 是绝对路径（bookStore.ts join 出来的）。
+    fn book_json(dir: &Path, id: &str, title: &str, folder_id: Option<&str>) -> Value {
+        let mut value = serde_json::json!({
             "id": id,
             "title": title,
             "author": "作者",
             "format": "epub",
-            "filePath": format!("books/{}.epub", id),
+            "filePath": dir.join("books").join(format!("{}.epub", id)),
             "sizeBytes": 3,
             "addedAt": 1,
             "progress": 0.5,
-            "lastLocationCfi": cfi,
-            "tags": [],
+            "lastLocationCfi": format!("epub.cf/{}", id),
+            "tags": ["tag-a"],
             "folderId": folder_id,
-        })
+        });
+        if id == "b1" {
+            value["coverPath"] = Value::String(
+                dir.join("covers")
+                    .join("b1.jpg")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        value
+    }
+
+    /// 真实形状的 annotations.json：双层 plugin-store 包裹。
+    fn annotations_file_json(map: Value) -> Value {
+        serde_json::json!({ "annotations": { "annotations": map, "ready": true } })
     }
 
     fn annotation_value(cfi: &str) -> Value {
@@ -875,14 +1060,13 @@ mod tests {
         write_bytes(&dir.join("books/b1.epub"), b"abc");
         write_bytes(&dir.join("books/b2.epub"), b"def");
         write_bytes(&dir.join("covers/b1.jpg"), b"cover");
+        // 真实形状：绝对 filePath/coverPath
         write_bytes(
             &dir.join(LIBRARY_NAME),
             serde_json::to_vec(&serde_json::json!({
                 "books": [
-                    { "id": "b1", "title": "书一", "author": "作者", "format": "epub",
-                      "filePath": "books/b1.epub", "coverPath": "covers/b1.jpg",
-                      "sizeBytes": 3, "addedAt": 1, "progress": 0.5,
-                      "lastLocationCfi": "epub.cf/1", "tags": [] },
+                    book_json(&dir, "b1", "书一", None),
+                    book_json(&dir, "b2", "书二", None),
                 ],
                 "folders": [],
                 "libraryVersion": 2,
@@ -891,11 +1075,23 @@ mod tests {
             .unwrap()
             .as_slice(),
         );
+        // 真实形状：双层包裹
         write_bytes(
             &dir.join(ANNOTATIONS_NAME),
+            serde_json::to_vec(&annotations_file_json(serde_json::json!({
+                "b1": [annotation_value("epub.cf/b1")],
+            })))
+            .unwrap()
+            .as_slice(),
+        );
+        // 真实形状：chat.json 单层包裹
+        write_bytes(
+            &dir.join(CHAT_NAME),
             serde_json::to_vec(&serde_json::json!({
-                "annotations": { "b1": [annotation_value("epub.cf/1")] },
-                "ready": true,
+                "chat": {
+                    "messages": [{ "id": "m1", "role": "user", "content": "你好", "createdAt": 1 }],
+                    "threads": [{ "id": "t1", "bookId": "b1", "createdAt": 1, "updatedAt": 1 }],
+                },
             }))
             .unwrap()
             .as_slice(),
@@ -911,7 +1107,7 @@ mod tests {
         assert_eq!(manifest.format_version, BACKUP_FORMAT_VERSION);
         assert_eq!(manifest.books, 2);
         assert_eq!(manifest.covers, 1);
-        assert_eq!(manifest.annotations, 1);
+        assert_eq!(manifest.annotations, 1, "双层包裹的注解计数应正确");
 
         // 清空后从空目录恢复
         let restored = temp_dir("restored");
@@ -923,28 +1119,49 @@ mod tests {
         let library: Value =
             serde_json::from_str(&fs::read_to_string(restored.join(LIBRARY_NAME)).unwrap())
                 .unwrap();
-        assert_eq!(library["books"].as_array().unwrap().len(), 2);
+        let books = library["books"].as_array().unwrap();
+        assert_eq!(books.len(), 2);
         assert_eq!(library["libraryVersion"], 2);
 
+        // 记录元数据完整恢复（不是孤儿书）：标题、作者、进度、位置、标签
+        let restored_b1 = books
+            .iter()
+            .find(|b| b["title"] == "书一")
+            .expect("书一应按记录恢复而非孤儿书");
+        assert_eq!(restored_b1["author"], "作者");
+        assert_eq!(restored_b1["progress"], 0.5);
+        assert_eq!(restored_b1["lastLocationCfi"], "epub.cf/b1");
+        assert_eq!(restored_b1["tags"][0], "tag-a");
+
+        // 封面恢复且 coverPath 指向恢复目录内的文件
+        let cover_path = restored_b1["coverPath"].as_str().unwrap();
+        // coverPath 已重映射到恢复目录内的绝对路径
+        assert!(cover_path.starts_with(&restored.to_string_lossy().into_owned()));
+        assert_eq!(fs::read(cover_path).unwrap(), b"cover");
+
+        // 注解恢复在恢复后的 bookId 下，包裹形状保持双层
         let annotations: Value =
             serde_json::from_str(&fs::read_to_string(restored.join(ANNOTATIONS_NAME)).unwrap())
                 .unwrap();
-        let book_id = library["books"][0]["id"].as_str().unwrap();
+        let book_id = restored_b1["id"].as_str().unwrap();
         assert_eq!(
-            annotations["annotations"][book_id]
+            annotations["annotations"]["annotations"][book_id]
                 .as_array()
                 .unwrap()
                 .len(),
-            1
+            1,
+            "注解应恢复在双层包裹的内层"
         );
-        assert_eq!(
-            report.settings.get("deer-app-settings").map(String::as_str),
-            Some("{\"state\":{}}")
-        );
+        assert_eq!(annotations["annotations"]["ready"], true);
 
-        // 书文件内容与封面恢复一致
-        let restored_book = restored.join(library["books"][0]["filePath"].as_str().unwrap());
-        assert_eq!(fs::read(restored_book).unwrap(), b"abc");
+        // chat.json 合并恢复
+        let chat: Value =
+            serde_json::from_str(&fs::read_to_string(restored.join(CHAT_NAME)).unwrap()).unwrap();
+        assert_eq!(chat["chat"]["messages"].as_array().unwrap().len(), 1);
+
+        // 书文件内容恢复一致
+        let book_path = restored_b1["filePath"].as_str().unwrap();
+        assert_eq!(fs::read(book_path).unwrap(), b"abc");
 
         fs::remove_dir_all(&dir).ok();
         fs::remove_file(&archive_path).ok();
@@ -960,17 +1177,15 @@ mod tests {
             std::process::id()
         ));
 
-        // A：两本书，b1 与 B 的重复
+        // A：两本书（绝对路径），b1 与 B 的重复
         write_bytes(&dir_a.join("books/b1.epub"), b"same-content");
         write_bytes(&dir_a.join("books/b2.epub"), b"only-in-a");
         write_bytes(
             &dir_a.join(LIBRARY_NAME),
             serde_json::to_vec(&serde_json::json!({
                 "books": [
-                    { "id": "b1", "title": "重复书", "author": "作者", "format": "epub",
-                      "filePath": "books/b1.epub", "sizeBytes": 12, "addedAt": 1,
-                      "progress": 0.5, "tags": [], "folderId": "f1" },
-                    book_json("b2", "仅A的书", Some("f1"), None),
+                    book_json(&dir_a, "b1", "重复书", Some("f1")),
+                    book_json(&dir_a, "b2", "仅A的书", Some("f1")),
                 ],
                 "folders": [{ "id": "f1", "name": "小说", "order": 1 }],
                 "libraryVersion": 2,
@@ -980,23 +1195,20 @@ mod tests {
         );
         write_bytes(
             &dir_a.join(ANNOTATIONS_NAME),
-            serde_json::to_vec(&serde_json::json!({
-                "annotations": {
-                    "b1": [annotation_value("epub.cf/dup")],
-                    "b2": [annotation_value("epub.cf/new")],
-                },
-                "ready": true,
-            }))
+            serde_json::to_vec(&annotations_file_json(serde_json::json!({
+                "b1": [annotation_value("epub.cf/dup")],
+                "b2": [annotation_value("epub.cf/new")],
+            })))
             .unwrap()
             .as_slice(),
         );
 
-        // B：已有同内容书（不同 id）+ 同名文件夹（不同 id）+ 一条同 CFI 注解
+        // B：已有同内容书（不同 id、绝对路径）+ 同名文件夹（不同 id）+ 一条同 CFI 注解
         write_bytes(&dir_b.join("books/local1.epub"), b"same-content");
         write_bytes(
             &dir_b.join(LIBRARY_NAME),
             serde_json::to_vec(&serde_json::json!({
-                "books": [book_json("local1", "重复书", Some("f2"), None)],
+                "books": [book_json(&dir_b, "local1", "重复书", Some("f2"))],
                 "folders": [{ "id": "f2", "name": "小说", "order": 1 }],
                 "libraryVersion": 2,
             }))
@@ -1005,10 +1217,9 @@ mod tests {
         );
         write_bytes(
             &dir_b.join(ANNOTATIONS_NAME),
-            serde_json::to_vec(&serde_json::json!({
-                "annotations": { "local1": [annotation_value("epub.cf/dup")] },
-                "ready": true,
-            }))
+            serde_json::to_vec(&annotations_file_json(serde_json::json!({
+                "local1": [annotation_value("epub.cf/dup")],
+            })))
             .unwrap()
             .as_slice(),
         );
@@ -1016,7 +1227,7 @@ mod tests {
         export_backup_to_dir(&dir_a, &archive_path, "0.2.0", &BTreeMap::new(), None).unwrap();
         let report = import_backup_from_dir(&dir_b, &archive_path, None).unwrap();
 
-        // 内容重复的书被跳过，仅 A 的书被加进来
+        // 绝对 filePath 也能命中记录：重复书被跳过（不是孤儿化），仅 A 的 b2 加进来
         assert_eq!(report.books_added, 1);
         assert_eq!(report.books_skipped, 1);
 
@@ -1046,18 +1257,180 @@ mod tests {
             "导入书的 folderId 应指向恢复出的文件夹"
         );
 
-        // 注解按 CFI 合并：重复的跳过，新的进来
+        // 注解按 CFI 合并（双层包裹内层）：重复的跳过，新的进来
         let annotations: Value =
             serde_json::from_str(&fs::read_to_string(dir_b.join(ANNOTATIONS_NAME)).unwrap())
                 .unwrap();
         assert_eq!(report.annotations_added, 1);
-        let local_list = annotations["annotations"]["local1"].as_array().unwrap();
+        let inner = &annotations["annotations"]["annotations"];
+        let local_list = inner["local1"].as_array().unwrap();
         assert_eq!(local_list.len(), 1, "同 CFI 注解不应重复");
-        let imported_list = annotations["annotations"]["b2"].as_array().unwrap();
+        let imported_list = inner["b2"].as_array().unwrap();
         assert_eq!(imported_list.len(), 1);
 
         fs::remove_dir_all(&dir_a).ok();
         fs::remove_dir_all(&dir_b).ok();
+        fs::remove_file(&archive_path).ok();
+    }
+
+    #[test]
+    fn rejects_malicious_ids_and_bad_extensions() {
+        let dir = temp_dir("traversal");
+        let archive_path = dir.parent().unwrap().join(format!(
+            "deer-backup-traversal-{}.deer-backup",
+            std::process::id()
+        ));
+
+        // 本地是空库
+        write_bytes(
+            &dir.join(LIBRARY_NAME),
+            serde_json::to_vec(&serde_json::json!({ "books": [], "folders": [] }))
+                .unwrap()
+                .as_slice(),
+        );
+
+        // 归档：一条记录 id 是路径遍历 payload（books/evil.epub），
+        // 一条扩展名不在书籍白名单（books/junk.exe）
+        {
+            let out = File::create(&archive_path).unwrap();
+            let mut writer = zip::ZipWriter::new(out);
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            let library_value = serde_json::json!({
+                "books": [
+                    { "id": "../../evil", "title": "恶意书", "author": "作者", "format": "epub",
+                      "filePath": "books/evil.epub", "sizeBytes": 4, "addedAt": 1,
+                      "progress": 0.0, "tags": [] },
+                    { "id": "junk", "title": "垃圾", "author": "作者", "format": "exe",
+                      "filePath": "books/junk.exe", "sizeBytes": 4, "addedAt": 1,
+                      "progress": 0.0, "tags": [] },
+                ],
+                "folders": [],
+            });
+            for (name, bytes) in [
+                (
+                    MANIFEST_NAME,
+                    serde_json::to_vec(&BackupManifest {
+                        format_version: BACKUP_FORMAT_VERSION,
+                        app_version: "0.2.0".into(),
+                        created_at: 0,
+                        books: 2,
+                        covers: 0,
+                        annotations: 0,
+                    })
+                    .unwrap(),
+                ),
+                (LIBRARY_NAME, serde_json::to_vec(&library_value).unwrap()),
+                ("books/evil.epub", b"evil".to_vec()),
+                ("books/junk.exe", b"junk".to_vec()),
+            ] {
+                writer
+                    .start_file(name, options)
+                    .and_then(|()| writer.write_all(&bytes).map_err(ZipError::from))
+                    .unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        let report = import_backup_from_dir(&dir, &archive_path, None).unwrap();
+        // 恶意 id 的书退回内容哈希 id 恢复；非书籍扩展名的条目跳过
+        assert_eq!(report.books_added, 1);
+        let entries: Vec<String> = fs::read_dir(dir.join("books"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        let names = &entries;
+        assert_eq!(
+            names.len(),
+            1,
+            "只应落地安全命名的 evil 书，got: {:?}",
+            names
+        );
+        let restored_name = &names[0];
+        assert!(
+            restored_name.starts_with("bk-") && restored_name.ends_with(".epub"),
+            "恶意 id 应退回 bk-<hash> 安全文件名，got: {}",
+            restored_name
+        );
+        let restored_book = fs::read(dir.join("books").join(restored_name)).unwrap();
+        assert_eq!(restored_book, b"evil");
+        // 归档里的 junk.exe 不应被写到数据目录任何位置
+        assert!(!dir.join("junk.exe").exists());
+        assert!(!dir.join("books/junk.exe").exists());
+
+        fs::remove_dir_all(&dir).ok();
+        fs::remove_file(&archive_path).ok();
+    }
+
+    #[test]
+    fn keeps_unparsable_local_records() {
+        let dir = temp_dir("keep-raw");
+        let archive_path = dir.parent().unwrap().join(format!(
+            "deer-backup-keep-raw-{}.deer-backup",
+            std::process::id()
+        ));
+
+        write_bytes(&dir.join("books/new1.epub"), b"new-book");
+        // 本地 books 数组里混一条无法解析的记录（title 类型错误），解析失败的应原样保留
+        write_bytes(
+            &dir.join(LIBRARY_NAME),
+            serde_json::to_vec(&serde_json::json!({
+                "books": [
+                    { "title": 12345, "author": "作者" },
+                    book_json(&dir, "local1", "好书", None),
+                ],
+                "folders": [],
+                "libraryVersion": 2,
+            }))
+            .unwrap()
+            .as_slice(),
+        );
+        // 归档：一本新书
+        let archive_books = serde_json::json!({
+            "books": [book_json(&dir, "new1", "新书", None)],
+            "folders": [],
+        });
+        {
+            let out = File::create(&archive_path).unwrap();
+            let mut writer = zip::ZipWriter::new(out);
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            for (name, bytes) in [
+                (
+                    MANIFEST_NAME,
+                    serde_json::to_vec(&BackupManifest {
+                        format_version: BACKUP_FORMAT_VERSION,
+                        app_version: "0.2.0".into(),
+                        created_at: 0,
+                        books: 1,
+                        covers: 0,
+                        annotations: 0,
+                    })
+                    .unwrap(),
+                ),
+                (LIBRARY_NAME, serde_json::to_vec(&archive_books).unwrap()),
+                ("books/new1.epub", b"new-book".to_vec()),
+            ] {
+                writer
+                    .start_file(name, options)
+                    .and_then(|()| writer.write_all(&bytes).map_err(ZipError::from))
+                    .unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        import_backup_from_dir(&dir, &archive_path, None).unwrap();
+        let library: Value =
+            serde_json::from_str(&fs::read_to_string(dir.join(LIBRARY_NAME)).unwrap()).unwrap();
+        let books = library["books"].as_array().unwrap();
+        assert_eq!(books.len(), 3, "坏记录 + 本地书 + 新书");
+        assert_eq!(books[0]["title"], 12345, "解析失败的记录应原样保留");
+        assert!(books[0].get("id").is_none());
+        assert_eq!(books[1]["id"], "local1");
+        assert_eq!(books[2]["title"], "新书");
+
+        fs::remove_dir_all(&dir).ok();
         fs::remove_file(&archive_path).ok();
     }
 
@@ -1075,7 +1448,7 @@ mod tests {
         write_bytes(
             &data.join(LIBRARY_NAME),
             serde_json::to_vec(&serde_json::json!({
-                "books": [book_json("b", "书", None, None)],
+                "books": [book_json(&data, "b", "书", None)],
                 "folders": [],
                 "libraryVersion": 2,
             }))
