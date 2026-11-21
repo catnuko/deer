@@ -3,6 +3,7 @@ mod claude_acp;
 mod claude_cli;
 mod deer_log;
 pub mod mcp_server;
+mod webdav;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16,7 +17,10 @@ pub fn run() {
             acpx::acpx_env_check,
             acpx::ai_engine_status,
             acpx::ai_engine_install,
-            deer_log::diag_log
+            deer_log::diag_log,
+            webdav::webdav_request,
+            webdav::webdav_upload_file,
+            webdav::webdav_download_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

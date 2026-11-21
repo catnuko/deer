@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AIPanelLauncher } from "@/components/ai/AIPanelLauncher";
 import { AppShell } from "@/components/layout/AppShell";
@@ -5,10 +6,17 @@ import { BookshelfPage } from "@/routes/bookshelf/BookshelfPage";
 import { ReaderPage } from "@/routes/reader/ReaderPage";
 import { NotesPage } from "@/routes/notes/NotesPage";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
+import { startSyncRuntime } from "@/lib/sync/runtime";
 
 export default function App() {
   // 首页重定向要带上查询串，否则 `?preview=1`、`?ai=1` 这类参数在跳转时丢失。
   const { search } = useLocation();
+
+  // 按当前设置启动同步运行时；StrictMode 下会跑两次，
+  // startSyncRuntime 自身会先停旧实例，不需要 cleanup。
+  useEffect(() => {
+    void startSyncRuntime();
+  }, []);
 
   return (
     <>
