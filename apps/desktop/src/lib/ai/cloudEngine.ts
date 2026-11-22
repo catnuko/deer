@@ -5,7 +5,11 @@
  */
 
 import type { ModelMessage } from "ai";
-import type { ChatBookRef, ChatMessage } from "@/lib/types";
+import type {
+  ChatBookRef,
+  ChatDictionaryEntry,
+  ChatMessage,
+} from "@/lib/types";
 import { useAppSettings } from "@/store/appSettings";
 
 // AI SDK（@ai-sdk/* + "ai"）与 deerTools 都只在真正发起云请求时动态加载，
@@ -30,6 +34,9 @@ const BOOK_LIST_TOOLS = new Set([
   "get_reading_state",
 ]);
 
+/** 词典工具：结果渲染成聊天词典卡（found:false 不走卡片链路）。 */
+const DICTIONARY_TOOLS = new Set(["lookup_dictionary"]);
+
 /** thread 历史截最近 N 条。 */
 export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
   return messages.slice(-HISTORY_MESSAGE_LIMIT);
@@ -51,6 +58,8 @@ export type CloudChatCallbacks = {
   onThoughtDelta?(delta: string): void;
   /** 书单类工具结果转书卡（按书 id 去重由 chatStore 负责）。 */
   onBooks?(books: ChatBookRef[]): void;
+  /** 词典工具结果转词典卡（found:true 才回调，chatStore 取最后一次）。 */
+  onDictionary?(entry: ChatDictionaryEntry): void;
 };
 
 /** 设置 store 的云引擎字段 → createCloudModel 的配置形态。 */
@@ -94,6 +103,25 @@ function asBookRefs(output: unknown): ChatBookRef[] | null {
 }
 
 /**
+ * 判断工具结果是否是词典卡数据（防模型侧意外形态，坏帧丢弃）。
+ * found:false 按约定不走卡片链路，返回 null。
+ */
+export function asDictionaryEntry(output: unknown): ChatDictionaryEntry | null {
+  if (!output || typeof output !== "object") return null;
+  const entry = output as Partial<ChatDictionaryEntry>;
+  if (
+    entry.found !== true ||
+    typeof entry.word !== "string" ||
+    !entry.word.trim() ||
+    !Array.isArray(entry.senses) ||
+    !entry.senses.length
+  ) {
+    return null;
+  }
+  return output as ChatDictionaryEntry;
+}
+
+/**
  * 一轮云引擎对话：streamText + Deer 工具多步循环，流式回调与
  * 原 acpxChat 同构（onDelta / onThoughtDelta / onBooks），返回完整正文。
  */
@@ -130,6 +158,9 @@ export async function runCloudChat(opts: {
         if (BOOK_LIST_TOOLS.has(part.toolName)) {
           const books = asBookRefs(part.output);
           if (books) opts.callbacks.onBooks?.(books);
+        } else if (DICTIONARY_TOOLS.has(part.toolName)) {
+          const entry = asDictionaryEntry(part.output);
+          if (entry) opts.callbacks.onDictionary?.(entry);
         }
         break;
       }

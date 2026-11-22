@@ -63,6 +63,24 @@ export type ChatBookRef = {
   folderName?: string;
 };
 
+/** 词典卡单条释义（lookup_dictionary 从 dictionaryapi.dev 解析出的结果）。 */
+export type DictionarySense = {
+  /** 词性原文（noun/verb/... 英文原样，不本地化）。 */
+  partOfSpeech?: string;
+  definition: string;
+  example?: string;
+};
+
+/** 聊天词典卡：found:false（查无词条/网络失败）不走卡片链路，模型正文自答。 */
+export type ChatDictionaryEntry = {
+  word: string;
+  /** IPA 音标，如 /ɪˈfem.ər.əl/，缺省不渲染。 */
+  phonetic?: string;
+  found: true;
+  /** 工具侧截断 ≤6 条，控制上下文体积与卡片高度。 */
+  senses: DictionarySense[];
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -71,6 +89,8 @@ export type ChatMessage = {
   thinking?: string;
   /** 本条回复里模型经书架 MCP 工具返回的书单，渲染成可点击书卡。 */
   books?: ChatBookRef[];
+  /** 本条回复里模型经词典工具返回的词条（每条回复最多一词一卡，后到覆盖先到）。 */
+  dictionary?: ChatDictionaryEntry;
   createdAt: number;
 };
 
