@@ -5,7 +5,12 @@
  */
 
 import { jsonSchema, tool, type ToolSet } from "ai";
-import type { Book, ChatBookRef } from "@/lib/types";
+import type {
+  Book,
+  ChatBookRef,
+  ChatDictionaryEntry,
+  DictionarySense,
+} from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { getReaderBridge } from "./readerBridge";
@@ -44,6 +49,103 @@ export function readingStateOf(books: Book[]): Book[] {
 
 /** 搜索结果上限：控制上下文体积，模型按摘录回答足够。 */
 export const SEARCH_RESULT_LIMIT = 20;
+
+/** 词典 senses 上限：控制上下文体积与卡片高度（词典卡设计稿 §5 约定）。 */
+export const DICTIONARY_SENSE_LIMIT = 6;
+
+/** 词典查询结果：found:false 时模型按自身知识作答并说明查无词条。 */
+export type DictionaryLookupResult =
+  | ChatDictionaryEntry
+  | { found: false; word: string };
+
+/** dictionaryapi.dev 的原始词条形态（只标注我们消费的字段）。 */
+type DictionaryApiEntry = {
+  word?: unknown;
+  phonetic?: unknown;
+  phonetics?: { text?: unknown }[];
+  meanings?: {
+    partOfSpeech?: unknown;
+    definitions?: { definition?: unknown; example?: unknown }[];
+  }[];
+};
+
+/**
+ * 解析 dictionaryapi.dev 的词条数组 → 词典卡形态。
+ * 空释义直接丢弃、senses 截到上限；没有任何可用释义时返回 found:false。
+ */
+export function parseDictionaryEntry(
+  word: string,
+  payload: unknown,
+): DictionaryLookupResult {
+  if (!Array.isArray(payload)) return { found: false, word };
+  const entry = payload.find(
+    (candidate): candidate is DictionaryApiEntry =>
+      !!candidate &&
+      typeof candidate === "object" &&
+      Array.isArray((candidate as DictionaryApiEntry).meanings),
+  );
+  if (!entry) return { found: false, word };
+
+  const senses: DictionarySense[] = [];
+  for (const meaning of entry.meanings ?? []) {
+    if (!meaning || typeof meaning !== "object") continue;
+    const partOfSpeech =
+      typeof meaning.partOfSpeech === "string" && meaning.partOfSpeech.trim()
+        ? meaning.partOfSpeech
+        : undefined;
+    for (const item of meaning.definitions ?? []) {
+      if (!item || typeof item !== "object") continue;
+      const definition =
+        typeof item.definition === "string" ? item.definition.trim() : "";
+      if (!definition) continue;
+      const example =
+        typeof item.example === "string" ? item.example.trim() : "";
+      senses.push({
+        ...(partOfSpeech ? { partOfSpeech } : {}),
+        definition,
+        ...(example ? { example } : {}),
+      });
+      if (senses.length >= DICTIONARY_SENSE_LIMIT) break;
+    }
+    if (senses.length >= DICTIONARY_SENSE_LIMIT) break;
+  }
+  if (!senses.length) return { found: false, word };
+
+  const fallbackPhonetic = (entry.phonetics ?? []).find(
+    (p) => typeof p?.text === "string" && p.text.trim(),
+  )?.text as string | undefined;
+  const phonetic =
+    typeof entry.phonetic === "string" && entry.phonetic.trim()
+      ? entry.phonetic
+      : fallbackPhonetic?.trim();
+
+  return {
+    found: true,
+    word:
+      typeof entry.word === "string" && entry.word.trim()
+        ? entry.word
+        : word,
+    senses,
+    ...(phonetic ? { phonetic } : {}),
+  };
+}
+
+/** 调 dictionaryapi.dev 查词；查无词条、非 2xx 或网络失败一律 found:false。 */
+export async function lookupDictionaryWord(
+  word: string,
+): Promise<DictionaryLookupResult> {
+  const trimmed = word.trim();
+  if (!trimmed) return { found: false, word: trimmed };
+  try {
+    const res = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(trimmed)}`,
+    );
+    if (!res.ok) return { found: false, word: trimmed };
+    return parseDictionaryEntry(trimmed, await res.json());
+  } catch {
+    return { found: false, word: trimmed };
+  }
+}
 
 /** 构建本轮对话可用的工具集（每轮新build，读取最新 store 状态）。 */
 export function buildDeerTools(): ToolSet {
@@ -179,6 +281,23 @@ export function buildDeerTools(): ToolSet {
         const matches = await bridge.searchInBook(trimmed);
         return matches.slice(0, SEARCH_RESULT_LIMIT);
       },
+    }),
+
+    lookup_dictionary: tool({
+      description:
+        "查英文单词释义（数据源 dictionaryapi.dev）：返回结构化词条（音标/词性/英文释义/例句）。用户问某个词是什么意思、要词典解释时用它。found:false 表示词典源没收录或网络失败，此时改用自身知识解释，并向用户说明词典源没有查到。targetLang 仅提示用户偏好的解释语言，词典源释义固定为英文，需要其他语言时由你自行翻译。",
+      inputSchema: jsonSchema<{ word: string; targetLang?: string }>({
+        type: "object",
+        properties: {
+          word: { type: "string", description: "要查的英文单词（单个词或短语）" },
+          targetLang: {
+            type: "string",
+            description: "期望的解释语言（如 zh-CN）；词典源释义固定为英文，由模型自行翻译",
+          },
+        },
+        required: ["word"],
+      }),
+      execute: async ({ word }) => lookupDictionaryWord(word),
     }),
 
     jump_to_location: tool({

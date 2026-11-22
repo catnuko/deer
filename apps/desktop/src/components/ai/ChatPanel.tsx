@@ -11,7 +11,7 @@ import {
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
 import { ArrowUp, NotebookPen, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
-import type { ChatMessage } from "@/lib/types";
+import type { ChatDictionaryEntry, ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildSystemPrompt, type ReadingContext } from "@/lib/ai/readingContext";
 import {
@@ -43,6 +43,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import type { CurrentBook } from "@/lib/ai/currentBook";
 import { ChatBookCard } from "@/components/ai/ChatBookCard";
+import { ChatDictionaryCard } from "@/components/ai/ChatDictionaryCard";
 import { useChatStore } from "@/store/chatStore";
 import { AI_NOTE_COLOR, useAnnotationStore } from "@/store/annotationStore";
 
@@ -242,6 +243,17 @@ function BooksData({ data }: { data: { books: ChatMessage["books"] } }) {
   );
 }
 
+/** 词典工具词条的 data part 渲染：词典卡（数据不完整时组件内部兜底）。 */
+function DictionaryData({
+  data,
+}: {
+  data: { dictionary: ChatDictionaryEntry | undefined };
+}) {
+  const entry = data?.dictionary;
+  if (!entry) return null;
+  return <ChatDictionaryCard entry={entry} />;
+}
+
 function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="mb-4">
@@ -250,7 +262,7 @@ function AssistantMessage() {
           components={{
             Text: TextPart,
             Reasoning: ReasoningPart,
-            data: { by_name: { books: BooksData } },
+            data: { by_name: { books: BooksData, dictionary: DictionaryData } },
           }}
         />
       </div>
@@ -671,6 +683,11 @@ export function ChatPanel({
                   .getState()
                   .appendToMessageBooks(threadId, assistant.id, books);
               },
+              onDictionary: (entry) => {
+                useChatStore
+                  .getState()
+                  .appendToMessageDictionary(threadId, assistant.id, entry);
+              },
             },
           });
           // 以累计正文落库（含持久化）；空回复兜底一句可读提示。
@@ -758,6 +775,15 @@ export function ChatPanel({
                 type: "data" as const,
                 name: "books",
                 data: { books: m.books },
+              },
+            ]
+          : []),
+        ...(m.role === "assistant" && m.dictionary
+          ? [
+              {
+                type: "data" as const,
+                name: "dictionary",
+                data: { dictionary: m.dictionary },
               },
             ]
           : []),
