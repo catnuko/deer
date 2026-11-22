@@ -25,7 +25,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
-      - run: pnpm test
+      # coverage：报告进 CI 工件，阈值在 vitest.config.ts（低于即 fail）。
+      - run: pnpm -C apps/desktop run test:coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: apps/desktop/coverage/
+          retention-days: 14
       - run: pnpm run build
 
   rust-check:
