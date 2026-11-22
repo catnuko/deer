@@ -11,7 +11,11 @@ import {
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
 import { ArrowUp, NotebookPen, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
-import type { ChatDictionaryEntry, ChatMessage } from "@/lib/types";
+import type {
+  ChatDictionaryEntry,
+  ChatMessage,
+  ChatTranslationEntry,
+} from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildSystemPrompt, type ReadingContext } from "@/lib/ai/readingContext";
 import {
@@ -45,6 +49,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { CurrentBook } from "@/lib/ai/currentBook";
 import { ChatBookCard } from "@/components/ai/ChatBookCard";
 import { ChatDictionaryCard } from "@/components/ai/ChatDictionaryCard";
+import { ChatTranslationCard } from "@/components/ai/ChatTranslationCard";
 import { useChatStore } from "@/store/chatStore";
 import { AI_NOTE_COLOR, useAnnotationStore } from "@/store/annotationStore";
 
@@ -255,6 +260,17 @@ function DictionaryData({
   return <ChatDictionaryCard entry={entry} />;
 }
 
+/** 翻译工具结果的 data part 渲染：翻译卡（缺字段时组件内部降级）。 */
+function TranslationData({
+  data,
+}: {
+  data: { translation: ChatTranslationEntry | undefined };
+}) {
+  const entry = data?.translation;
+  if (!entry) return null;
+  return <ChatTranslationCard entry={entry} />;
+}
+
 function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="mb-4">
@@ -263,7 +279,9 @@ function AssistantMessage() {
           components={{
             Text: TextPart,
             Reasoning: ReasoningPart,
-            data: { by_name: { books: BooksData, dictionary: DictionaryData } },
+            data: {
+              by_name: { books: BooksData, dictionary: DictionaryData, translation: TranslationData },
+            },
           }}
         />
       </div>
@@ -690,6 +708,11 @@ export function ChatPanel({
                   .getState()
                   .appendToMessageDictionary(threadId, assistant.id, entry);
               },
+              onTranslation: (entry) => {
+                useChatStore
+                  .getState()
+                  .appendToMessageTranslation(threadId, assistant.id, entry);
+              },
             },
           });
           // 以累计正文落库（含持久化）；空回复兜底一句可读提示。
@@ -786,6 +809,15 @@ export function ChatPanel({
                 type: "data" as const,
                 name: "dictionary",
                 data: { dictionary: m.dictionary },
+              },
+            ]
+          : []),
+        ...(m.role === "assistant" && m.translation
+          ? [
+              {
+                type: "data" as const,
+                name: "translation",
+                data: { translation: m.translation },
               },
             ]
           : []),

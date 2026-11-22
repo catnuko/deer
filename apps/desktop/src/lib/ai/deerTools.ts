@@ -9,6 +9,7 @@ import type {
   Book,
   ChatBookRef,
   ChatDictionaryEntry,
+  ChatTranslationEntry,
   DictionarySense,
 } from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
@@ -52,6 +53,56 @@ export const SEARCH_RESULT_LIMIT = 20;
 
 /** 词典 senses 上限：控制上下文体积与卡片高度（词典卡设计稿 §5 约定）。 */
 export const DICTIONARY_SENSE_LIMIT = 6;
+
+/** 翻译原文上限：超长截断并提示（不改变上下文体积预算的约定）。 */
+export const MAX_TRANSLATION_CHARS = 2000;
+
+/**
+ * translate_text 的入参形态：翻译由模型自行完成，把原文、译文与语言方向
+ * 一并提交，工具只负责校验与承载结构化结果（不引外部翻译 API）。
+ */
+export type TranslateTextInput = {
+  text: string;
+  targetLang?: string;
+  translatedText: string;
+  sourceLang?: string;
+};
+
+/**
+ * 校验并规范化 translate_text 的结果：
+ * - 空文本/空译文返回可读错误提示（模型据此向用户说明）；
+ * - 原文超 MAX_TRANSLATION_CHARS 截断并带 truncated 标记。
+ */
+export function normalizeTranslation(
+  input: TranslateTextInput,
+): ChatTranslationEntry | string {
+  const text = typeof input.text === "string" ? input.text.trim() : "";
+  const translatedText =
+    typeof input.translatedText === "string" ? input.translatedText.trim() : "";
+  if (!text) return "待翻译文本为空，请提供要翻译的内容。";
+  if (!translatedText) return "译文为空，请先完成翻译再调用本工具。";
+
+  const sourceText =
+    text.length > MAX_TRANSLATION_CHARS
+      ? text.slice(0, MAX_TRANSLATION_CHARS)
+      : text;
+  const targetLang =
+    typeof input.targetLang === "string" && input.targetLang.trim()
+      ? input.targetLang.trim()
+      : undefined;
+  const sourceLang =
+    typeof input.sourceLang === "string" && input.sourceLang.trim()
+      ? input.sourceLang.trim()
+      : undefined;
+
+  return {
+    sourceText,
+    translatedText,
+    ...(sourceLang ? { sourceLang } : {}),
+    ...(targetLang ? { targetLang } : {}),
+    ...(text.length > MAX_TRANSLATION_CHARS ? { truncated: true } : {}),
+  };
+}
 
 /** 词典查询结果：found:false 时模型按自身知识作答并说明查无词条。 */
 export type DictionaryLookupResult =
@@ -298,6 +349,31 @@ export function buildDeerTools(): ToolSet {
         required: ["word"],
       }),
       execute: async ({ word }) => lookupDictionaryWord(word),
+    }),
+
+    translate_text: tool({
+      description:
+        "翻译任意语言的文本（由你直接完成翻译，不调外部翻译 API）：先自行翻译，再把原文、译文与语言方向通过本工具提交，前端会渲染成原文/译文对照卡。用户要翻译划选内容、句子或段落时用它；纯闲聊不需要翻译时不要调用。text 超 2000 字符时只取前 2000 字符翻译。",
+      inputSchema: jsonSchema<TranslateTextInput>({
+        type: "object",
+        properties: {
+          text: { type: "string", description: "要翻译的原文" },
+          targetLang: {
+            type: "string",
+            description: "目标语言（如 zh-CN、日文、English）",
+          },
+          translatedText: {
+            type: "string",
+            description: "你完成的译文（原文本身已是目标语言时，做润色或改写说明）",
+          },
+          sourceLang: {
+            type: "string",
+            description: "检测出的原文语言（如 en、zh-CN），无法判断时省略",
+          },
+        },
+        required: ["text", "translatedText"],
+      }),
+      execute: async (input) => normalizeTranslation(input),
     }),
 
     jump_to_location: tool({

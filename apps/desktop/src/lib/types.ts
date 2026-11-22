@@ -81,6 +81,21 @@ export type ChatDictionaryEntry = {
   senses: DictionarySense[];
 };
 
+/**
+ * 聊天翻译卡：translate_text 工具承载的结构化翻译结果（翻译由模型完成，
+ * 工具只负责校验与承载）。源语言检测失败时缺省，卡片逐字段优雅降级。
+ */
+export type ChatTranslationEntry = {
+  /** 模型检测出的原文语言（如 en/zh-CN），缺省不渲染。 */
+  sourceLang?: string;
+  sourceText: string;
+  /** 目标语言（如 zh-CN/日文），缺省不渲染。 */
+  targetLang?: string;
+  translatedText: string;
+  /** 原文超长被截断（>2000 字符）时为 true，卡片提示仅展示前段。 */
+  truncated?: boolean;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -91,6 +106,8 @@ export type ChatMessage = {
   books?: ChatBookRef[];
   /** 本条回复里模型经词典工具返回的词条（每条回复最多一词一卡，后到覆盖先到）。 */
   dictionary?: ChatDictionaryEntry;
+  /** 本条回复里模型经翻译工具返回的结果（每条回复最多一卡，后到覆盖先到）。 */
+  translation?: ChatTranslationEntry;
   createdAt: number;
 };
 

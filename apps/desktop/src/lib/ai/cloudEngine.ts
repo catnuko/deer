@@ -9,6 +9,7 @@ import type {
   ChatBookRef,
   ChatDictionaryEntry,
   ChatMessage,
+  ChatTranslationEntry,
 } from "@/lib/types";
 import { useAppSettings } from "@/store/appSettings";
 
@@ -37,6 +38,9 @@ const BOOK_LIST_TOOLS = new Set([
 /** 词典工具：结果渲染成聊天词典卡（found:false 不走卡片链路）。 */
 const DICTIONARY_TOOLS = new Set(["lookup_dictionary"]);
 
+/** 翻译工具：结果渲染成聊天翻译卡（空文本等错误提示不走卡片链路）。 */
+const TRANSLATION_TOOLS = new Set(["translate_text"]);
+
 /** thread 历史截最近 N 条。 */
 export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
   return messages.slice(-HISTORY_MESSAGE_LIMIT);
@@ -60,6 +64,8 @@ export type CloudChatCallbacks = {
   onBooks?(books: ChatBookRef[]): void;
   /** 词典工具结果转词典卡（found:true 才回调，chatStore 取最后一次）。 */
   onDictionary?(entry: ChatDictionaryEntry): void;
+  /** 翻译工具结果转翻译卡（校验通过才回调，chatStore 取最后一次）。 */
+  onTranslation?(entry: ChatTranslationEntry): void;
 };
 
 /** 设置 store 的云引擎字段 → createCloudModel 的配置形态。 */
@@ -122,6 +128,26 @@ export function asDictionaryEntry(output: unknown): ChatDictionaryEntry | null {
 }
 
 /**
+ * 判断工具结果是否是翻译卡数据（防模型侧意外形态，坏帧丢弃）。
+ * 原文/译文任一为空即视为无效；sourceLang/targetLang 缺省由卡片降级。
+ */
+export function asTranslationEntry(
+  output: unknown,
+): ChatTranslationEntry | null {
+  if (!output || typeof output !== "object") return null;
+  const entry = output as Partial<ChatTranslationEntry>;
+  if (
+    typeof entry.sourceText !== "string" ||
+    !entry.sourceText.trim() ||
+    typeof entry.translatedText !== "string" ||
+    !entry.translatedText.trim()
+  ) {
+    return null;
+  }
+  return output as ChatTranslationEntry;
+}
+
+/**
  * 一轮云引擎对话：streamText + Deer 工具多步循环，流式回调与
  * 原 acpxChat 同构（onDelta / onThoughtDelta / onBooks），返回完整正文。
  */
@@ -161,6 +187,9 @@ export async function runCloudChat(opts: {
         } else if (DICTIONARY_TOOLS.has(part.toolName)) {
           const entry = asDictionaryEntry(part.output);
           if (entry) opts.callbacks.onDictionary?.(entry);
+        } else if (TRANSLATION_TOOLS.has(part.toolName)) {
+          const entry = asTranslationEntry(part.output);
+          if (entry) opts.callbacks.onTranslation?.(entry);
         }
         break;
       }
