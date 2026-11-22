@@ -64,7 +64,8 @@ jobs:
     needs: release
     # 只在新版本 tag 创建（或 dry_run 手动验证）时构建，普通 push 不跑，控制 macOS runner 成本
     if: needs.release.outputs.created == 'true' || inputs.dry_run == true
-    runs-on: macos-14
+    # macos-14 标签已退役（runner 分配直接报 "configuration not supported"），改用 macos-latest（Apple Silicon）
+    runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
