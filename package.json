@@ -12,6 +12,6 @@
     "tauri": "pnpm -C apps/desktop tauri"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

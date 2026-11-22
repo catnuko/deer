@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SelectionPlacement } from "@/lib/ai/selectionDraft";
 import { fitPopover } from "@/lib/ai/selectionDraft";
+import { selectionPresetsFor, type SelectionPreset } from "@/lib/ai/selectionPrompts";
 import {
   ANNOTATION_STYLES,
   DEFAULT_ANNOTATION_STYLE,
@@ -59,6 +60,7 @@ export function SelectionPopover({
   onHighlight,
   onNote,
   onAsk,
+  onQuickAsk,
   onDelete,
 }: SelectionPlacement & {
   text?: string;
@@ -69,6 +71,8 @@ export function SelectionPopover({
   onHighlight: (style: AnnotationStyle, color: string) => void;
   onNote: (note: string) => void;
   onAsk?: (text: string) => void;
+  /** 划词即问（N4）：点预设快捷问题，交由宿主拼 prompt 直发。 */
+  onQuickAsk?: (preset: SelectionPreset) => void;
   onDelete?: () => void;
 }) {
   const [mode, setMode] = useState<"menu" | "note">("menu");
@@ -241,7 +245,26 @@ export function SelectionPopover({
             </div>
           </div>
         ) : (
-          <div className="divide-border flex divide-x">
+          <div className="flex flex-col">
+            {onQuickAsk ? (
+              <div
+                role="group"
+                aria-label="快捷提问"
+                className="border-border flex flex-wrap gap-1 border-b px-2 py-1.5"
+              >
+                {selectionPresetsFor(text).map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className="text-foreground hover:bg-muted rounded-md px-2 py-1 text-xs transition-colors duration-fast ease-enter"
+                    onClick={() => onQuickAsk(preset)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="divide-border flex divide-x">
             {onCopy ? (
               <MenuButton
                 icon={Copy}
@@ -280,6 +303,7 @@ export function SelectionPopover({
                 onClick={() => onAsk(text)}
               />
             ) : null}
+            </div>
           </div>
         )}
       </div>
