@@ -4,16 +4,23 @@
  * （超长截最近 N 条），上下文注入沿用 readingContext 的 system 组装。
  */
 
-import {
-  generateText,
-  stepCountIs,
-  streamText,
-  type ModelMessage,
-} from "ai";
-import type { ChatBookRef, ChatDictionaryEntry, ChatMessage } from "@/lib/types";
-import { createCloudModel } from "./cloudProvider";
+import type { ModelMessage } from "ai";
+import type {
+  ChatBookRef,
+  ChatDictionaryEntry,
+  ChatMessage,
+} from "@/lib/types";
 import { useAppSettings } from "@/store/appSettings";
-import { buildDeerTools } from "./deerTools";
+
+// AI SDK（@ai-sdk/* + "ai"）与 deerTools 都只在真正发起云请求时动态加载，
+// 不进首屏主包；模块级缓存让流式多轮对话不重复加载。
+let cloudRuntimeMod: Promise<
+  typeof import("./cloudRuntime")
+> | null = null;
+function loadCloudRuntime() {
+  cloudRuntimeMod ??= import("./cloudRuntime");
+  return cloudRuntimeMod;
+}
 
 /** agent 单轮最多步数（防工具循环失控）。 */
 export const MAX_AGENT_STEPS = 8;
@@ -127,22 +134,14 @@ export async function runCloudChat(opts: {
 }): Promise<{ text: string }> {
   assertCloudConfigured();
 
-  const model = createCloudModel(currentConfig());
-  if (!model) {
-    throw new CloudEngineError(
-      "云引擎未配置：请在 设置 → AI 伴读 填写 API Key 后重试。",
-    );
-  }
-
-  const result = streamText({
-    model,
+  const { buildCloudAgent } = await loadCloudRuntime();
+  const result = buildCloudAgent({
+    model: await currentModel(),
     system: opts.system,
     messages: [
       ...toModelMessages(trimHistory(opts.history)),
       { role: "user", content: opts.prompt },
     ],
-    tools: buildDeerTools(),
-    stopWhen: stepCountIs(MAX_AGENT_STEPS),
   });
 
   let text = "";
@@ -186,16 +185,23 @@ export async function runCloudOnce(opts: {
 }): Promise<string> {
   assertCloudConfigured();
 
+  const { generateOnce } = await loadCloudRuntime();
+  const result = await generateOnce({
+    model: await currentModel(),
+    system: opts.system,
+    prompt: opts.prompt,
+  });
+  return result.text;
+}
+
+/** 由设置构造语言模型；配置不完整抛出统一错误（调用方已先 assertCloudConfigured）。 */
+async function currentModel() {
+  const { createCloudModel } = await import("./cloudProvider");
   const model = createCloudModel(currentConfig());
   if (!model) {
     throw new CloudEngineError(
       "云引擎未配置：请在 设置 → AI 伴读 填写 API Key 后重试。",
     );
   }
-  const result = await generateText({
-    model,
-    system: opts.system,
-    prompt: opts.prompt,
-  });
-  return result.text;
+  return model;
 }

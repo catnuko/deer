@@ -2,6 +2,10 @@
 
 日期：2026-10-31 · 分支：`spike/acpx`（基于 dev `cc95a01`）· 执行：现代 Web 应用专家
 
+> 现状注记（2026-11）：spike 建议已落地——聊天统一走 acpx（`src-tauri/src/acpx.rs`），
+> 此前的内置直连 claude 链路（spawn `@zed-industries/claude-code-acp` 适配器）已移除，
+> `claude_acp.rs` 只保留 acpx 复用的解析纯函数与常量。本文其余内容为 spike 期间的实测记录。
+
 ## 结论
 
 **四项验证全部可行**，acpx 可以作为 Deer「多 agent（多 harness）」线的连接层进入正式开发。
@@ -31,18 +35,6 @@
 ```
 
 事件类型实测清单：`initialize`、`session/new`、`session/prompt`、`session/update`（`agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `available_commands_update` / `session_info_update` / `usage_update`）、`_auth/status_update`。
-
-## 与现有 claude_acp.rs 的对照（改动量估计）
-
-现有 `apps/desktop/src-tauri/src/claude_acp.rs`（818 行）按 prompt spawn `@zed-industries/claude-code-acp` 并解析 `session/update` 的 snake_case 事件（`agent_message_chunk`/`agent_thought_chunk`），**与 acpx 的输出完全同构**。因此：
-
-- **解析层：基本零改动**。`parse_session_update` / `chunk_text` 等函数可直接消费 acpx 的 NDJSON；现有单元测试样例即 acpx 实际输出格式。
-- **接入层：主要工作**：
-  1. spawn 目标从适配器直连改为 `acpx --format json --json-strict <agent>` 子进程（需 Node 检测）；
-  2. 会话管理移交 acpx（`~/.acpx/sessions/<record>.json` + 流式事件日志，resume 按 cwd 定位），Deer 不再自管 ACP sessionId 生命周期；
-  3. 处理 acpx 多出的通知类型（`available_commands_update`、`usage_update`、`_auth/status_update`）——忽略或择要透传；
-  4. 权限策略接线（`--approve-all` / `--approve-reads` / `--permission-policy`）映射到 Deer 的并发门控（CHAT_GATE）。
-- 粗估：解析层 <50 行改动，接入层（spawn、会话映射、权限）约 200–300 行新代码，现有 Claude 单链路可完全不动。
 
 ## 与官方文档不符 / 坑（以实测为准）
 
