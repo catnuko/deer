@@ -258,7 +258,10 @@ pub(crate) fn percent_encode(s: &str) -> String {
 }
 
 fn dictionary_url(word: &str) -> String {
-    format!("https://api.dictionaryapi.dev/api/v2/entries/en/{}", percent_encode(word))
+    format!(
+        "https://api.dictionaryapi.dev/api/v2/entries/en/{}",
+        percent_encode(word)
+    )
 }
 
 fn wikipedia_url(lang: &str, term: &str) -> String {
@@ -272,8 +275,7 @@ fn wikipedia_url(lang: &str, term: &str) -> String {
 /// 规范化维基语言代码：取主子标签（zh-CN → zh），空值或非字母代码回退英文维基。
 pub(crate) fn normalize_wikipedia_lang(lang: &str) -> String {
     let primary = lang.trim().split('-').next().unwrap_or("").to_lowercase();
-    let valid = (2..=8).contains(&primary.len())
-        && primary.chars().all(|c| c.is_ascii_lowercase());
+    let valid = (2..=8).contains(&primary.len()) && primary.chars().all(|c| c.is_ascii_lowercase());
     if valid {
         primary
     } else {
@@ -391,7 +393,10 @@ pub(crate) fn dictionary_payload(word: &str, outcome: Result<Value, HttpError>) 
                 HttpError::Status(code) => format!("HTTP {code}"),
                 HttpError::Transport(msg) => msg.clone(),
             };
-            log("mcp", &format!("词典查询失败 word={word}：{detail}，返回结构化 miss"));
+            log(
+                "mcp",
+                &format!("词典查询失败 word={word}：{detail}，返回结构化 miss"),
+            );
             dictionary_miss(word)
         }
     }
@@ -478,7 +483,10 @@ pub(crate) fn parse_wikipedia_summary(term: &str, lang: &str, payload: &Value) -
             )
         });
     let extract: String = if extract.chars().count() > MAX_ENCYCLOPEDIA_EXTRACT_CHARS {
-        extract.chars().take(MAX_ENCYCLOPEDIA_EXTRACT_CHARS).collect()
+        extract
+            .chars()
+            .take(MAX_ENCYCLOPEDIA_EXTRACT_CHARS)
+            .collect()
     } else {
         extract.to_string()
     };
@@ -657,9 +665,7 @@ pub(crate) async fn handle_request(
                 "lookup_dictionary" => {
                     let word = arguments.get("word").and_then(Value::as_str).unwrap_or("");
                     let outcome = match http_client() {
-                        Ok(client) => {
-                            http_get_json(&client, &dictionary_url(word.trim())).await
-                        }
+                        Ok(client) => http_get_json(&client, &dictionary_url(word.trim())).await,
                         Err(e) => Err(e),
                     };
                     dictionary_payload(word, outcome)
@@ -856,9 +862,7 @@ mod tests {
         assert_eq!(init["protocolVersion"], "2025-03-26");
         assert_eq!(init["serverInfo"]["name"], "deer");
 
-        let tools = call(&library, "tools/list", &Value::Null)
-            .unwrap()
-            .unwrap();
+        let tools = call(&library, "tools/list", &Value::Null).unwrap().unwrap();
         let names: Vec<&str> = tools["tools"]
             .as_array()
             .unwrap()
@@ -885,9 +889,13 @@ mod tests {
     #[test]
     fn unknown_tool_is_tool_error_and_unknown_method_is_rpc_error() {
         let library = fixture_library();
-        let result = call(&library, "tools/call", &json!({ "name": "nope", "arguments": {} }))
-            .unwrap()
-            .unwrap();
+        let result = call(
+            &library,
+            "tools/call",
+            &json!({ "name": "nope", "arguments": {} }),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(result["isError"], true);
 
         let err = call(&library, "resources/list", &Value::Null)
@@ -974,12 +982,18 @@ mod tests {
         assert_eq!(hit["deer"], "dictionary");
         assert_eq!(hit["found"], true);
         assert_eq!(hit["word"], "ephemeral");
-        assert_eq!(hit["phonetic"], "/ɪˈfem.ər.əl/", "phonetic 空串回退 phonetics.text");
+        assert_eq!(
+            hit["phonetic"], "/ɪˈfem.ər.əl/",
+            "phonetic 空串回退 phonetics.text"
+        );
         let senses = hit["senses"].as_array().unwrap();
         assert_eq!(senses.len(), 3, "senses 跨 meanings 累计");
         assert_eq!(senses[0]["partOfSpeech"], "adjective");
         assert_eq!(senses[0]["example"], "fashions are ephemeral");
-        assert!(senses[1].get("example").is_none(), "缺省字段不应序列化成 null");
+        assert!(
+            senses[1].get("example").is_none(),
+            "缺省字段不应序列化成 null"
+        );
 
         // senses 截到上限
         let many: Vec<Value> = (0..10)
@@ -1034,7 +1048,8 @@ mod tests {
         assert!(hit.get("truncated").is_none());
 
         // 语言字段缺省不序列化成 null
-        let minimal = normalize_translation(&json!({ "text": "a", "translatedText": "b" })).unwrap();
+        let minimal =
+            normalize_translation(&json!({ "text": "a", "translatedText": "b" })).unwrap();
         assert!(minimal.get("sourceLang").is_none());
         assert!(minimal.get("targetLang").is_none());
 
@@ -1074,11 +1089,18 @@ mod tests {
         assert_eq!(hit["url"], "https://en.wikipedia.org/wiki/Grace_Hopper");
 
         // content_urls 缺省 → 标题拼链接兜底；摘要超长截断
-        let fallback = parse_wikipedia_summary("临时", "zh", &json!({
-            "title": "Ephemeral things",
-            "extract": "x".repeat(MAX_ENCYCLOPEDIA_EXTRACT_CHARS + 10),
-        }));
-        assert_eq!(fallback["url"], "https://zh.wikipedia.org/wiki/Ephemeral_things");
+        let fallback = parse_wikipedia_summary(
+            "临时",
+            "zh",
+            &json!({
+                "title": "Ephemeral things",
+                "extract": "x".repeat(MAX_ENCYCLOPEDIA_EXTRACT_CHARS + 10),
+            }),
+        );
+        assert_eq!(
+            fallback["url"],
+            "https://zh.wikipedia.org/wiki/Ephemeral_things"
+        );
         assert_eq!(
             fallback["extract"].as_str().unwrap().chars().count(),
             MAX_ENCYCLOPEDIA_EXTRACT_CHARS
@@ -1100,7 +1122,10 @@ mod tests {
         assert_eq!(status_miss["lang"], "zh");
         let net_miss = encyclopedia_payload("w", "en", Err(HttpError::Transport("timeout".into())));
         assert_eq!(net_miss["reason"], "network_error");
-        assert_eq!(encyclopedia_payload(" ", "", Ok(json!(null)))["lang"], DEFAULT_WIKIPEDIA_LANG);
+        assert_eq!(
+            encyclopedia_payload(" ", "", Ok(json!(null)))["lang"],
+            DEFAULT_WIKIPEDIA_LANG
+        );
     }
 
     #[test]
@@ -1138,7 +1163,8 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(ok["isError"], false);
-        let payload: Value = serde_json::from_str(ok["content"][0]["text"].as_str().unwrap()).unwrap();
+        let payload: Value =
+            serde_json::from_str(ok["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(payload["deer"], "translation");
 
         // translate_text：空译文 → tool_error，模型据此向用户说明

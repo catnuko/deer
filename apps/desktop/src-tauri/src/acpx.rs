@@ -1211,8 +1211,7 @@ mod tests {
         let miss = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","status":"completed","rawOutput":[{"type":"text","text":"{\"deer\":\"dictionary\",\"found\":false,\"word\":\"zzz\"}"}]}}}"#;
         let v: Value = serde_json::from_str(miss).unwrap();
         assert!(
-            marker_payload_from_update(v.get("params").unwrap(), "dictionary")
-                .unwrap()["found"]
+            marker_payload_from_update(v.get("params").unwrap(), "dictionary").unwrap()["found"]
                 == false
         );
 
