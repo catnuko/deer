@@ -20,6 +20,7 @@ describe("appSettings store", () => {
     );
     expect(DEFAULT_APP_SETTINGS.aiModel).toBe("glm-4.6");
     expect(DEFAULT_APP_SETTINGS.aiApiKey).toBe("");
+    expect(DEFAULT_APP_SETTINGS.memoryAutoSummarize).toBe(true);
     expect(useAppSettings.getState().startupView).toBe("bookshelf");
     expect(useAppSettings.getState().bookshelfSort).toBe("recent");
   });
@@ -31,12 +32,14 @@ describe("appSettings store", () => {
     useAppSettings.getState().setAiBaseUrl("https://example.com/v1");
     useAppSettings.getState().setAiModel("claude-sonnet-4-5");
     useAppSettings.getState().setAiApiKey("test-key");
+    useAppSettings.getState().setMemoryAutoSummarize(false);
     expect(useAppSettings.getState().startupView).toBe("continue");
     expect(useAppSettings.getState().bookshelfSort).toBe("title");
     expect(useAppSettings.getState().aiProvider).toBe("anthropic");
     expect(useAppSettings.getState().aiBaseUrl).toBe("https://example.com/v1");
     expect(useAppSettings.getState().aiModel).toBe("claude-sonnet-4-5");
     expect(useAppSettings.getState().aiApiKey).toBe("test-key");
+    expect(useAppSettings.getState().memoryAutoSummarize).toBe(false);
   });
 
   it("非法持久化值回落默认", () => {
@@ -52,6 +55,12 @@ describe("appSettings store", () => {
       aiBaseUrl: DEFAULT_APP_SETTINGS.aiBaseUrl,
       aiModel: DEFAULT_APP_SETTINGS.aiModel,
       aiApiKey: "",
+      memoryAutoSummarize: true,
+      syncEnabled: false,
+      syncUrl: "",
+      syncUsername: "",
+      syncPassword: "",
+      syncBooks: true,
     });
   });
 

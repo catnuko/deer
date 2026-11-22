@@ -14,6 +14,8 @@ import {
   readImportedMetadata,
 } from "@/lib/foliate";
 import { isTauri } from "@/lib/platform";
+import { sha256Hex } from "@/lib/sync/hash";
+import type { BookSyncData, FolderSyncData } from "@/lib/sync/types";
 import type {
   Book,
   BookStoreState,
@@ -38,6 +40,20 @@ export type BookStoreExtras = {
   importing: boolean;
   error: string | null;
   clearError(): void;
+  /** 为缺少 contentHash 的旧书补算哈希（开启同步时跑一次）。 */
+  backfillContentHashes(
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<void>;
+  /** 应用远端书籍记录；data 为 null 表示删除（只移出书架，不动本机文件）。 */
+  applyRemoteBook(contentHash: string, data: BookSyncData | null): void;
+  /** 应用远端文件夹记录（同步协议里叫 shelf）；data 为 null 表示删除，书回到「未分类」。 */
+  applyRemoteFolder(folderId: string, data: FolderSyncData | null): void;
+  /** 应用远端文件夹归属变更（Folder 模型一本书只属一个文件夹，后到覆盖）。 */
+  applyRemoteFolderMembership(
+    contentHash: string,
+    folderId: string,
+    present: boolean,
+  ): void;
 };
 
 export type BookStore = BookStoreState & BookStoreExtras;
@@ -197,6 +213,8 @@ export const useBookStore = create<BookStore>((set, get) => ({
         );
       }
       const bytes = await readFile(filePath);
+      // 内容哈希是跨设备同步的身份：同一文件在任何设备算出同一个值。
+      const contentHash = await sha256Hex(bytes);
 
       // 元数据解析失败不阻断导入：降级为「文件名 + 未知作者 + 无封面」。
       let meta: {
@@ -237,6 +255,7 @@ export const useBookStore = create<BookStore>((set, get) => ({
       const fileName = fileNameOf(filePath);
       const book: Book = {
         id,
+        contentHash,
         title: metaTitle && metaTitle !== fileName ? metaTitle : titleFromFileName(filePath),
         author: meta?.author?.trim() || "未知作者",
         format,
@@ -350,5 +369,141 @@ export const useBookStore = create<BookStore>((set, get) => ({
     set({ migrationNotice: null });
     if (!isTauri()) return;
     await persist(get().books, get().folders, null);
+  },
+
+  /* ---------------------------------------------------------------- */
+  /* 同步：旧数据补哈希 + 远端记录落地                                  */
+  /* ---------------------------------------------------------------- */
+
+  async backfillContentHashes(onProgress) {
+    if (!isTauri()) return;
+    const pending = get().books.filter(
+      (book) => !book.contentHash && book.filePath,
+    );
+    let done = 0;
+    for (const target of pending) {
+      try {
+        const bytes = await readFile(target.filePath);
+        const contentHash = await sha256Hex(bytes);
+        set((s) => ({
+          books: s.books.map((book) =>
+            book.id === target.id ? { ...book, contentHash } : book,
+          ),
+        }));
+      } catch {
+        // 文件缺失（外部删过）：保持未就绪，不进入同步。
+      }
+      done += 1;
+      onProgress?.(done, pending.length);
+    }
+    if (pending.length)
+      await persist(get().books, get().folders, get().migrationNotice);
+  },
+
+  applyRemoteBook(contentHash, data) {
+    const books = get().books;
+    const existing = books.find((book) => book.contentHash === contentHash);
+
+    if (!data) {
+      if (!existing) return;
+      const next = books.filter((book) => book.contentHash !== contentHash);
+      set({ books: next });
+      if (isTauri())
+        void persist(next, get().folders, get().migrationNotice);
+      return;
+    }
+
+    if (existing) {
+      const merged: Book = {
+        ...existing,
+        title: data.title,
+        author: data.author,
+        format: data.format,
+        sizeBytes: data.sizeBytes,
+        tags: [...data.tags],
+        addedAt: data.addedAt,
+        progress: data.progress,
+      };
+      if (data.lastOpenedAt !== undefined) merged.lastOpenedAt = data.lastOpenedAt;
+      else delete merged.lastOpenedAt;
+      if (data.lastLocationCfi) merged.lastLocationCfi = data.lastLocationCfi;
+      else delete merged.lastLocationCfi;
+      set({ books: books.map((book) => (book.id === existing.id ? merged : book)) });
+    } else {
+      // 本机还没有这本书：先落一行「云端书籍」，本机文件名/封面走 P2 的按需下载。
+      const cloudBook: Book = {
+        id: crypto.randomUUID(),
+        contentHash,
+        cloudOnly: true,
+        title: data.title,
+        author: data.author,
+        format: data.format,
+        filePath: "",
+        sizeBytes: data.sizeBytes,
+        addedAt: data.addedAt,
+        progress: data.progress,
+        tags: [...data.tags],
+      };
+      if (data.lastOpenedAt !== undefined) cloudBook.lastOpenedAt = data.lastOpenedAt;
+      if (data.lastLocationCfi) cloudBook.lastLocationCfi = data.lastLocationCfi;
+      set({ books: [cloudBook, ...books] });
+    }
+    if (isTauri()) void persist(get().books, get().folders, get().migrationNotice);
+  },
+
+  applyRemoteFolder(folderId, data) {
+    const folders = get().folders;
+    const existing = folders.find((folder) => folder.id === folderId);
+
+    if (!data) {
+      if (!existing) return;
+      // 删除文件夹：书不删，归属清空回到「未分类」（与 deleteFolder 一致）。
+      const next = folders.filter((folder) => folder.id !== folderId);
+      const books = get().books.map((book) => {
+        if (book.folderId !== folderId) return book;
+        const { folderId: dropped, ...rest } = book;
+        void dropped;
+        return rest;
+      });
+      set({ folders: next, books });
+      if (isTauri()) void persist(books, next, get().migrationNotice);
+      return;
+    }
+
+    const next = existing
+      ? folders.map((folder) =>
+          folder.id === folderId
+            ? { ...folder, name: data.name, order: data.order }
+            : folder,
+        )
+      : [...folders, { id: folderId, name: data.name, order: data.order }];
+    set({ folders: sortFolders(next) });
+    if (isTauri())
+      void persist(get().books, sortFolders(next), get().migrationNotice);
+  },
+
+  applyRemoteFolderMembership(contentHash, folderId, present) {
+    // 文件夹记录还没落地时先不挂归属：等下一次同步按 HLC 顺序补齐。
+    if (present && !get().folders.some((folder) => folder.id === folderId))
+      return;
+
+    let changed = false;
+    const books = get().books.map((book) => {
+      if (book.contentHash !== contentHash) return book;
+      if (present) {
+        // Folder 模型单归属：远端把它挂到别的文件夹时直接覆盖（后到优先）。
+        if (book.folderId === folderId) return book;
+        changed = true;
+        return { ...book, folderId };
+      }
+      if (book.folderId !== folderId) return book;
+      changed = true;
+      const { folderId: dropped, ...rest } = book;
+      void dropped;
+      return rest;
+    });
+    if (!changed) return;
+    set({ books });
+    if (isTauri()) void persist(books, get().folders, get().migrationNotice);
   },
 }));

@@ -5,7 +5,13 @@
  */
 
 import { jsonSchema, tool, type ToolSet } from "ai";
-import type { Book, ChatBookRef } from "@/lib/types";
+import type {
+  Book,
+  ChatBookRef,
+  ChatDictionaryEntry,
+  ChatTranslationEntry,
+  DictionarySense,
+} from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { getReaderBridge } from "./readerBridge";
@@ -44,6 +50,289 @@ export function readingStateOf(books: Book[]): Book[] {
 
 /** 搜索结果上限：控制上下文体积，模型按摘录回答足够。 */
 export const SEARCH_RESULT_LIMIT = 20;
+
+/** 词典 senses 上限：控制上下文体积与卡片高度（词典卡设计稿 §5 约定）。 */
+export const DICTIONARY_SENSE_LIMIT = 6;
+
+/** 翻译原文上限：超长截断并提示（不改变上下文体积预算的约定）。 */
+export const MAX_TRANSLATION_CHARS = 2000;
+
+/**
+ * translate_text 的入参形态：翻译由模型自行完成，把原文、译文与语言方向
+ * 一并提交，工具只负责校验与承载结构化结果（不引外部翻译 API）。
+ */
+export type TranslateTextInput = {
+  text: string;
+  targetLang?: string;
+  translatedText: string;
+  sourceLang?: string;
+};
+
+/**
+ * 校验并规范化 translate_text 的结果：
+ * - 空文本/空译文返回可读错误提示（模型据此向用户说明）；
+ * - 原文超 MAX_TRANSLATION_CHARS 截断并带 truncated 标记。
+ */
+export function normalizeTranslation(
+  input: TranslateTextInput,
+): ChatTranslationEntry | string {
+  const text = typeof input.text === "string" ? input.text.trim() : "";
+  const translatedText =
+    typeof input.translatedText === "string" ? input.translatedText.trim() : "";
+  if (!text) return "待翻译文本为空，请提供要翻译的内容。";
+  if (!translatedText) return "译文为空，请先完成翻译再调用本工具。";
+
+  const sourceText =
+    text.length > MAX_TRANSLATION_CHARS
+      ? text.slice(0, MAX_TRANSLATION_CHARS)
+      : text;
+  const targetLang =
+    typeof input.targetLang === "string" && input.targetLang.trim()
+      ? input.targetLang.trim()
+      : undefined;
+  const sourceLang =
+    typeof input.sourceLang === "string" && input.sourceLang.trim()
+      ? input.sourceLang.trim()
+      : undefined;
+
+  return {
+    sourceText,
+    translatedText,
+    ...(sourceLang ? { sourceLang } : {}),
+    ...(targetLang ? { targetLang } : {}),
+    ...(text.length > MAX_TRANSLATION_CHARS ? { truncated: true } : {}),
+  };
+}
+
+/** 词典查询结果：found:false 时模型按自身知识作答并说明查无词条。 */
+export type DictionaryLookupResult =
+  | ChatDictionaryEntry
+  | { found: false; word: string };
+
+/** dictionaryapi.dev 的原始词条形态（只标注我们消费的字段）。 */
+type DictionaryApiEntry = {
+  word?: unknown;
+  phonetic?: unknown;
+  phonetics?: { text?: unknown }[];
+  meanings?: {
+    partOfSpeech?: unknown;
+    definitions?: { definition?: unknown; example?: unknown }[];
+  }[];
+};
+
+/**
+ * 解析 dictionaryapi.dev 的词条数组 → 词典卡形态。
+ * 空释义直接丢弃、senses 截到上限；没有任何可用释义时返回 found:false。
+ */
+export function parseDictionaryEntry(
+  word: string,
+  payload: unknown,
+): DictionaryLookupResult {
+  if (!Array.isArray(payload)) return { found: false, word };
+  const entry = payload.find(
+    (candidate): candidate is DictionaryApiEntry =>
+      !!candidate &&
+      typeof candidate === "object" &&
+      Array.isArray((candidate as DictionaryApiEntry).meanings),
+  );
+  if (!entry) return { found: false, word };
+
+  const senses: DictionarySense[] = [];
+  for (const meaning of entry.meanings ?? []) {
+    if (!meaning || typeof meaning !== "object") continue;
+    const partOfSpeech =
+      typeof meaning.partOfSpeech === "string" && meaning.partOfSpeech.trim()
+        ? meaning.partOfSpeech
+        : undefined;
+    for (const item of meaning.definitions ?? []) {
+      if (!item || typeof item !== "object") continue;
+      const definition =
+        typeof item.definition === "string" ? item.definition.trim() : "";
+      if (!definition) continue;
+      const example =
+        typeof item.example === "string" ? item.example.trim() : "";
+      senses.push({
+        ...(partOfSpeech ? { partOfSpeech } : {}),
+        definition,
+        ...(example ? { example } : {}),
+      });
+      if (senses.length >= DICTIONARY_SENSE_LIMIT) break;
+    }
+    if (senses.length >= DICTIONARY_SENSE_LIMIT) break;
+  }
+  if (!senses.length) return { found: false, word };
+
+  const fallbackPhonetic = (entry.phonetics ?? []).find(
+    (p) => typeof p?.text === "string" && p.text.trim(),
+  )?.text as string | undefined;
+  const phonetic =
+    typeof entry.phonetic === "string" && entry.phonetic.trim()
+      ? entry.phonetic
+      : fallbackPhonetic?.trim();
+
+  return {
+    found: true,
+    word:
+      typeof entry.word === "string" && entry.word.trim()
+        ? entry.word
+        : word,
+    senses,
+    ...(phonetic ? { phonetic } : {}),
+  };
+}
+
+/** 调 dictionaryapi.dev 查词；查无词条、非 2xx 或网络失败一律 found:false。 */
+export async function lookupDictionaryWord(
+  word: string,
+): Promise<DictionaryLookupResult> {
+  const trimmed = word.trim();
+  if (!trimmed) return { found: false, word: trimmed };
+  try {
+    const res = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(trimmed)}`,
+    );
+    if (!res.ok) return { found: false, word: trimmed };
+    return parseDictionaryEntry(trimmed, await res.json());
+  } catch {
+    return { found: false, word: trimmed };
+  }
+}
+
+/** 百科摘要上限：控制上下文体积，超出截断（模型按摘要回答足够）。 */
+export const MAX_ENCYCLOPEDIA_EXTRACT_CHARS = 1200;
+
+/** lang 缺省或无法识别时回退的维基语言。 */
+export const DEFAULT_WIKIPEDIA_LANG = "en";
+
+/**
+ * 规范化维基语言代码：取主子标签（zh-CN → zh），空值或非字母代码
+ * 一律回退英文维基（这条有单测验收）。
+ */
+export function normalizeWikipediaLang(lang?: string): string {
+  const primary = (lang ?? "").trim().split("-")[0]?.toLowerCase() ?? "";
+  return /^[a-z]{2,8}$/.test(primary) ? primary : DEFAULT_WIKIPEDIA_LANG;
+}
+
+/**
+ * encyclopedia_lookup 的结果形态：found:false 为结构化 miss（含原因），
+ * 模型按自身知识作答并明确说明「未经百科核实」，不编造来源。
+ */
+export type EncyclopediaMissReason =
+  | "not_found"
+  | "disambiguation"
+  | "network_error";
+
+export type EncyclopediaLookupResult =
+  | {
+      found: true;
+      term: string;
+      lang: string;
+      title: string;
+      extract: string;
+      url: string;
+    }
+  | {
+      found: false;
+      term: string;
+      lang: string;
+      reason: EncyclopediaMissReason;
+    };
+
+/** Wikipedia REST API page/summary 的原始形态（只标注我们消费的字段）。 */
+type WikipediaSummary = {
+  type?: unknown;
+  title?: unknown;
+  extract?: unknown;
+  content_urls?: { desktop?: { page?: unknown } };
+};
+
+/**
+ * 解析 Wikipedia page/summary → 百科结果。消歧义页与空摘要视为查无；
+ * content_urls 缺省时用标题拼出词条链接兜底；摘要超长截断。
+ */
+export function parseWikipediaSummary(
+  term: string,
+  lang: string,
+  payload: unknown,
+): EncyclopediaLookupResult {
+  const miss = (reason: EncyclopediaMissReason): EncyclopediaLookupResult => ({
+    found: false,
+    term,
+    lang,
+    reason,
+  });
+  if (!payload || typeof payload !== "object") return miss("not_found");
+  const summary = payload as WikipediaSummary;
+  const extract =
+    typeof summary.extract === "string" ? summary.extract.trim() : "";
+  if (summary.type === "disambiguation") return miss("disambiguation");
+  if (!extract) return miss("not_found");
+
+  const title =
+    typeof summary.title === "string" && summary.title.trim()
+      ? summary.title.trim()
+      : term;
+  const contentUrl =
+    typeof summary.content_urls?.desktop?.page === "string" &&
+    summary.content_urls.desktop.page.startsWith("https://")
+      ? summary.content_urls.desktop.page
+      : `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(
+          title.replace(/ /g, "_"),
+        )}`;
+
+  return {
+    found: true,
+    term,
+    lang,
+    title,
+    extract:
+      extract.length > MAX_ENCYCLOPEDIA_EXTRACT_CHARS
+        ? extract.slice(0, MAX_ENCYCLOPEDIA_EXTRACT_CHARS)
+        : extract,
+    url: contentUrl,
+  };
+}
+
+/**
+ * 调 Wikipedia REST API 查百科摘要；查无词条、消歧义页、非 2xx 一律
+ * not_found/disambiguation，网络失败 network_error，都不向外抛。
+ */
+export async function lookupEncyclopediaTerm(
+  term: string,
+  lang?: string,
+): Promise<EncyclopediaLookupResult> {
+  const trimmed = term.trim();
+  const resolvedLang = normalizeWikipediaLang(lang);
+  if (!trimmed) {
+    return {
+      found: false,
+      term: trimmed,
+      lang: resolvedLang,
+      reason: "not_found",
+    };
+  }
+  try {
+    const res = await fetch(
+      `https://${resolvedLang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(trimmed)}`,
+    );
+    if (!res.ok) {
+      return {
+        found: false,
+        term: trimmed,
+        lang: resolvedLang,
+        reason: "not_found",
+      };
+    }
+    return parseWikipediaSummary(trimmed, resolvedLang, await res.json());
+  } catch {
+    return {
+      found: false,
+      term: trimmed,
+      lang: resolvedLang,
+      reason: "network_error",
+    };
+  }
+}
 
 /** 构建本轮对话可用的工具集（每轮新build，读取最新 store 状态）。 */
 export function buildDeerTools(): ToolSet {
@@ -179,6 +468,65 @@ export function buildDeerTools(): ToolSet {
         const matches = await bridge.searchInBook(trimmed);
         return matches.slice(0, SEARCH_RESULT_LIMIT);
       },
+    }),
+
+    lookup_dictionary: tool({
+      description:
+        "查英文单词释义（数据源 dictionaryapi.dev）：返回结构化词条（音标/词性/英文释义/例句）。用户问某个词是什么意思、要词典解释时用它。found:false 表示词典源没收录或网络失败，此时改用自身知识解释，并向用户说明词典源没有查到。targetLang 仅提示用户偏好的解释语言，词典源释义固定为英文，需要其他语言时由你自行翻译。",
+      inputSchema: jsonSchema<{ word: string; targetLang?: string }>({
+        type: "object",
+        properties: {
+          word: { type: "string", description: "要查的英文单词（单个词或短语）" },
+          targetLang: {
+            type: "string",
+            description: "期望的解释语言（如 zh-CN）；词典源释义固定为英文，由模型自行翻译",
+          },
+        },
+        required: ["word"],
+      }),
+      execute: async ({ word }) => lookupDictionaryWord(word),
+    }),
+
+    translate_text: tool({
+      description:
+        "翻译任意语言的文本（由你直接完成翻译，不调外部翻译 API）：先自行翻译，再把原文、译文与语言方向通过本工具提交，前端会渲染成原文/译文对照卡。用户要翻译划选内容、句子或段落时用它；纯闲聊不需要翻译时不要调用。text 超 2000 字符时只取前 2000 字符翻译。",
+      inputSchema: jsonSchema<TranslateTextInput>({
+        type: "object",
+        properties: {
+          text: { type: "string", description: "要翻译的原文" },
+          targetLang: {
+            type: "string",
+            description: "目标语言（如 zh-CN、日文、English）",
+          },
+          translatedText: {
+            type: "string",
+            description: "你完成的译文（原文本身已是目标语言时，做润色或改写说明）",
+          },
+          sourceLang: {
+            type: "string",
+            description: "检测出的原文语言（如 en、zh-CN），无法判断时省略",
+          },
+        },
+        required: ["text", "translatedText"],
+      }),
+      execute: async (input) => normalizeTranslation(input),
+    }),
+
+    encyclopedia_lookup: tool({
+      description:
+        "查询人物、术语、历史/背景概念的百科摘要（数据源 Wikipedia REST API）：返回摘要、词条标题与来源链接。用户问「某某是什么背景/什么概念」等需要权威背景知识时用它。拿到结果后把摘要以你自己的话转述进回答正文，并附上来源链接，不要原样堆砌摘要。found:false 表示维基查无此词条（not_found）、只有消歧义页（disambiguation）或网络失败（network_error），此时改用自身知识作答，并明确向用户说明该部分内容「未经百科核实」，不要编造来源链接。",
+      inputSchema: jsonSchema<{ term: string; lang?: string }>({
+        type: "object",
+        properties: {
+          term: { type: "string", description: "要查询的词条（人物/事件/术语名）" },
+          lang: {
+            type: "string",
+            description: "维基语言代码（如 en、zh、ja）；缺省查英文维基",
+          },
+        },
+        required: ["term"],
+      }),
+      execute: async ({ term, lang }) => lookupEncyclopediaTerm(term, lang),
     }),
 
     jump_to_location: tool({
