@@ -13,8 +13,8 @@ export type Hlc = { wall: number; counter: number; node: string };
 
 export type SyncKind =
   | "book"
-  | "shelf"
-  | "bookShelf"
+  | "folder"
+  | "bookFolder"
   | "annotation"
   | "chatThread"
   | "chatMessage";
@@ -49,11 +49,6 @@ export type BookSyncData = {
   lastLocationCfi?: string;
 };
 
-/**
- * 文件夹的同步载荷。书库已是 Folder 模型（一本书只属一个文件夹）；
- * 同步块格式沿用 P1 的 shelf 记录（kind "shelf"/"bookShelf"、key 前缀
- * `sh:`/`bs:`），字段与 Folder 同构，落地时映射到文件夹。
- */
 export type FolderSyncData = { name: string; order: number };
 
 export type AnnotationSyncData = {
