@@ -13,8 +13,8 @@ export type Hlc = { wall: number; counter: number; node: string };
 
 export type SyncKind =
   | "book"
-  | "shelf"
-  | "bookShelf"
+  | "folder"
+  | "bookFolder"
   | "annotation"
   | "chatThread"
   | "chatMessage";
@@ -49,7 +49,7 @@ export type BookSyncData = {
   lastLocationCfi?: string;
 };
 
-export type ShelfSyncData = { name: string; order: number };
+export type FolderSyncData = { name: string; order: number };
 
 export type AnnotationSyncData = {
   bookHash: string;

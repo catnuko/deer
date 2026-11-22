@@ -16,8 +16,8 @@ const CHUNK_SIZE = 200;
 
 const KIND_BY_KEY_PREFIX: Record<string, SyncKind> = {
   bk: "book",
-  sh: "shelf",
-  bs: "bookShelf",
+  fd: "folder",
+  bf: "bookFolder",
   an: "annotation",
   th: "chatThread",
   ms: "chatMessage",
