@@ -25,6 +25,7 @@ import {
   resolveEngine,
 } from "@/lib/ai/engineRouter";
 import { runCloudChat } from "@/lib/ai/cloudEngine";
+import { extractSessionMemories } from "@/lib/ai/memoryExtract";
 import { isTauri } from "@/lib/platform";
 import { useAppSettings } from "@/store/appSettings";
 import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
@@ -538,6 +539,7 @@ export function ChatPanel({
       exitRafRef.current = null;
       setPhase("closed");
       onExited?.();
+      extractMemoriesOnClose();
     });
   };
 
@@ -843,6 +845,31 @@ export function ChatPanel({
     () => ({ replying, saveNote }),
     [replying, saveNote],
   );
+
+  // 面板关闭时把本次会话总结成读书记忆（自动总结开关开着才做）。
+  // 同一份消息内容只提取一次：以 thread + 消息数 + 末条 id 为指纹。
+  const memoryAutoSummarize = useAppSettings((s) => s.memoryAutoSummarize);
+  const lastExtractKeyRef = useRef<string | null>(null);
+  const extractMemoriesOnClose = useCallback(() => {
+    if (!tauri || !memoryAutoSummarize) return;
+    const state = useChatStore.getState();
+    const threadId = state.activeThreadByBook[book.id];
+    if (!threadId) return;
+    const list = state.messages[threadId] ?? [];
+    if (!list.some((m) => m.role === "user" && m.content.trim())) return;
+    const last = list[list.length - 1];
+    const key = `${threadId}:${list.length}:${last?.id ?? ""}`;
+    if (lastExtractKeyRef.current === key) return;
+    lastExtractKeyRef.current = key;
+    void extractSessionMemories({
+      bookId: book.id,
+      bookTitle: book.title,
+      threadId,
+      messages: list,
+      engineMode: aiEngineMode,
+      envOk: envStatus?.ok ?? null,
+    });
+  }, [tauri, memoryAutoSummarize, book.id, book.title, aiEngineMode, envStatus]);
 
   return (
     <aside
