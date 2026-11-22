@@ -46,9 +46,9 @@ export type BookStoreExtras = {
   ): Promise<void>;
   /** 应用远端书籍记录；data 为 null 表示删除（只移出书架，不动本机文件）。 */
   applyRemoteBook(contentHash: string, data: BookSyncData | null): void;
-  /** 应用远端文件夹记录；data 为 null 表示删除。 */
+  /** 应用远端文件夹记录（同步协议里叫 shelf）；data 为 null 表示删除，书回到「未分类」。 */
   applyRemoteFolder(folderId: string, data: FolderSyncData | null): void;
-  /** 应用远端文件夹归属变更。 */
+  /** 应用远端文件夹归属变更（Folder 模型一本书只属一个文件夹，后到覆盖）。 */
   applyRemoteFolderMembership(
     contentHash: string,
     folderId: string,
@@ -364,16 +364,16 @@ export const useBookStore = create<BookStore>((set, get) => ({
     await persist(books, get().folders, get().migrationNotice);
   },
 
-  /* ---------------------------------------------------------------- */
-  /* 同步：旧数据补哈希 + 远端记录落地                                  */
-  /* ---------------------------------------------------------------- */
-
   async dismissMigrationNotice() {
     if (get().migrationNotice === null) return;
     set({ migrationNotice: null });
     if (!isTauri()) return;
     await persist(get().books, get().folders, null);
   },
+
+  /* ---------------------------------------------------------------- */
+  /* 同步：旧数据补哈希 + 远端记录落地                                  */
+  /* ---------------------------------------------------------------- */
 
   async backfillContentHashes(onProgress) {
     if (!isTauri()) return;
@@ -396,9 +396,8 @@ export const useBookStore = create<BookStore>((set, get) => ({
       done += 1;
       onProgress?.(done, pending.length);
     }
-    if (pending.length) {
+    if (pending.length)
       await persist(get().books, get().folders, get().migrationNotice);
-    }
   },
 
   applyRemoteBook(contentHash, data) {
@@ -409,9 +408,8 @@ export const useBookStore = create<BookStore>((set, get) => ({
       if (!existing) return;
       const next = books.filter((book) => book.contentHash !== contentHash);
       set({ books: next });
-      if (isTauri()) {
+      if (isTauri())
         void persist(next, get().folders, get().migrationNotice);
-      }
       return;
     }
 
@@ -459,18 +457,16 @@ export const useBookStore = create<BookStore>((set, get) => ({
 
     if (!data) {
       if (!existing) return;
+      // 删除文件夹：书不删，归属清空回到「未分类」（与 deleteFolder 一致）。
       const next = folders.filter((folder) => folder.id !== folderId);
-      // 书不删：把归属清空，回到「未分类」。
       const books = get().books.map((book) => {
         if (book.folderId !== folderId) return book;
-        const { folderId: removed, ...rest } = book;
-        void removed;
+        const { folderId: dropped, ...rest } = book;
+        void dropped;
         return rest;
       });
-      set({ folders: sortFolders(next), books });
-      if (isTauri()) {
-        void persist(books, sortFolders(next), get().migrationNotice);
-      }
+      set({ folders: next, books });
+      if (isTauri()) void persist(books, next, get().migrationNotice);
       return;
     }
 
@@ -482,28 +478,28 @@ export const useBookStore = create<BookStore>((set, get) => ({
         )
       : [...folders, { id: folderId, name: data.name, order: data.order }];
     set({ folders: sortFolders(next) });
-    if (isTauri()) {
+    if (isTauri())
       void persist(get().books, sortFolders(next), get().migrationNotice);
-    }
   },
 
   applyRemoteFolderMembership(contentHash, folderId, present) {
     // 文件夹记录还没落地时先不挂归属：等下一次同步按 HLC 顺序补齐。
-    if (present && !get().folders.some((folder) => folder.id === folderId)) return;
+    if (present && !get().folders.some((folder) => folder.id === folderId))
+      return;
 
     let changed = false;
     const books = get().books.map((book) => {
       if (book.contentHash !== contentHash) return book;
       if (present) {
-        // 单文件夹模型：远端归属直接覆盖本地 folderId。
+        // Folder 模型单归属：远端把它挂到别的文件夹时直接覆盖（后到优先）。
         if (book.folderId === folderId) return book;
         changed = true;
         return { ...book, folderId };
       }
       if (book.folderId !== folderId) return book;
       changed = true;
-      const { folderId: removed, ...rest } = book;
-      void removed;
+      const { folderId: dropped, ...rest } = book;
+      void dropped;
       return rest;
     });
     if (!changed) return;

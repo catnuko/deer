@@ -2,6 +2,7 @@ import { Brain } from "lucide-react";
 import { AcpxStatusCard } from "@/components/ai/AcpxStatusCard";
 import { AiEngineList } from "@/components/ai/AiEngineList";
 import { CloudEngineCard } from "@/components/settings/CloudEngineCard";
+import { MemorySection } from "@/components/settings/MemorySection";
 import { Separator } from "@/components/ui/separator";
 import {
   Select,
@@ -16,6 +17,8 @@ import {
   useAppSettings,
   type AiEngineMode,
 } from "@/store/appSettings";
+import { SettingRow } from "@/components/settings/SettingRow";
+import { Switch } from "@/components/ui/switch";
 
 const ENGINE_MODE_LABELS: Record<AiEngineMode, string> = {
   auto: "自动（推荐）",
@@ -33,6 +36,10 @@ export function AiSection() {
   const desktop = isTauri();
   const aiEngineMode = useAppSettings((s) => s.aiEngineMode);
   const setAiEngineMode = useAppSettings((s) => s.setAiEngineMode);
+  const memoryAutoSummarize = useAppSettings((s) => s.memoryAutoSummarize);
+  const setMemoryAutoSummarize = useAppSettings(
+    (s) => s.setMemoryAutoSummarize,
+  );
   const showLocalEngine = desktop && aiEngineMode !== "cloud";
 
   return (
@@ -85,6 +92,21 @@ export function AiSection() {
       </div>
 
       <CloudEngineCard />
+
+      <Separator />
+
+      <SettingRow
+        title="自动总结记忆"
+        description="关闭 AI 面板时，自动把本次会话总结成读书记忆（讨论主题、你的偏好、阅读进度），下次聊同一本书时 AI 能接着上次聊。"
+      >
+        <Switch
+          checked={memoryAutoSummarize}
+          onCheckedChange={(checked) => setMemoryAutoSummarize(checked)}
+          aria-label="自动总结记忆"
+        />
+      </SettingRow>
+
+      <MemorySection />
 
       <Separator />
 

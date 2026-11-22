@@ -1,14 +1,10 @@
 mod acpx;
+mod backup;
 mod claude_acp;
 mod claude_cli;
 mod deer_log;
 pub mod mcp_server;
 mod webdav;
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,11 +14,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            greet,
             acpx::acpx_chat,
             acpx::acpx_env_check,
             acpx::ai_engine_status,
             acpx::ai_engine_install,
+            backup::export_backup,
+            backup::import_backup,
             deer_log::diag_log,
             webdav::webdav_request,
             webdav::webdav_upload_file,

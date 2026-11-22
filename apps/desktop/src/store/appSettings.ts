@@ -10,7 +10,7 @@ import {
   DEFAULT_AI_PROVIDER,
   isAiProviderKind,
   type AiProviderKind,
-} from "@/lib/ai/cloudProvider";
+} from "@/lib/ai/providerConfig";
 import { DEFAULT_AI_ENGINE, isAiEngineId } from "@/lib/ai/engines";
 
 export const AI_ENGINE_MODES = ["auto", "local", "cloud"] as const;
@@ -42,6 +42,8 @@ export type AppSettings = {
   aiModel: string;
   /** 云引擎 API Key，仅存本机持久化，绝不进代码/git。 */
   aiApiKey: string;
+  /** 关闭 AI 面板时是否自动把会话总结成读书记忆。 */
+  memoryAutoSummarize: boolean;
   /** 是否开启 WebDAV 同步。 */
   syncEnabled: boolean;
   /** WebDAV 根目录地址（用户自己在网盘里建的 deer-sync 文件夹）。 */
@@ -63,6 +65,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   aiBaseUrl: DEFAULT_AI_BASE_URL,
   aiModel: DEFAULT_AI_MODEL,
   aiApiKey: "",
+  memoryAutoSummarize: true,
   syncEnabled: false,
   syncUrl: "",
   syncUsername: "",
@@ -87,6 +90,7 @@ type AppSettingsStore = AppSettings & {
   setAiBaseUrl(aiBaseUrl: string): void;
   setAiModel(aiModel: string): void;
   setAiApiKey(aiApiKey: string): void;
+  setMemoryAutoSummarize(memoryAutoSummarize: boolean): void;
   setSyncEnabled(syncEnabled: boolean): void;
   setSyncUrl(syncUrl: string): void;
   setSyncUsername(syncUsername: string): void;
@@ -113,6 +117,8 @@ export const useAppSettings = create<AppSettingsStore>()(
       setAiBaseUrl: (aiBaseUrl) => set({ aiBaseUrl }),
       setAiModel: (aiModel) => set({ aiModel }),
       setAiApiKey: (aiApiKey) => set({ aiApiKey }),
+      setMemoryAutoSummarize: (memoryAutoSummarize) =>
+        set({ memoryAutoSummarize }),
       setSyncEnabled: (syncEnabled) => set({ syncEnabled }),
       setSyncUrl: (syncUrl) => set({ syncUrl }),
       setSyncUsername: (syncUsername) => set({ syncUsername }),
@@ -135,6 +141,7 @@ export const useAppSettings = create<AppSettingsStore>()(
         aiBaseUrl,
         aiModel,
         aiApiKey,
+        memoryAutoSummarize,
         syncEnabled,
         syncUrl,
         syncUsername,
@@ -149,6 +156,7 @@ export const useAppSettings = create<AppSettingsStore>()(
         aiBaseUrl,
         aiModel,
         aiApiKey,
+        memoryAutoSummarize,
         syncEnabled,
         syncUrl,
         syncUsername,
@@ -191,6 +199,10 @@ export const useAppSettings = create<AppSettingsStore>()(
             typeof state.aiApiKey === "string"
               ? state.aiApiKey
               : DEFAULT_APP_SETTINGS.aiApiKey,
+          memoryAutoSummarize:
+            typeof state.memoryAutoSummarize === "boolean"
+              ? state.memoryAutoSummarize
+              : DEFAULT_APP_SETTINGS.memoryAutoSummarize,
           // v6 新增同步设置：旧版本没有这些字段，一律取默认值。
           syncEnabled:
             typeof state.syncEnabled === "boolean"

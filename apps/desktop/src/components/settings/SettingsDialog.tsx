@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 import {
+  ArchiveRestore,
   BookOpenText,
   Cloud,
   Database,
@@ -21,19 +22,26 @@ import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 import { AboutSection } from "./AboutSection";
-import { AiSection } from "./AiSection";
 import { AppearanceSection } from "./AppearanceSection";
+import { BackupSection } from "./BackupSection";
 import { DataSection } from "./DataSection";
 import { GeneralSection } from "./GeneralSection";
 import { ReadingSection } from "./ReadingSection";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { SyncSection } from "./SyncSection";
 
+// AI 伴读设置区含 AiEngineList / CloudEngineCard / acpx 状态卡片，
+// 依赖链最重：切到该分组时才加载（App.tsx 同款懒加载策略）。
+const AiSection = lazy(() =>
+  import("./AiSection").then((m) => ({ default: m.AiSection })),
+);
+
 type SettingsSection =
   | "general"
   | "appearance"
   | "reading"
   | "ai"
+  | "backup"
   | "data"
   | "sync"
   | "shortcuts"
@@ -48,6 +56,7 @@ const SECTIONS: Array<{
   { id: "appearance", label: "外观", icon: Palette },
   { id: "reading", label: "阅读", icon: BookOpenText },
   { id: "ai", label: "AI 伴读", icon: Sparkles },
+  { id: "backup", label: "备份与恢复", icon: ArchiveRestore },
   { id: "data", label: "数据", icon: Database },
   { id: "sync", label: "同步", icon: Cloud },
   { id: "shortcuts", label: "快捷键", icon: Keyboard },
@@ -152,7 +161,16 @@ export function SettingsDialog() {
               {section === "general" ? <GeneralSection /> : null}
               {section === "appearance" ? <AppearanceSection /> : null}
               {section === "reading" ? <ReadingSection /> : null}
-              {section === "ai" ? <AiSection /> : null}
+              {section === "ai" ? (
+                <Suspense
+                  fallback={
+                    <p className="text-muted-foreground text-sm">加载中…</p>
+                  }
+                >
+                  <AiSection />
+                </Suspense>
+              ) : null}
+              {section === "backup" ? <BackupSection /> : null}
               {section === "data" ? <DataSection /> : null}
               {section === "sync" ? <SyncSection /> : null}
               {section === "shortcuts" ? <ShortcutsSection /> : null}

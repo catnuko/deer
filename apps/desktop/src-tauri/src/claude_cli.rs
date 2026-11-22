@@ -41,7 +41,7 @@ pub(crate) fn nvm_latest_bin(versions_dir: &Path) -> Option<PathBuf> {
         };
         if let Some(v) = parse_node_version(&name) {
             let bin = entry.path().join("bin");
-            if best.as_ref().map_or(true, |(bv, _)| v > *bv) {
+            if best.as_ref().is_none_or(|(bv, _)| v > *bv) {
                 best = Some((v, bin));
             }
         }
@@ -104,7 +104,10 @@ pub(crate) async fn probe_shell_path() -> Option<Vec<PathBuf>> {
         ])
         .stdin(Stdio::null())
         .output();
-    let output = tokio::time::timeout(SHELL_PROBE_TIMEOUT, output).await.ok()?.ok()?;
+    let output = tokio::time::timeout(SHELL_PROBE_TIMEOUT, output)
+        .await
+        .ok()?
+        .ok()?;
     let path = extract_probe_path(&String::from_utf8_lossy(&output.stdout))?;
     Some(split_path_env(&path))
 }
@@ -196,14 +199,19 @@ mod tests {
     fn splits_path_and_skips_empty_entries() {
         assert_eq!(
             split_path_env("/a:/b::/c"),
-            vec![PathBuf::from("/a"), PathBuf::from("/b"), PathBuf::from("/c")]
+            vec![
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c")
+            ]
         );
         assert!(split_path_env("").is_empty());
     }
 
     #[test]
     fn extracts_probe_path_from_noisy_output() {
-        let noisy = "zsh: some rc noise\nlast login info\n__DEER_PATH__/usr/bin:/opt/homebrew/bin\n";
+        let noisy =
+            "zsh: some rc noise\nlast login info\n__DEER_PATH__/usr/bin:/opt/homebrew/bin\n";
         assert_eq!(
             extract_probe_path(noisy).as_deref(),
             Some("/usr/bin:/opt/homebrew/bin")
@@ -216,7 +224,10 @@ mod tests {
 
     #[test]
     fn token_needs_nonblank_content() {
-        assert_eq!(token_from_content("  sk-ant-oat01-x\n"), Some("sk-ant-oat01-x".to_string()));
+        assert_eq!(
+            token_from_content("  sk-ant-oat01-x\n"),
+            Some("sk-ant-oat01-x".to_string())
+        );
         assert_eq!(token_from_content("   \n\t"), None);
         assert_eq!(token_from_content(""), None);
     }

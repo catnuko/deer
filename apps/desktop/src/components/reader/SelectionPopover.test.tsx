@@ -119,6 +119,53 @@ describe("SelectionPopover", () => {
     await user.click(screen.getByRole("button", { name: "问 Deer" }));
     expect(props.onAsk).toHaveBeenCalledWith("被划选的句子");
   });
+
+  it("没传 onQuickAsk 时不渲染快捷提问行（旧布局零回归）", () => {
+    renderPopover();
+    expect(screen.queryByRole("group", { name: "快捷提问" })).not.toBeInTheDocument();
+  });
+});
+
+describe("SelectionPopover 划词即问", () => {
+  it("传 onQuickAsk 时主菜单顶部出现快捷提问行，短选区给释义/翻译/追问", () => {
+    renderPopover({ onQuickAsk: vi.fn() });
+
+    const group = screen.getByRole("group", { name: "快捷提问" });
+    const main = screen.getByTestId("selection-menu-main");
+    expect(main.contains(group)).toBe(true);
+    for (const name of ["释义", "翻译", "追问"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    // 四个原有动作按钮仍在，快捷行不挤掉主菜单。
+    for (const name of ["复制", "划线", "写想法", "问 Deer"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+  });
+
+  it("长选区换成这段什么意思/翻译/追问", () => {
+    renderPopover({
+      text: "这是一段比较长的文字，应该被当作段落来处理而不是单词",
+      onQuickAsk: vi.fn(),
+    });
+
+    for (const name of ["这段什么意思", "翻译", "追问"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("button", { name: "释义" })).not.toBeInTheDocument();
+  });
+
+  it("点快捷问题把整个预设交给 onQuickAsk（prompt 由宿主拼装）", async () => {
+    const onQuickAsk = vi.fn();
+    renderPopover({ onQuickAsk });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "释义" }));
+    expect(onQuickAsk).toHaveBeenCalledTimes(1);
+    expect(onQuickAsk.mock.calls[0]![0]).toMatchObject({
+      id: "define",
+      label: "释义",
+    });
+  });
 });
 
 describe("SelectionPopover 编辑已有划线", () => {

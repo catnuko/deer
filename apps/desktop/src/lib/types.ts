@@ -63,6 +63,39 @@ export type ChatBookRef = {
   folderName?: string;
 };
 
+/** 词典卡单条释义（lookup_dictionary 从 dictionaryapi.dev 解析出的结果）。 */
+export type DictionarySense = {
+  /** 词性原文（noun/verb/... 英文原样，不本地化）。 */
+  partOfSpeech?: string;
+  definition: string;
+  example?: string;
+};
+
+/** 聊天词典卡：found:false（查无词条/网络失败）不走卡片链路，模型正文自答。 */
+export type ChatDictionaryEntry = {
+  word: string;
+  /** IPA 音标，如 /ɪˈfem.ər.əl/，缺省不渲染。 */
+  phonetic?: string;
+  found: true;
+  /** 工具侧截断 ≤6 条，控制上下文体积与卡片高度。 */
+  senses: DictionarySense[];
+};
+
+/**
+ * 聊天翻译卡：translate_text 工具承载的结构化翻译结果（翻译由模型完成，
+ * 工具只负责校验与承载）。源语言检测失败时缺省，卡片逐字段优雅降级。
+ */
+export type ChatTranslationEntry = {
+  /** 模型检测出的原文语言（如 en/zh-CN），缺省不渲染。 */
+  sourceLang?: string;
+  sourceText: string;
+  /** 目标语言（如 zh-CN/日文），缺省不渲染。 */
+  targetLang?: string;
+  translatedText: string;
+  /** 原文超长被截断（>2000 字符）时为 true，卡片提示仅展示前段。 */
+  truncated?: boolean;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -71,6 +104,10 @@ export type ChatMessage = {
   thinking?: string;
   /** 本条回复里模型经书架 MCP 工具返回的书单，渲染成可点击书卡。 */
   books?: ChatBookRef[];
+  /** 本条回复里模型经词典工具返回的词条（每条回复最多一词一卡，后到覆盖先到）。 */
+  dictionary?: ChatDictionaryEntry;
+  /** 本条回复里模型经翻译工具返回的结果（每条回复最多一卡，后到覆盖先到）。 */
+  translation?: ChatTranslationEntry;
   createdAt: number;
 };
 
