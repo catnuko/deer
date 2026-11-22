@@ -198,6 +198,142 @@ export async function lookupDictionaryWord(
   }
 }
 
+/** 百科摘要上限：控制上下文体积，超出截断（模型按摘要回答足够）。 */
+export const MAX_ENCYCLOPEDIA_EXTRACT_CHARS = 1200;
+
+/** lang 缺省或无法识别时回退的维基语言。 */
+export const DEFAULT_WIKIPEDIA_LANG = "en";
+
+/**
+ * 规范化维基语言代码：取主子标签（zh-CN → zh），空值或非字母代码
+ * 一律回退英文维基（这条有单测验收）。
+ */
+export function normalizeWikipediaLang(lang?: string): string {
+  const primary = (lang ?? "").trim().split("-")[0]?.toLowerCase() ?? "";
+  return /^[a-z]{2,8}$/.test(primary) ? primary : DEFAULT_WIKIPEDIA_LANG;
+}
+
+/**
+ * encyclopedia_lookup 的结果形态：found:false 为结构化 miss（含原因），
+ * 模型按自身知识作答并明确说明「未经百科核实」，不编造来源。
+ */
+export type EncyclopediaMissReason =
+  | "not_found"
+  | "disambiguation"
+  | "network_error";
+
+export type EncyclopediaLookupResult =
+  | {
+      found: true;
+      term: string;
+      lang: string;
+      title: string;
+      extract: string;
+      url: string;
+    }
+  | {
+      found: false;
+      term: string;
+      lang: string;
+      reason: EncyclopediaMissReason;
+    };
+
+/** Wikipedia REST API page/summary 的原始形态（只标注我们消费的字段）。 */
+type WikipediaSummary = {
+  type?: unknown;
+  title?: unknown;
+  extract?: unknown;
+  content_urls?: { desktop?: { page?: unknown } };
+};
+
+/**
+ * 解析 Wikipedia page/summary → 百科结果。消歧义页与空摘要视为查无；
+ * content_urls 缺省时用标题拼出词条链接兜底；摘要超长截断。
+ */
+export function parseWikipediaSummary(
+  term: string,
+  lang: string,
+  payload: unknown,
+): EncyclopediaLookupResult {
+  const miss = (reason: EncyclopediaMissReason): EncyclopediaLookupResult => ({
+    found: false,
+    term,
+    lang,
+    reason,
+  });
+  if (!payload || typeof payload !== "object") return miss("not_found");
+  const summary = payload as WikipediaSummary;
+  const extract =
+    typeof summary.extract === "string" ? summary.extract.trim() : "";
+  if (summary.type === "disambiguation") return miss("disambiguation");
+  if (!extract) return miss("not_found");
+
+  const title =
+    typeof summary.title === "string" && summary.title.trim()
+      ? summary.title.trim()
+      : term;
+  const contentUrl =
+    typeof summary.content_urls?.desktop?.page === "string" &&
+    summary.content_urls.desktop.page.startsWith("https://")
+      ? summary.content_urls.desktop.page
+      : `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(
+          title.replace(/ /g, "_"),
+        )}`;
+
+  return {
+    found: true,
+    term,
+    lang,
+    title,
+    extract:
+      extract.length > MAX_ENCYCLOPEDIA_EXTRACT_CHARS
+        ? extract.slice(0, MAX_ENCYCLOPEDIA_EXTRACT_CHARS)
+        : extract,
+    url: contentUrl,
+  };
+}
+
+/**
+ * 调 Wikipedia REST API 查百科摘要；查无词条、消歧义页、非 2xx 一律
+ * not_found/disambiguation，网络失败 network_error，都不向外抛。
+ */
+export async function lookupEncyclopediaTerm(
+  term: string,
+  lang?: string,
+): Promise<EncyclopediaLookupResult> {
+  const trimmed = term.trim();
+  const resolvedLang = normalizeWikipediaLang(lang);
+  if (!trimmed) {
+    return {
+      found: false,
+      term: trimmed,
+      lang: resolvedLang,
+      reason: "not_found",
+    };
+  }
+  try {
+    const res = await fetch(
+      `https://${resolvedLang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(trimmed)}`,
+    );
+    if (!res.ok) {
+      return {
+        found: false,
+        term: trimmed,
+        lang: resolvedLang,
+        reason: "not_found",
+      };
+    }
+    return parseWikipediaSummary(trimmed, resolvedLang, await res.json());
+  } catch {
+    return {
+      found: false,
+      term: trimmed,
+      lang: resolvedLang,
+      reason: "network_error",
+    };
+  }
+}
+
 /** 构建本轮对话可用的工具集（每轮新build，读取最新 store 状态）。 */
 export function buildDeerTools(): ToolSet {
   return {
@@ -374,6 +510,23 @@ export function buildDeerTools(): ToolSet {
         required: ["text", "translatedText"],
       }),
       execute: async (input) => normalizeTranslation(input),
+    }),
+
+    encyclopedia_lookup: tool({
+      description:
+        "查询人物、术语、历史/背景概念的百科摘要（数据源 Wikipedia REST API）：返回摘要、词条标题与来源链接。用户问「某某是什么背景/什么概念」等需要权威背景知识时用它。拿到结果后把摘要以你自己的话转述进回答正文，并附上来源链接，不要原样堆砌摘要。found:false 表示维基查无此词条（not_found）、只有消歧义页（disambiguation）或网络失败（network_error），此时改用自身知识作答，并明确向用户说明该部分内容「未经百科核实」，不要编造来源链接。",
+      inputSchema: jsonSchema<{ term: string; lang?: string }>({
+        type: "object",
+        properties: {
+          term: { type: "string", description: "要查询的词条（人物/事件/术语名）" },
+          lang: {
+            type: "string",
+            description: "维基语言代码（如 en、zh、ja）；缺省查英文维基",
+          },
+        },
+        required: ["term"],
+      }),
+      execute: async ({ term, lang }) => lookupEncyclopediaTerm(term, lang),
     }),
 
     jump_to_location: tool({
