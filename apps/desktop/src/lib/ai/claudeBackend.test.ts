@@ -168,4 +168,80 @@ describe("claudeBackend 诊断埋点", () => {
 
     expect(result.sessionId).toBe("s-1");
   });
+
+  it("dictionary/translation 增量按 kind 路由到对应回调，坏帧与 miss 丢弃", async () => {
+    let resolveChat: (v: unknown) => void = () => {};
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "acpx_chat"
+        ? new Promise((res) => {
+            resolveChat = res;
+          })
+        : Promise.resolve(null),
+    );
+
+    const dictionaries: unknown[] = [];
+    const translations: unknown[] = [];
+    const deltas: string[] = [];
+    const p = acpxChat({
+      prompt: "你好",
+      messageId: "m-4",
+      threadId: "t-1",
+      onDelta: (d) => deltas.push(d),
+      onDictionary: (entry) => dictionaries.push(entry),
+      onTranslation: (entry) => translations.push(entry),
+    });
+    await eventually(() => expect(chunkHandler).not.toBeNull());
+
+    // 命中帧：Rust 侧的 deer 标记 payload（含 deer 字段不影响校验）
+    emitChunk({
+      messageId: "m-4",
+      kind: "dictionary",
+      delta: JSON.stringify({
+        deer: "dictionary",
+        found: true,
+        word: "ephemeral",
+        phonetic: "/ɪˈfem.ər.əl/",
+        senses: [{ partOfSpeech: "adjective", definition: "lasting a very short time" }],
+      }),
+    });
+    emitChunk({
+      messageId: "m-4",
+      kind: "translation",
+      delta: JSON.stringify({
+        deer: "translation",
+        sourceText: "hello",
+        translatedText: "你好",
+        sourceLang: "en",
+        targetLang: "zh-CN",
+      }),
+    });
+    // miss（found:false）与空 senses 不产词典卡
+    emitChunk({
+      messageId: "m-4",
+      kind: "dictionary",
+      delta: JSON.stringify({ deer: "dictionary", found: false, word: "zzz" }),
+    });
+    emitChunk({
+      messageId: "m-4",
+      kind: "dictionary",
+      delta: JSON.stringify({ deer: "dictionary", found: true, word: "w", senses: [] }),
+    });
+    // 译文为空不产翻译卡；坏 JSON 帧丢弃；未知 kind 落正文
+    emitChunk({
+      messageId: "m-4",
+      kind: "translation",
+      delta: JSON.stringify({ deer: "translation", sourceText: "a", translatedText: "" }),
+    });
+    emitChunk({ messageId: "m-4", kind: "dictionary", delta: "not json" });
+    emitChunk({ messageId: "m-4", delta: "正文" });
+
+    resolveChat({ text: "正文", sessionId: "s-1" });
+    await p;
+    await eventually(() => expect(deltas).toEqual(["正文"]));
+
+    expect(dictionaries).toHaveLength(1);
+    expect(dictionaries[0]).toMatchObject({ word: "ephemeral", found: true });
+    expect(translations).toHaveLength(1);
+    expect(translations[0]).toMatchObject({ sourceText: "hello", translatedText: "你好" });
+  });
 });
