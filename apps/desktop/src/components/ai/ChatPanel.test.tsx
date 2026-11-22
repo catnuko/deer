@@ -8,6 +8,7 @@ import type { ChatPanelHandle } from "./ChatPanel";
 
 vi.mock("@/lib/ai/cloudEngine", () => ({
   runCloudChat: vi.fn(),
+  runCloudOnce: vi.fn(),
 }));
 vi.mock("@/lib/ai/claudeBackend", () => ({
   acpxChat: vi.fn(),
@@ -25,10 +26,12 @@ vi.mock("@/lib/platform", () => ({
 }));
 
 const { isTauri } = await import("@/lib/platform");
-const { runCloudChat } = await import("@/lib/ai/cloudEngine");
+const { runCloudChat, runCloudOnce } = await import("@/lib/ai/cloudEngine");
 const { ChatPanel } = await import("./ChatPanel");
 const { useChatStore } = await import("@/store/chatStore");
 const { useAnnotationStore } = await import("@/store/annotationStore");
+const { useMemoryStore } = await import("@/store/memoryStore");
+const { useAppSettings } = await import("@/store/appSettings");
 const { buildSystemPrompt } = await import("@/lib/ai/readingContext");
 const { buildChapterSummaryPrompt } = await import("@/lib/ai/chapterSummary");
 const { buildBookSummaryPrompt } = await import("@/lib/ai/bookSummary");
@@ -72,6 +75,9 @@ beforeEach(() => {
   resetStore();
   vi.mocked(isTauri).mockReturnValue(false);
   vi.mocked(runCloudChat).mockReset();
+  vi.mocked(runCloudOnce).mockReset();
+  useMemoryStore.setState({ memories: {}, ready: true });
+  useAppSettings.setState({ memoryAutoSummarize: true, aiEngineMode: "cloud" });
 });
 
 afterEach(() => {
@@ -79,6 +85,7 @@ afterEach(() => {
   // zustand 是模块级单例，测试间必须还原，否则串状态。
   resetStore();
   useAnnotationStore.setState({ annotations: {}, ready: true });
+  useMemoryStore.setState({ memories: {}, ready: true });
 });
 
 describe("ChatPanel", () => {
@@ -793,5 +800,68 @@ describe("ChatPanel", () => {
 
     resolveChat({ text: "回复" });
     await eventually(() => expect(bookChip).toBeEnabled());
+  });
+
+  describe("关闭面板自动总结记忆", () => {
+    // 发一条消息建立有内容的会话，再关闭面板并播完结尾动画。
+    async function openChatThenClose() {
+      const onExited = vi.fn();
+      const { container, rerender } = render(
+        <ChatPanel book={BOOK} onClose={() => {}} open onExited={onExited} />,
+      );
+      await sendMessage("黑暗森林法则是什么？");
+      await eventually(() =>
+        expect(
+          useChatStore.getState().messages[activeThread()]?.length,
+        ).toBeGreaterThan(1),
+      );
+      rerender(
+        <ChatPanel
+          book={BOOK}
+          onClose={() => {}}
+          open={false}
+          onExited={onExited}
+        />,
+      );
+      const content = container.querySelector("aside")!
+        .firstElementChild as HTMLElement;
+      fireEvent.animationEnd(content);
+      await vi.waitFor(() => expect(onExited).toHaveBeenCalledTimes(1));
+    }
+
+    it("开关开着：关闭面板后写入带来源 threadId 的记忆条目", async () => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      useAppSettings.setState({
+        aiEngineMode: "cloud",
+        aiApiKey: "test-key",
+        memoryAutoSummarize: true,
+      });
+      vi.mocked(runCloudOnce).mockResolvedValue(
+        '[{"type":"topic","content":"在讨论黑暗森林法则"}]',
+      );
+
+      await openChatThenClose();
+
+      await eventually(() => {
+        const list = useMemoryStore.getState().listByBook(BOOK.id);
+        expect(list).toHaveLength(1);
+        expect(list[0]).toMatchObject({
+          type: "topic",
+          content: "在讨论黑暗森林法则",
+          sourceThreadId: activeThread(),
+        });
+      });
+    });
+
+    it("开关关闭：不发起提取、不产生记忆条目", async () => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      useAppSettings.setState({ memoryAutoSummarize: false });
+
+      await openChatThenClose();
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(vi.mocked(runCloudOnce)).not.toHaveBeenCalled();
+      expect(useMemoryStore.getState().listByBook(BOOK.id)).toHaveLength(0);
+    });
   });
 });
