@@ -13,7 +13,7 @@ import {
 import { ArrowUp, NotebookPen, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import type { ChatDictionaryEntry, ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
-import { buildSystemPrompt, type ReadingContext } from "@/lib/ai/readingContext";
+import { buildSystemPrompt, memorySummaryBlock, type ReadingContext } from "@/lib/ai/readingContext";
 import {
   buildBookSummaryPrompt,
   buildPageSummaryPrompt,
@@ -26,6 +26,7 @@ import {
 } from "@/lib/ai/engineRouter";
 import { runCloudChat } from "@/lib/ai/cloudEngine";
 import { extractSessionMemories } from "@/lib/ai/memoryExtract";
+import { useMemoryStore } from "@/store/memoryStore";
 import { isTauri } from "@/lib/platform";
 import { useAppSettings } from "@/store/appSettings";
 import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
@@ -577,6 +578,13 @@ export function ChatPanel({
     if (!ready) void load();
   }, [ready, load]);
 
+  // 记忆注入（按书）取数前确保 memoryStore 已加载；发送时经 getState 读取，
+  // 不订阅条目列表，避免记忆增删触发面板重渲染。
+  const memoryReady = useMemoryStore((s) => s.ready);
+  useEffect(() => {
+    if (!memoryReady) void useMemoryStore.getState().load();
+  }, [memoryReady]);
+
   // 当前书没有会话就建一个；切书时 activeThreadId 跟着 book.id 走，天然隔离。
   useEffect(() => {
     if (!ready) return;
@@ -632,6 +640,9 @@ export function ChatPanel({
       // auto 下自检未完成时现查一次（PATH 探测，毫秒级）再决定。
       const assistant = appendMessage(threadId, "assistant", "");
       const state = useChatStore.getState();
+      // 按书记忆摘要：发送时经 getState 读取（不进依赖），空列表不注入。
+      const memoryEntries = useMemoryStore.getState().listByBook(book.id);
+      const memoryBlock = memorySummaryBlock(memoryEntries);
       try {
         const localAvailable =
           aiEngineMode === "local"
@@ -642,8 +653,14 @@ export function ChatPanel({
         const engine = resolveEngine(aiEngineMode, localAvailable);
         if (engine === "local") {
           if (envStatus && !envStatus.ok) throw localUnavailableError(envStatus);
+          // 本地 acpx 是跨轮持续会话：摘要只在首轮 prompt 注入一次，
+          // 后续轮次会话里已有这份上下文，重复注入只会膨胀 token。
+          const promptWithMemory =
+            memoryBlock && history.length === 0
+              ? `${memoryBlock}\n\n${claudePrompt}`
+              : claudePrompt;
           const result = await acpxChat({
-            prompt: claudePrompt,
+            prompt: promptWithMemory,
             messageId: assistant.id,
             threadId,
             resumeSessionId: state.acpxSessionByThread[threadId] ?? null,
@@ -668,7 +685,12 @@ export function ChatPanel({
             .setMessageContent(threadId, assistant.id, result.text);
         } else {
           const result = await runCloudChat({
-            system: buildSystemPrompt(ctxRef.current ?? { bookTitle: book.title }),
+            // 云链路 system 每轮独立随发（不累积在历史里）：每轮都带最新摘要，
+            // 天然幂等；换书 / 清除记忆后下一轮即跟随。
+            system: buildSystemPrompt(
+              ctxRef.current ?? { bookTitle: book.title },
+              memoryEntries,
+            ),
             prompt: claudePrompt,
             history,
             callbacks: {
