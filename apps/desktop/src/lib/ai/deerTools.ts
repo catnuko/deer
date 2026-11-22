@@ -5,7 +5,13 @@
  */
 
 import { jsonSchema, tool, type ToolSet } from "ai";
-import type { Book, ChatBookRef } from "@/lib/types";
+import type {
+  Book,
+  ChatBookRef,
+  ChatDictionaryEntry,
+  ChatTranslationEntry,
+  DictionarySense,
+} from "@/lib/types";
 import { useBookStore } from "@/store/bookStore";
 import { useAnnotationStore } from "@/store/annotationStore";
 import { getReaderBridge } from "./readerBridge";
@@ -44,6 +50,153 @@ export function readingStateOf(books: Book[]): Book[] {
 
 /** 搜索结果上限：控制上下文体积，模型按摘录回答足够。 */
 export const SEARCH_RESULT_LIMIT = 20;
+
+/** 词典 senses 上限：控制上下文体积与卡片高度（词典卡设计稿 §5 约定）。 */
+export const DICTIONARY_SENSE_LIMIT = 6;
+
+/** 翻译原文上限：超长截断并提示（不改变上下文体积预算的约定）。 */
+export const MAX_TRANSLATION_CHARS = 2000;
+
+/**
+ * translate_text 的入参形态：翻译由模型自行完成，把原文、译文与语言方向
+ * 一并提交，工具只负责校验与承载结构化结果（不引外部翻译 API）。
+ */
+export type TranslateTextInput = {
+  text: string;
+  targetLang?: string;
+  translatedText: string;
+  sourceLang?: string;
+};
+
+/**
+ * 校验并规范化 translate_text 的结果：
+ * - 空文本/空译文返回可读错误提示（模型据此向用户说明）；
+ * - 原文超 MAX_TRANSLATION_CHARS 截断并带 truncated 标记。
+ */
+export function normalizeTranslation(
+  input: TranslateTextInput,
+): ChatTranslationEntry | string {
+  const text = typeof input.text === "string" ? input.text.trim() : "";
+  const translatedText =
+    typeof input.translatedText === "string" ? input.translatedText.trim() : "";
+  if (!text) return "待翻译文本为空，请提供要翻译的内容。";
+  if (!translatedText) return "译文为空，请先完成翻译再调用本工具。";
+
+  const sourceText =
+    text.length > MAX_TRANSLATION_CHARS
+      ? text.slice(0, MAX_TRANSLATION_CHARS)
+      : text;
+  const targetLang =
+    typeof input.targetLang === "string" && input.targetLang.trim()
+      ? input.targetLang.trim()
+      : undefined;
+  const sourceLang =
+    typeof input.sourceLang === "string" && input.sourceLang.trim()
+      ? input.sourceLang.trim()
+      : undefined;
+
+  return {
+    sourceText,
+    translatedText,
+    ...(sourceLang ? { sourceLang } : {}),
+    ...(targetLang ? { targetLang } : {}),
+    ...(text.length > MAX_TRANSLATION_CHARS ? { truncated: true } : {}),
+  };
+}
+
+/** 词典查询结果：found:false 时模型按自身知识作答并说明查无词条。 */
+export type DictionaryLookupResult =
+  | ChatDictionaryEntry
+  | { found: false; word: string };
+
+/** dictionaryapi.dev 的原始词条形态（只标注我们消费的字段）。 */
+type DictionaryApiEntry = {
+  word?: unknown;
+  phonetic?: unknown;
+  phonetics?: { text?: unknown }[];
+  meanings?: {
+    partOfSpeech?: unknown;
+    definitions?: { definition?: unknown; example?: unknown }[];
+  }[];
+};
+
+/**
+ * 解析 dictionaryapi.dev 的词条数组 → 词典卡形态。
+ * 空释义直接丢弃、senses 截到上限；没有任何可用释义时返回 found:false。
+ */
+export function parseDictionaryEntry(
+  word: string,
+  payload: unknown,
+): DictionaryLookupResult {
+  if (!Array.isArray(payload)) return { found: false, word };
+  const entry = payload.find(
+    (candidate): candidate is DictionaryApiEntry =>
+      !!candidate &&
+      typeof candidate === "object" &&
+      Array.isArray((candidate as DictionaryApiEntry).meanings),
+  );
+  if (!entry) return { found: false, word };
+
+  const senses: DictionarySense[] = [];
+  for (const meaning of entry.meanings ?? []) {
+    if (!meaning || typeof meaning !== "object") continue;
+    const partOfSpeech =
+      typeof meaning.partOfSpeech === "string" && meaning.partOfSpeech.trim()
+        ? meaning.partOfSpeech
+        : undefined;
+    for (const item of meaning.definitions ?? []) {
+      if (!item || typeof item !== "object") continue;
+      const definition =
+        typeof item.definition === "string" ? item.definition.trim() : "";
+      if (!definition) continue;
+      const example =
+        typeof item.example === "string" ? item.example.trim() : "";
+      senses.push({
+        ...(partOfSpeech ? { partOfSpeech } : {}),
+        definition,
+        ...(example ? { example } : {}),
+      });
+      if (senses.length >= DICTIONARY_SENSE_LIMIT) break;
+    }
+    if (senses.length >= DICTIONARY_SENSE_LIMIT) break;
+  }
+  if (!senses.length) return { found: false, word };
+
+  const fallbackPhonetic = (entry.phonetics ?? []).find(
+    (p) => typeof p?.text === "string" && p.text.trim(),
+  )?.text as string | undefined;
+  const phonetic =
+    typeof entry.phonetic === "string" && entry.phonetic.trim()
+      ? entry.phonetic
+      : fallbackPhonetic?.trim();
+
+  return {
+    found: true,
+    word:
+      typeof entry.word === "string" && entry.word.trim()
+        ? entry.word
+        : word,
+    senses,
+    ...(phonetic ? { phonetic } : {}),
+  };
+}
+
+/** 调 dictionaryapi.dev 查词；查无词条、非 2xx 或网络失败一律 found:false。 */
+export async function lookupDictionaryWord(
+  word: string,
+): Promise<DictionaryLookupResult> {
+  const trimmed = word.trim();
+  if (!trimmed) return { found: false, word: trimmed };
+  try {
+    const res = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(trimmed)}`,
+    );
+    if (!res.ok) return { found: false, word: trimmed };
+    return parseDictionaryEntry(trimmed, await res.json());
+  } catch {
+    return { found: false, word: trimmed };
+  }
+}
 
 /** 构建本轮对话可用的工具集（每轮新build，读取最新 store 状态）。 */
 export function buildDeerTools(): ToolSet {
@@ -179,6 +332,48 @@ export function buildDeerTools(): ToolSet {
         const matches = await bridge.searchInBook(trimmed);
         return matches.slice(0, SEARCH_RESULT_LIMIT);
       },
+    }),
+
+    lookup_dictionary: tool({
+      description:
+        "查英文单词释义（数据源 dictionaryapi.dev）：返回结构化词条（音标/词性/英文释义/例句）。用户问某个词是什么意思、要词典解释时用它。found:false 表示词典源没收录或网络失败，此时改用自身知识解释，并向用户说明词典源没有查到。targetLang 仅提示用户偏好的解释语言，词典源释义固定为英文，需要其他语言时由你自行翻译。",
+      inputSchema: jsonSchema<{ word: string; targetLang?: string }>({
+        type: "object",
+        properties: {
+          word: { type: "string", description: "要查的英文单词（单个词或短语）" },
+          targetLang: {
+            type: "string",
+            description: "期望的解释语言（如 zh-CN）；词典源释义固定为英文，由模型自行翻译",
+          },
+        },
+        required: ["word"],
+      }),
+      execute: async ({ word }) => lookupDictionaryWord(word),
+    }),
+
+    translate_text: tool({
+      description:
+        "翻译任意语言的文本（由你直接完成翻译，不调外部翻译 API）：先自行翻译，再把原文、译文与语言方向通过本工具提交，前端会渲染成原文/译文对照卡。用户要翻译划选内容、句子或段落时用它；纯闲聊不需要翻译时不要调用。text 超 2000 字符时只取前 2000 字符翻译。",
+      inputSchema: jsonSchema<TranslateTextInput>({
+        type: "object",
+        properties: {
+          text: { type: "string", description: "要翻译的原文" },
+          targetLang: {
+            type: "string",
+            description: "目标语言（如 zh-CN、日文、English）",
+          },
+          translatedText: {
+            type: "string",
+            description: "你完成的译文（原文本身已是目标语言时，做润色或改写说明）",
+          },
+          sourceLang: {
+            type: "string",
+            description: "检测出的原文语言（如 en、zh-CN），无法判断时省略",
+          },
+        },
+        required: ["text", "translatedText"],
+      }),
+      execute: async (input) => normalizeTranslation(input),
     }),
 
     jump_to_location: tool({

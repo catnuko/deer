@@ -197,6 +197,27 @@ describe("chatStore", () => {
     expect(second.content).toBe("第二条");
   });
 
+  it("词典词条并入消息：每条回复最多一卡，后到的覆盖先到的", () => {
+    const store = useChatStore.getState();
+    const thread = store.ensureThread("book-a", "甲书");
+    const msg = store.appendMessage(thread.id, "assistant", "");
+
+    store.appendToMessageDictionary(thread.id, msg.id, {
+      word: "set",
+      found: true,
+      senses: [{ partOfSpeech: "noun", definition: "第一批" }],
+    });
+    store.appendToMessageDictionary(thread.id, msg.id, {
+      word: "run",
+      found: true,
+      senses: [{ partOfSpeech: "verb", definition: "第二批" }],
+    });
+
+    const saved = useChatStore.getState().messages[thread.id][0];
+    expect(saved.dictionary?.word).toBe("run");
+    expect(saved.dictionary?.senses).toHaveLength(1);
+  });
+
   it("load 丢弃直连时代遗留字段，acpx 会话映射保留", async () => {
     memory.set(
       "deer.chat.v1",
