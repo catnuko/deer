@@ -4,6 +4,7 @@ import type {
   ChatDictionaryEntry,
   ChatMessage,
   ChatThread,
+  ChatTranslationEntry,
 } from "@/lib/types";
 
 /** 点赞/点踩的本地 UI 状态，只存不发请求。 */
@@ -55,6 +56,12 @@ export type ChatStore = ChatStoreState & {
     threadId: string,
     messageId: string,
     entry: ChatDictionaryEntry,
+  ): void;
+  /** 翻译工具返回的结果并入消息（每条回复最多一卡，后到的覆盖先到的）。 */
+  appendToMessageTranslation(
+    threadId: string,
+    messageId: string,
+    entry: ChatTranslationEntry,
   ): void;
   clearThread(threadId: string): void;
   /** 清空全部本机聊天记录（设置页「清空聊天记录」）。 */
@@ -365,6 +372,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
           ...s.messages,
           [threadId]: (s.messages[threadId] ?? []).map((m) =>
             m.id === messageId ? { ...m, dictionary: entry } : m,
+          ),
+        },
+      }));
+    },
+
+    appendToMessageTranslation(threadId, messageId, entry) {
+      streamingMessages.add(messageId);
+      set((s) => ({
+        messages: {
+          ...s.messages,
+          [threadId]: (s.messages[threadId] ?? []).map((m) =>
+            m.id === messageId ? { ...m, translation: entry } : m,
           ),
         },
       }));
