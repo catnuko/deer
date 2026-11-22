@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/Users/qiuzhenyu/Documents/projects/deer/evidence/acpx-streaming/direct_timing_probe.py", line 112, in <module>
+    p.wait(timeout=15)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 1189, in wait
+    return self._wait(timeout=timeout)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 1909, in _wait
+    raise TimeoutExpired(self.args, timeout)
+subprocess.TimeoutExpired: Command '['/Users/qiuzhenyu/.local/bin/node', '/Users/qiuzhenyu/Documents/projects/deer/apps/desktop/node_modules/@zed-industries/claude-code-acp/dist/index.js']' timed out after 15 seconds

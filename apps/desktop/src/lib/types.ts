@@ -2,7 +2,11 @@
 export type BookFormat = "epub" | "mobi" | "azw3" | "fb2" | "cbz" | "pdf";
 
 export type Book = {
-  id: string; // 稳定 id（文件哈希或 nanoid，落地时定）
+  id: string; // 本机 id（导入时生成的 UUID，仅设备内有效）
+  /** 文件内容 SHA-256（hex），跨设备身份；旧数据在开启同步时补算。 */
+  contentHash?: string;
+  /** 只存在于云端的书籍行（本机还没有书文件），P2 支持点击下载。 */
+  cloudOnly?: boolean;
   title: string;
   author: string;
   format: BookFormat;
@@ -59,6 +63,24 @@ export type ChatBookRef = {
   folderName?: string;
 };
 
+/** 词典卡单条释义（lookup_dictionary 从 dictionaryapi.dev 解析出的结果）。 */
+export type DictionarySense = {
+  /** 词性原文（noun/verb/... 英文原样，不本地化）。 */
+  partOfSpeech?: string;
+  definition: string;
+  example?: string;
+};
+
+/** 聊天词典卡：found:false（查无词条/网络失败）不走卡片链路，模型正文自答。 */
+export type ChatDictionaryEntry = {
+  word: string;
+  /** IPA 音标，如 /ɪˈfem.ər.əl/，缺省不渲染。 */
+  phonetic?: string;
+  found: true;
+  /** 工具侧截断 ≤6 条，控制上下文体积与卡片高度。 */
+  senses: DictionarySense[];
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -67,6 +89,8 @@ export type ChatMessage = {
   thinking?: string;
   /** 本条回复里模型经书架 MCP 工具返回的书单，渲染成可点击书卡。 */
   books?: ChatBookRef[];
+  /** 本条回复里模型经词典工具返回的词条（每条回复最多一词一卡，后到覆盖先到）。 */
+  dictionary?: ChatDictionaryEntry;
   createdAt: number;
 };
 
