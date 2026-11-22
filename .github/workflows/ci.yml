@@ -25,7 +25,32 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
-      - run: pnpm test
+      # coverage：v8 provider 在 vitest.config.ts 配了起步阈值，低于阈值即失败；
+      # HTML 报告作为 artifact 留存，文本摘要进 Job Summary。
+      - run: pnpm run test:coverage
+      - name: Coverage 摘要与报告
+        if: always()
+        working-directory: apps/desktop
+        run: |
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const { total } = JSON.parse(readFileSync("coverage/coverage-summary.json", "utf8"));
+            const row = ([label, key]) => `| ${label} | ${total[key].pct}% |`;
+            [
+              "### Coverage 摘要", "",
+              "| 指标 | 数值 |", "| --- | --- |",
+              row(["语句", "statements"]),
+              row(["分支", "branches"]),
+              row(["函数", "functions"]),
+              row(["行", "lines"]), "",
+            ].forEach((line) => process.stdout.write(line + "\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: apps/desktop/coverage
+          retention-days: 14
       - run: pnpm run build
 
   rust-check:
