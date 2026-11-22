@@ -52,6 +52,12 @@ export type AnnotationStore = AnnotationState & {
   remove(id: string): void;
   /** 清空全部书的高亮与笔记（设置页「清空笔记」）。 */
   clearAllAnnotations(): void;
+  /** 应用远端笔记：annotation 为 null 表示删除。 */
+  applyRemoteAnnotation(
+    bookId: string,
+    annotationId: string,
+    annotation: StoredAnnotation | null,
+  ): void;
 };
 
 const STORE_FILE = "annotations.json";
@@ -182,6 +188,26 @@ export const useAnnotationStore = create<AnnotationStore>((set, get) => {
 
     clearAllAnnotations() {
       set({ annotations: {} });
+      persist();
+    },
+
+    applyRemoteAnnotation(bookId, annotationId, annotation) {
+      set((s) => {
+        const list = s.annotations[bookId] ?? [];
+        const index = list.findIndex((item) => item.id === annotationId);
+
+        if (!annotation) {
+          if (index === -1) return s;
+          const next = list.filter((item) => item.id !== annotationId);
+          return { annotations: { ...s.annotations, [bookId]: next } };
+        }
+
+        const next =
+          index === -1
+            ? [annotation, ...list]
+            : list.map((item) => (item.id === annotationId ? annotation : item));
+        return { annotations: { ...s.annotations, [bookId]: next } };
+      });
       persist();
     },
   };

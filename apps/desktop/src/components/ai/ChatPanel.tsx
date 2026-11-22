@@ -11,7 +11,7 @@ import {
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
 import { ArrowUp, NotebookPen, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
-import type { ChatMessage } from "@/lib/types";
+import type { ChatDictionaryEntry, ChatMessage } from "@/lib/types";
 import { MOCK_DELAY, mockReply } from "@/lib/ai/mockReply";
 import { buildSystemPrompt, type ReadingContext } from "@/lib/ai/readingContext";
 import {
@@ -25,6 +25,7 @@ import {
   resolveEngine,
 } from "@/lib/ai/engineRouter";
 import { runCloudChat } from "@/lib/ai/cloudEngine";
+import { extractSessionMemories } from "@/lib/ai/memoryExtract";
 import { isTauri } from "@/lib/platform";
 import { useAppSettings } from "@/store/appSettings";
 import { useAcpxEnvStatus } from "@/lib/ai/useAcpxEnvStatus";
@@ -43,6 +44,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import type { CurrentBook } from "@/lib/ai/currentBook";
 import { ChatBookCard } from "@/components/ai/ChatBookCard";
+import { ChatDictionaryCard } from "@/components/ai/ChatDictionaryCard";
 import { useChatStore } from "@/store/chatStore";
 import { AI_NOTE_COLOR, useAnnotationStore } from "@/store/annotationStore";
 
@@ -242,6 +244,17 @@ function BooksData({ data }: { data: { books: ChatMessage["books"] } }) {
   );
 }
 
+/** 词典工具词条的 data part 渲染：词典卡（数据不完整时组件内部兜底）。 */
+function DictionaryData({
+  data,
+}: {
+  data: { dictionary: ChatDictionaryEntry | undefined };
+}) {
+  const entry = data?.dictionary;
+  if (!entry) return null;
+  return <ChatDictionaryCard entry={entry} />;
+}
+
 function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="mb-4">
@@ -250,7 +263,7 @@ function AssistantMessage() {
           components={{
             Text: TextPart,
             Reasoning: ReasoningPart,
-            data: { by_name: { books: BooksData } },
+            data: { by_name: { books: BooksData, dictionary: DictionaryData } },
           }}
         />
       </div>
@@ -526,6 +539,7 @@ export function ChatPanel({
       exitRafRef.current = null;
       setPhase("closed");
       onExited?.();
+      extractMemoriesOnClose();
     });
   };
 
@@ -671,6 +685,11 @@ export function ChatPanel({
                   .getState()
                   .appendToMessageBooks(threadId, assistant.id, books);
               },
+              onDictionary: (entry) => {
+                useChatStore
+                  .getState()
+                  .appendToMessageDictionary(threadId, assistant.id, entry);
+              },
             },
           });
           // 以累计正文落库（含持久化）；空回复兜底一句可读提示。
@@ -761,6 +780,15 @@ export function ChatPanel({
               },
             ]
           : []),
+        ...(m.role === "assistant" && m.dictionary
+          ? [
+              {
+                type: "data" as const,
+                name: "dictionary",
+                data: { dictionary: m.dictionary },
+              },
+            ]
+          : []),
       ],
       createdAt: new Date(m.createdAt),
       metadata: feedback[m.id]
@@ -817,6 +845,31 @@ export function ChatPanel({
     () => ({ replying, saveNote }),
     [replying, saveNote],
   );
+
+  // 面板关闭时把本次会话总结成读书记忆（自动总结开关开着才做）。
+  // 同一份消息内容只提取一次：以 thread + 消息数 + 末条 id 为指纹。
+  const memoryAutoSummarize = useAppSettings((s) => s.memoryAutoSummarize);
+  const lastExtractKeyRef = useRef<string | null>(null);
+  const extractMemoriesOnClose = useCallback(() => {
+    if (!tauri || !memoryAutoSummarize) return;
+    const state = useChatStore.getState();
+    const threadId = state.activeThreadByBook[book.id];
+    if (!threadId) return;
+    const list = state.messages[threadId] ?? [];
+    if (!list.some((m) => m.role === "user" && m.content.trim())) return;
+    const last = list[list.length - 1];
+    const key = `${threadId}:${list.length}:${last?.id ?? ""}`;
+    if (lastExtractKeyRef.current === key) return;
+    lastExtractKeyRef.current = key;
+    void extractSessionMemories({
+      bookId: book.id,
+      bookTitle: book.title,
+      threadId,
+      messages: list,
+      engineMode: aiEngineMode,
+      envOk: envStatus?.ok ?? null,
+    });
+  }, [tauri, memoryAutoSummarize, book.id, book.title, aiEngineMode, envStatus]);
 
   return (
     <aside
