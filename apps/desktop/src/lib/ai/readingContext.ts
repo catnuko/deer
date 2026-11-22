@@ -83,7 +83,8 @@ export const MEMORY_SUMMARY_CHAR_BUDGET = 1200;
 /** 单条记忆在摘要里的字符上限（超长的记忆内容自身截断）。 */
 const MEMORY_SUMMARY_LINE_LIMIT = 200;
 
-const MEMORY_TYPE_LABELS: Record<MemoryEntryType, string> = {
+/** 注入与设置页共用的记忆类型标签。 */
+export const MEMORY_TYPE_LABELS: Record<MemoryEntryType, string> = {
   topic: "话题",
   preference: "偏好",
   progress: "进度",

@@ -2,6 +2,7 @@ import { Brain } from "lucide-react";
 import { AcpxStatusCard } from "@/components/ai/AcpxStatusCard";
 import { AiEngineList } from "@/components/ai/AiEngineList";
 import { CloudEngineCard } from "@/components/settings/CloudEngineCard";
+import { MemorySection } from "@/components/settings/MemorySection";
 import { Separator } from "@/components/ui/separator";
 import {
   Select,
@@ -104,6 +105,8 @@ export function AiSection() {
           aria-label="自动总结记忆"
         />
       </SettingRow>
+
+      <MemorySection />
 
       <Separator />
 
