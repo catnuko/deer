@@ -25,9 +25,12 @@ serde_json = "1"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
-tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros"] }
-# WebDAV 传输通道（src/webdav.rs）：stream feature 支持流式上传/下载
-reqwest = { version = "0.12", features = ["stream"] }
+# "rt"/"rt-multi-thread"：--mcp-server 模式在 main 里自建 runtime，
+# 跑词典/百科工具的异步 HTTP（reqwest 需要 IO driver，见 mcp_server.rs）
+tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros", "rt", "rt-multi-thread"] }
+# WebDAV 传输通道（src/webdav.rs）：stream feature 支持流式上传/下载；
+# json feature 供 MCP 词典/百科工具解析 JSON 响应（src/mcp_server.rs）
+reqwest = { version = "0.12", features = ["stream", "json"] }
 futures-util = "0.3"
 # 备份归档（src/backup.rs）：内容哈希去重 + zip 打包
 sha2 = "0.10"

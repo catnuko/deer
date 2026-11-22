@@ -52,9 +52,9 @@ const TRANSIENT_RETRIES: usize = 3;
 const TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(800);
 /// Deer 书架 MCP server 挂载名：工具名形如 mcp__deer__search_books。
 const MCP_SERVER_NAME: &str = "deer";
-/// 权限只放行书架 MCP 的三个工具，其余工具仍被 --deny-all 拒绝。
-const ALLOWED_MCP_TOOLS: &str =
-    "mcp__deer__search_books,mcp__deer__get_reading_state,mcp__deer__get_library";
+/// 权限只放行 Deer MCP server 的六个工具（书架三个 + AI 伴读三个），
+/// 其余工具仍被 --deny-all 拒绝。
+const ALLOWED_MCP_TOOLS: &str = "mcp__deer__search_books,mcp__deer__get_reading_state,mcp__deer__get_library,mcp__deer__lookup_dictionary,mcp__deer__translate_text,mcp__deer__encyclopedia_lookup";
 
 #[derive(Debug, Serialize)]
 pub struct AcpxEnvStatus {
@@ -227,10 +227,11 @@ pub(crate) fn prompt_args(engine: &str, record: &str, mcp_config: Option<&Path>)
     args
 }
 
-/// 从 tool_call_update（status=completed）的 rawOutput 里抽取书卡：
-/// Deer 书架 MCP 工具的结果 text 块是 `{"deer":"books","books":[...]}`，
-/// 按标记识别（不依赖工具名元数据），非书架工具的输出一律不产书卡。
-pub(crate) fn book_cards_from_update(params: &Value) -> Option<Vec<Value>> {
+/// 从 tool_call_update（status=completed）的 rawOutput 里按 deer 标记
+/// 找第一个 JSON payload：books（书单）、dictionary（词典词条）、
+/// translation（翻译结果）都走这个标记协议（见 mcp_server.rs），不依赖
+/// 工具名元数据，非 Deer 工具的输出一律不命中。
+pub(crate) fn marker_payload_from_update(params: &Value, marker: &str) -> Option<Value> {
     let update = params.get("update")?;
     if update.get("sessionUpdate")?.as_str()? != "tool_call_update" {
         return None;
@@ -245,14 +246,20 @@ pub(crate) fn book_cards_from_update(params: &Value) -> Option<Vec<Value>> {
         let Ok(payload) = serde_json::from_str::<Value>(text) else {
             continue;
         };
-        if payload.get("deer").and_then(Value::as_str) == Some("books")
-            && let Some(books) = payload.get("books").and_then(Value::as_array)
-            && !books.is_empty()
-        {
-            return Some(books.clone());
+        if payload.get("deer").and_then(Value::as_str) == Some(marker) {
+            return Some(payload);
         }
     }
     None
+}
+
+/// 书架工具的书单 payload → 书卡数组（空书单不产卡）。
+pub(crate) fn book_cards_from_update(params: &Value) -> Option<Vec<Value>> {
+    let books = marker_payload_from_update(params, "books")?
+        .get("books")?
+        .as_array()?
+        .clone();
+    (!books.is_empty()).then_some(books)
 }
 
 /* ------------------------------------------------------------------ */
@@ -698,12 +705,24 @@ async fn run_prompt<F: FnMut(&str, &'static str, String) + Send>(
                     {
                         on_chunk(message_id, "thought", delta);
                     }
-                    // 书架 MCP 工具结果里的书单：抽成 books 事件推给前端渲染书卡
-                    if let Some(books) =
-                        book_cards_from_update(v.get("params").unwrap_or(&Value::Null))
+                    // Deer MCP 工具结果按 deer 标记抽成对应事件推给前端：
+                    // books → 书卡，dictionary → 词典卡，translation → 翻译卡
+                    // （百科无卡片，模型按工具结果转述进正文）。
+                    let update_params = v.get("params").unwrap_or(&Value::Null);
+                    if let Some(books) = book_cards_from_update(update_params)
                         && let Ok(delta) = serde_json::to_string(&books)
                     {
                         on_chunk(message_id, "books", delta);
+                    }
+                    if let Some(payload) = marker_payload_from_update(update_params, "dictionary")
+                        && let Ok(delta) = serde_json::to_string(&payload)
+                    {
+                        on_chunk(message_id, "dictionary", delta);
+                    }
+                    if let Some(payload) = marker_payload_from_update(update_params, "translation")
+                        && let Ok(delta) = serde_json::to_string(&payload)
+                    {
+                        on_chunk(message_id, "translation", delta);
                     }
                     if session_id.is_none() {
                         session_id = session_id_from_value(v);
@@ -1132,6 +1151,9 @@ mod tests {
         assert!(joined.contains("mcp__deer__search_books"));
         assert!(joined.contains("mcp__deer__get_reading_state"));
         assert!(joined.contains("mcp__deer__get_library"));
+        assert!(joined.contains("mcp__deer__lookup_dictionary"));
+        assert!(joined.contains("mcp__deer__translate_text"));
+        assert!(joined.contains("mcp__deer__encyclopedia_lookup"));
         // 权限仍是 deny-all，只精确放行书架工具
         assert!(joined.contains("--deny-all"));
     }
@@ -1171,6 +1193,39 @@ mod tests {
         let pending = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","status":"pending","content":[]}}}"#;
         let v: Value = serde_json::from_str(pending).unwrap();
         assert!(book_cards_from_update(v.get("params").unwrap()).is_none());
+    }
+
+    #[test]
+    fn extracts_dictionary_and_translation_markers_from_tool_update() {
+        // 词典工具命中：deer:dictionary 标记 payload
+        let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"call_2","status":"completed","rawOutput":[{"type":"text","text":"{\"deer\":\"dictionary\",\"found\":true,\"word\":\"ephemeral\",\"phonetic\":\"/ɪˈfem.ər.əl/\",\"senses\":[{\"partOfSpeech\":\"adjective\",\"definition\":\"lasting a very short time\"}]}"}]}}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let entry = marker_payload_from_update(v.get("params").unwrap(), "dictionary").unwrap();
+        assert_eq!(entry["word"], "ephemeral");
+        assert_eq!(entry["found"], true);
+        // 同一帧按其他标记找不应命中
+        assert!(marker_payload_from_update(v.get("params").unwrap(), "books").is_none());
+        assert!(marker_payload_from_update(v.get("params").unwrap(), "translation").is_none());
+
+        // 词典 miss（found:false）也带标记：抽取交给前端按 found 判定是否产卡
+        let miss = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","status":"completed","rawOutput":[{"type":"text","text":"{\"deer\":\"dictionary\",\"found\":false,\"word\":\"zzz\"}"}]}}}"#;
+        let v: Value = serde_json::from_str(miss).unwrap();
+        assert!(
+            marker_payload_from_update(v.get("params").unwrap(), "dictionary").unwrap()["found"]
+                == false
+        );
+
+        // 翻译工具：deer:translation 标记 payload
+        let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","status":"completed","rawOutput":[{"type":"text","text":"{\"deer\":\"translation\",\"sourceText\":\"hello\",\"translatedText\":\"你好\",\"sourceLang\":\"en\",\"targetLang\":\"zh-CN\"}"}]}}}"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let entry = marker_payload_from_update(v.get("params").unwrap(), "translation").unwrap();
+        assert_eq!(entry["sourceText"], "hello");
+        assert_eq!(entry["translatedText"], "你好");
+
+        // 非 Deer 工具的普通文本输出不命中任何标记
+        let other = r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","status":"completed","rawOutput":[{"type":"text","text":"plain output"}]}}}"#;
+        let v: Value = serde_json::from_str(other).unwrap();
+        assert!(marker_payload_from_update(v.get("params").unwrap(), "dictionary").is_none());
     }
 
     /// 真实 acpx E2E（多 harness 一期验收证据）：`cargo test -- --ignored real_acpx`

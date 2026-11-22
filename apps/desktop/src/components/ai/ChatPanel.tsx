@@ -695,6 +695,16 @@ export function ChatPanel({
                 .getState()
                 .appendToMessageBooks(threadId, assistant.id, books);
             },
+            onDictionary: (entry) => {
+              useChatStore
+                .getState()
+                .appendToMessageDictionary(threadId, assistant.id, entry);
+            },
+            onTranslation: (entry) => {
+              useChatStore
+                .getState()
+                .appendToMessageTranslation(threadId, assistant.id, entry);
+            },
           });
           state.setAcpxSession(threadId, result.sessionId);
           // 以 Rust 侧累计的完整正文为准落库（含持久化）。

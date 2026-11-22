@@ -4,8 +4,9 @@
  * stdio JSON-RPC，文本增量经 `claude://chunk` 事件实时推送。
  */
 
-import type { ChatBookRef } from "@/lib/types";
+import type { ChatBookRef, ChatDictionaryEntry, ChatTranslationEntry } from "@/lib/types";
 import { useAppSettings } from "@/store/appSettings";
+import { asDictionaryEntry, asTranslationEntry } from "./cloudEngine";
 
 export const CLAUDE_CHUNK_EVENT = "claude://chunk";
 /** 引擎安装进度：Rust 侧把 npm 安装输出逐行推到这个事件。 */
@@ -22,7 +23,11 @@ export type AiInstallLogPayload = {
 
 export type ClaudeChunkPayload = {
   messageId: string;
-  /** "message" = 正文增量，"thought" = 深度思考增量，"books" = 书架工具返回的完整书单（JSON 数组文本）。 */
+  /**
+   * "message" = 正文增量，"thought" = 深度思考增量，"books" = 书架工具返回的
+   * 完整书单（JSON 数组文本），"dictionary"/"translation" = MCP 工具返回的
+   * 词典/翻译标记 payload（JSON 对象文本，按 deer 标记识别，见 acpx.rs）。
+   */
   kind?: string;
   delta: string;
 };
@@ -68,13 +73,15 @@ async function diagLog(tag: string, msg: string): Promise<void> {
   }
 }
 
-/** 监听流式增量事件并按 messageId 路由到正文/思考/书卡回调，返回解绑函数。 */
+/** 监听流式增量事件并按 messageId 路由到正文/思考/卡片回调，返回解绑函数。 */
 async function listenChunks(
   messageId: string,
   opts: {
     onDelta: (delta: string) => void;
     onThoughtDelta?: (delta: string) => void;
     onBooks?: (books: ChatBookRef[]) => void;
+    onDictionary?: (entry: ChatDictionaryEntry) => void;
+    onTranslation?: (entry: ChatTranslationEntry) => void;
   },
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
@@ -94,6 +101,22 @@ async function listenChunks(
       } catch {
         // 坏帧丢弃：书卡是锦上添花，不影响正文
       }
+    } else if (event.payload.kind === "dictionary") {
+      // 词典卡：found:true 且 senses 非空才回调，miss 时模型正文自答
+      try {
+        const entry = asDictionaryEntry(JSON.parse(event.payload.delta));
+        if (entry) opts.onDictionary?.(entry);
+      } catch {
+        // 坏帧丢弃：词典卡是锦上添花，不影响正文
+      }
+    } else if (event.payload.kind === "translation") {
+      // 翻译卡：原文/译文齐全才回调，字段缺省由卡片降级
+      try {
+        const entry = asTranslationEntry(JSON.parse(event.payload.delta));
+        if (entry) opts.onTranslation?.(entry);
+      } catch {
+        // 坏帧丢弃：翻译卡是锦上添花，不影响正文
+      }
     } else {
       opts.onDelta(event.payload.delta);
     }
@@ -112,6 +135,10 @@ export async function acpxChat(opts: {
   onThoughtDelta?: (delta: string) => void;
   /** 书架 MCP 工具返回的书单（Rust 侧从 tool 结果抽取），渲染成书卡。 */
   onBooks?: (books: ChatBookRef[]) => void;
+  /** 词典 MCP 工具命中的词条（Rust 侧按 deer 标记抽取），渲染成词典卡。 */
+  onDictionary?: (entry: ChatDictionaryEntry) => void;
+  /** 翻译 MCP 工具承载的结构化结果，渲染成翻译卡。 */
+  onTranslation?: (entry: ChatTranslationEntry) => void;
 }): Promise<ClaudeChatResult> {
   const { invoke } = await import("@tauri-apps/api/core");
   const unlisten = await listenChunks(opts.messageId, opts);

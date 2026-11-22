@@ -5,8 +5,8 @@ import type { Book, ChatMessage, ChatThread } from "@/lib/types";
 import type {
   AnnotationSyncData,
   BookSyncData,
-  FolderSyncData,
   MessageSyncData,
+  FolderSyncData,
   SyncKind,
   SyncRecord,
   ThreadSyncData,
@@ -47,7 +47,7 @@ function bookIdToHash(books: Book[]): Map<string, string> {
 }
 
 /* ------------------------------------------------------------------ */
-/* 书库：书籍、文件夹、文件夹归属                                        */
+/* 书库：书籍、文件夹、文件夹归属                                         */
 /* ------------------------------------------------------------------ */
 
 function bookPayload(book: Book): BookSyncData {
@@ -80,21 +80,20 @@ export const bookAdapter: SyncAdapter = {
         key: `bk:${book.contentHash}`,
         data: bookPayload(book),
       });
-      // 归属记录沿用 shelf 时代的 bookShelf kind 与 { bookHash, shelfId }
-      // 载荷名（块格式兼容）；值是 folderId，Folder 模型一本书至多一条。
+      // 一本书只属于一个文件夹：归属作为单条记录参与 diff。
       if (book.folderId) {
         entries.push({
-          kind: "bookShelf",
-          key: `bs:${book.contentHash}:${book.folderId}`,
-          data: { bookHash: book.contentHash, shelfId: book.folderId },
+          kind: "bookFolder",
+          key: `bf:${book.contentHash}:${book.folderId}`,
+          data: { bookHash: book.contentHash, folderId: book.folderId },
         });
       }
     }
 
     for (const folder of folders) {
       entries.push({
-        kind: "shelf",
-        key: `sh:${folder.id}`,
+        kind: "folder",
+        key: `fd:${folder.id}`,
         data: { name: folder.name, order: folder.order } satisfies FolderSyncData,
       });
     }
@@ -111,13 +110,13 @@ export const bookAdapter: SyncAdapter = {
           record.deleted ? null : (record.data as BookSyncData),
         );
         return;
-      case "shelf":
+      case "folder":
         store.applyRemoteFolder(
           record.key.slice(3),
           record.deleted ? null : (record.data as FolderSyncData),
         );
         return;
-      case "bookShelf": {
+      case "bookFolder": {
         const [, bookHash, folderId] = record.key.split(":");
         if (bookHash && folderId) {
           store.applyRemoteFolderMembership(bookHash, folderId, !record.deleted);
